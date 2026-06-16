@@ -40,3 +40,19 @@
 
 ## Step 6 - START - 2026-06-16T21:08:00+08:00
 为 API Potluck 管理端 key 用量摘要和可选 Codex sticky provider affinity 写 focused 测试。
+
+## Step 6 - DONE - 2026-06-16T21:17:00+08:00
+产物：tests/provider-pool-affinity.test.js、tests/api-potluck-key-usage-summary.test.js。
+关键决策：sticky provider 测试只覆盖 provider pool 选择逻辑；API Potluck 摘要测试聚焦 key 级 token/ratio 字段。
+验证：两组测试首次运行均按预期失败，分别暴露没有固定 provider 和缺少 weekly/ratio 字段。
+
+## Step 7 - START - 2026-06-16T21:17:00+08:00
+实现 API Potluck key token-first 摘要、管理端排序/每日展示，以及 Codex sticky provider 可配置选择。
+
+## Step 7 - DONE - 2026-06-16T21:24:00+08:00
+产物：src/providers/provider-pool-manager.js、src/services/service-manager.js、src/plugins/api-potluck/key-manager.js、static/potluck.html、src/core/config-manager.js、configs/config.json.example。
+关键决策：sticky provider 默认关闭，只有 `CODEX_POTLUCK_STICKY_PROVIDER_ENABLED` 开启且请求来自 API Potluck key 时才传入 affinity key；管理端默认按今日 Token 排序。
+验证：`npx.cmd jest tests/provider-pool-affinity.test.js --runInBand`、`tests/api-potluck-key-usage-summary.test.js`、`tests/model-usage-account-stats.test.js`、`tests/usage-cache.test.js` 均通过。
+
+## Step 8 - START - 2026-06-16T21:24:00+08:00
+更新决策 HTML/docs，运行更广的测试与本地容器验证。

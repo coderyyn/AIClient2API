@@ -40,6 +40,17 @@ function normalizeRequestBodyMaxBytes(config) {
     config.REQUEST_BODY_MAX_BYTES = configuredBytes ?? DEFAULT_REQUEST_BODY_MAX_BYTES;
 }
 
+function normalizeLogRetentionDays(config) {
+    const envDays = parsePositiveInteger(process.env.LOG_RETENTION_DAYS);
+    if (envDays !== null) {
+        config.LOG_RETENTION_DAYS = envDays;
+        return;
+    }
+
+    const configuredDays = parsePositiveInteger(config.LOG_RETENTION_DAYS);
+    config.LOG_RETENTION_DAYS = configuredDays ?? 7;
+}
+
 function normalizeConfiguredProviders(config) {
     const fallbackProvider = MODEL_PROVIDER.GEMINI_CLI;
     const dedupedProviders = [];
@@ -120,6 +131,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         RATE_LIMIT_COOLDOWN_MS: 30000, // 429 限流默认冷却时间（毫秒）
         RATE_LIMIT_COOLDOWN_JITTER_MS: 5000, // 429 限流冷却随机抖动（毫秒）
         RATE_LIMIT_COOLDOWN_MAX_MS: 300000, // Retry-After 允许的最大冷却时间（毫秒）
+        CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CRON_NEAR_MINUTES: 15,
         CRON_REFRESH_TOKEN: false,
         LOGIN_EXPIRY: 3600, // 登录过期时间（秒），默认1小时
@@ -146,6 +158,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         LOG_INCLUDE_TIMESTAMP: true,
         LOG_MAX_FILE_SIZE: 10485760,
         LOG_MAX_FILES: 10,
+        LOG_RETENTION_DAYS: 7,
         TLS_SIDECAR_ENABLED: false, // 启用 Go uTLS sidecar（需要编译 tls-sidecar 二进制）
         TLS_SIDECAR_ENABLED_PROVIDERS: [], // 启用 TLS Sidecar 的提供商列表
         TLS_SIDECAR_PORT: 9090,     // sidecar 监听端口
@@ -197,6 +210,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--login-min-interval',   configKey: 'LOGIN_MIN_INTERVAL',     type: 'int' },
         { flag: '--trust-proxy',          configKey: 'TRUST_PROXY',            type: 'bool' },
         { flag: '--trusted-proxy-ips',    configKey: 'TRUSTED_PROXY_IPS',      type: 'stringList' },
+        { flag: '--log-retention-days',   configKey: 'LOG_RETENTION_DAYS',     type: 'int' },
         { flag: '--scheduled-health-check-enabled', configKey: 'SCHEDULE_HEALTH_CHECK_ENABLED', type: 'bool' },
         { flag: '--scheduled-health-check-interval', configKey: 'SCHEDULE_HEALTH_CHECK_INTERVAL', type: 'int' },
         { flag: '--no-ui',                configKey: 'UI_ENABLED',            type: 'flag', value: false },
@@ -250,6 +264,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
     }
 
     normalizeRequestBodyMaxBytes(currentConfig);
+    normalizeLogRetentionDays(currentConfig);
     normalizeConfiguredProviders(currentConfig);
 
     if (!currentConfig.SYSTEM_PROMPT_FILE_PATH) {
@@ -313,7 +328,8 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         includeRequestId: CONFIG.LOG_INCLUDE_REQUEST_ID ?? true,
         includeTimestamp: CONFIG.LOG_INCLUDE_TIMESTAMP ?? true,
         maxFileSize: CONFIG.LOG_MAX_FILE_SIZE || 10485760,
-        maxFiles: CONFIG.LOG_MAX_FILES || 10
+        maxFiles: CONFIG.LOG_MAX_FILES || 10,
+        retentionDays: CONFIG.LOG_RETENTION_DAYS || 7
     });
 
     // Cleanup old logs periodically

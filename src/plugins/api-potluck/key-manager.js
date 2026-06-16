@@ -115,6 +115,26 @@ function normalizeUsageHistoryDay(day = {}) {
     };
 }
 
+function addCacheHitRatio(bucket) {
+    if (!bucket || typeof bucket !== 'object') return bucket;
+    const promptTokens = toNumber(bucket.promptTokens);
+    bucket.cacheHitRatio = promptTokens > 0 ? toNumber(bucket.cachedTokens) / promptTokens : 0;
+    return bucket;
+}
+
+function addUsageHistoryRatios(usageHistory = {}) {
+    for (const day of Object.values(usageHistory || {})) {
+        addCacheHitRatio(day.summary);
+        for (const usage of Object.values(day.providers || {})) {
+            addCacheHitRatio(usage);
+        }
+        for (const usage of Object.values(day.models || {})) {
+            addCacheHitRatio(usage);
+        }
+    }
+    return usageHistory;
+}
+
 function normalizeKeyData(keyData = {}) {
     const normalized = {
         ...keyData,
@@ -191,6 +211,34 @@ function resetUsageHistoryTokens(usageHistory) {
             resetUsageBucketTokens(usage);
         }
     }
+}
+
+function getRecentHistorySummary(usageHistory = {}, days = 7) {
+    const summary = createUsageBucket();
+    const recentDates = Object.keys(usageHistory || {}).sort().slice(-days);
+    for (const date of recentDates) {
+        addUsage(summary, usageHistory[date]?.summary);
+    }
+    addCacheHitRatio(summary);
+    return summary;
+}
+
+function enrichKeyUsage(keyData) {
+    const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
+    const weeklySummary = getRecentHistorySummary(usageHistory, 7);
+    const enriched = {
+        ...keyData,
+        usageHistory,
+        weeklyUsage: weeklySummary.requestCount,
+        weeklyPromptTokens: weeklySummary.promptTokens,
+        weeklyCompletionTokens: weeklySummary.completionTokens,
+        weeklyTotalTokens: weeklySummary.totalTokens,
+        weeklyCachedTokens: weeklySummary.cachedTokens,
+        todayCacheHitRatio: keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0,
+        weeklyCacheHitRatio: weeklySummary.cacheHitRatio,
+        totalCacheHitRatio: keyData.totalPromptTokens > 0 ? keyData.totalCachedTokens / keyData.totalPromptTokens : 0
+    };
+    return enriched;
 }
 
 /**
@@ -355,7 +403,7 @@ export async function listKeys() {
     ensureLoaded();
     const keys = [];
     for (const [keyId, keyData] of Object.entries(keyStore.keys)) {
-        const updated = checkAndResetDailyCount({ ...keyData });
+        const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }));
         const rates = rateManager.getStats(`key:${keyId}`);
         keys.push({
             ...updated,
@@ -378,7 +426,7 @@ export async function getKey(keyId) {
     ensureLoaded();
     const keyData = keyStore.keys[keyId];
     if (!keyData) return null;
-    const updated = checkAndResetDailyCount({ ...keyData });
+    const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }));
     const rates = rateManager.getStats(`key:${keyId}`);
     return {
         ...updated,
@@ -680,6 +728,7 @@ export async function getStats() {
     }
 
     const globalRates = rateManager.getGlobalStats();
+    addUsageHistoryRatios(aggregatedHistory);
     return {
         totalKeys: keys.length,
         enabledKeys,
@@ -690,10 +739,12 @@ export async function getStats() {
         todayCompletionTokens,
         todayTotalTokens,
         todayCachedTokens,
+        todayCacheHitRatio: todayPromptTokens > 0 ? todayCachedTokens / todayPromptTokens : 0,
         totalPromptTokens,
         totalCompletionTokens,
         totalTokens,
         totalCachedTokens,
+        totalCacheHitRatio: totalPromptTokens > 0 ? totalCachedTokens / totalPromptTokens : 0,
         qps: globalRates.qps,
         tps: globalRates.tps,
         rpm: globalRates.rpm,

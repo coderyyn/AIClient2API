@@ -306,6 +306,27 @@
             gap: 4px;
         }
         .dist-badge b { color: var(--primary-color); }
+        .key-daily-usage {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .daily-chip {
+            min-width: 58px;
+            padding: 4px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: var(--bg-primary);
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+        .daily-chip b {
+            display: block;
+            margin-top: 2px;
+            color: var(--text-primary);
+            font-size: 11px;
+        }
         
         .progress-bar {
 
@@ -717,11 +738,14 @@
                     <div class="search-wrapper">
                         <input type="text" id="searchBox" class="search-box" placeholder="搜索名称或 Key...">
                         <select id="sortSelect" class="sort-select">
+                            <option value="todayTokens-desc">今日 Token ↓</option>
+                            <option value="weeklyTokens-desc">本周 Token ↓</option>
+                            <option value="totalTokens-desc">累计 Token ↓</option>
                             <option value="name-asc">名称 A-Z</option>
                             <option value="name-desc">名称 Z-A</option>
-                            <option value="usage-desc">今日用量 ↓</option>
-                            <option value="usage-asc">今日用量 ↑</option>
-                            <option value="total-desc">累计用量 ↓</option>
+                            <option value="usage-desc">今日调用次数 ↓</option>
+                            <option value="usage-asc">今日调用次数 ↑</option>
+                            <option value="total-desc">累计调用次数 ↓</option>
                             <option value="lastUsed-desc">最近使用 ↓</option>
                             <option value="qps-desc">QPS 速率 ↓</option>
                             <option value="rpm-desc">RPM 频率 ↓</option>
@@ -877,6 +901,22 @@
         }
         function usageCount(entry) { return typeof entry === 'number' ? entry : Number(entry?.requestCount || 0); }
         function usageTokens(entry) { return typeof entry === 'number' ? 0 : Number(entry?.totalTokens || 0); }
+        function formatPercentRatio(value) {
+            const ratio = Number(value || 0);
+            return `${(ratio * 100).toFixed(ratio > 0 && ratio < 0.01 ? 2 : 1)}%`;
+        }
+        function formatShortDate(dateKey) {
+            const parts = String(dateKey || '').split('-');
+            return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : dateKey;
+        }
+        function renderKeyDailyUsage(usageHistory = {}) {
+            const entries = Object.entries(usageHistory || {}).sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+            if (entries.length === 0) return '';
+            return `<div class="key-daily-usage">${entries.map(([date, day]) => {
+                const summary = day.summary || {};
+                return `<span class="daily-chip">${formatShortDate(date)}<b>${formatTokenCompact(summary.totalTokens || 0)}</b></span>`;
+            }).join('')}</div>`;
+        }
 
         async function apiRequest(url, options = {}) {
             const token = getToken();
@@ -1109,6 +1149,9 @@
                 if (field === 'name') { va = a.name.toLowerCase(); vb = b.name.toLowerCase(); }
                 else if (field === 'usage') { va = a.todayUsage; vb = b.todayUsage; }
                 else if (field === 'total') { va = a.totalUsage; vb = b.totalUsage; }
+                else if (field === 'todayTokens') { va = a.todayTotalTokens || 0; vb = b.todayTotalTokens || 0; }
+                else if (field === 'weeklyTokens') { va = a.weeklyTotalTokens || 0; vb = b.weeklyTotalTokens || 0; }
+                else if (field === 'totalTokens') { va = a.totalTokens || 0; vb = b.totalTokens || 0; }
                 else if (field === 'lastUsed') { va = a.lastUsedAt || ''; vb = b.lastUsedAt || ''; }
                 else if (field === 'qps') { va = a.qps || 0; vb = b.qps || 0; }
                 else if (field === 'rpm') { va = a.rpm || 0; vb = b.rpm || 0; }
@@ -1159,7 +1202,7 @@
                     Object.values(key.usageHistory).forEach(day => {
                         if (day.providers) {
                             Object.entries(day.providers).forEach(([p, usage]) => {
-                                providers[p] = (providers[p] || 0) + usageCount(usage);
+                                providers[p] = (providers[p] || 0) + usageTokens(usage);
                             });
                         }
                     });
@@ -1169,27 +1212,34 @@
                     .slice(0, 3);
                 
                 const providerBadges = topProviders.map(([name, count]) => 
-                    `<span class="dist-badge">${escapeHtml(name)}: <b>${formatNumber(count)}</b></span>`
+                    `<span class="dist-badge">${escapeHtml(name)}: <b>${formatTokenCompact(count)}</b></span>`
                 ).join('');
+                const dailyUsage = renderKeyDailyUsage(key.usageHistory);
 
                 return `<div class="key-card ${key.enabled ? '' : 'disabled'}">
                     <div class="key-info">
                         <div class="key-name">${escapeHtml(key.name)} <button class="btn-copy" style="margin-left: 4px; padding: 2px 6px;" onclick="openEditName('${key.id}', '${escapeHtml(key.name).replace(/'/g, "\\'")}')" title="修改名称"><i class="fas fa-edit"></i></button></div>
                         <div class="key-id">${key.maskedKey} <button class="btn-copy" onclick="copyToClipboard('${key.id}')" title="复制完整 Key"><i class="fas fa-copy"></i></button></div>
                         ${providerBadges ? `<div class="key-dist-mini">${providerBadges}</div>` : ''}
+                        ${dailyUsage}
                     </div>
                     <div class="key-stats">
 
                         <div class="key-stat">
                             <div class="label">今日/限额</div>
                             <div class="value ${valueClass}">${key.todayUsage}/${key.dailyLimit}</div>
-                            <div class="value muted">${formatTokenCompact(key.todayTotalTokens || 0)} Tokens ${key.todayCachedTokens ? `(含 ${formatTokenCompact(key.todayCachedTokens)} 缓存)` : ''}</div>
+                            <div class="value muted">${formatTokenCompact(key.todayTotalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.todayCacheHitRatio)}</div>
                             <div class="progress-bar"><div class="fill ${progressClass}" style="width:${Math.min(usagePercent, 100)}%"></div></div>
+                        </div>
+                        <div class="key-stat">
+                            <div class="label">本周 Token</div>
+                            <div class="value">${formatTokenCompact(key.weeklyTotalTokens || 0)}</div>
+                            <div class="value muted">缓存 ${formatTokenCompact(key.weeklyCachedTokens || 0)} · ${formatPercentRatio(key.weeklyCacheHitRatio)}</div>
                         </div>
                         <div class="key-stat">
                             <div class="label">累计数据</div>
                             <div class="value">${key.totalUsage} 次请求</div>
-                            <div class="value muted">${formatTokenCompact(key.totalTokens || 0)} Tokens ${key.totalCachedTokens ? `(含 ${formatTokenCompact(key.totalCachedTokens)} 缓存)` : ''}</div>
+                            <div class="value muted">${formatTokenCompact(key.totalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.totalCacheHitRatio)}</div>
                         </div>
                         <div class="key-stat">
                             <div class="label">请求频率</div>

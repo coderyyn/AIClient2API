@@ -6,3 +6,6 @@ keep: `refresh=true` 继续绕过缓存；`readUsageCache({ maxAgeMs: null })` �
 [step-4 | 2026-06-16T21:02:00+08:00] ✓ 为 Codex 账号、模型、日期统计和 cache hit ratio 增加失败测试
 [step-5 | 2026-06-16T21:08:00+08:00] ✓ 实现 model-usage-stats 账号维度、日期模型维度与 provider 元信息透传
 keep: stats 新增 `accounts` 与 `daily[date].models/accounts`；usage block 返回 `cacheHitRatio`，不保存原始 prompt。
+[step-6 | 2026-06-16T21:17:00+08:00] ✓ 为 API Potluck key usage summary 和 Codex sticky provider 增加失败测试
+[step-7 | 2026-06-16T21:24:00+08:00] ✓ 实现 Potluck token-first 管理视图摘要与可选 Codex sticky provider
+keep: `CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=false` 为默认；开启后仅 Codex provider 使用同 key affinity。

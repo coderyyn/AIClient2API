@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { getServiceAdapter, getRegisteredProviders, invalidateServiceAdapter } from './adapter.js';
+import crypto from 'crypto';
 import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
@@ -39,6 +40,16 @@ function getCustomModelIdsForProvider(config, providerType) {
                 (listProvider === providerType || providerType.startsWith(listProvider + '-'));
         })
         .map(model => model.id);
+}
+
+function stableHashToIndex(value, length) {
+    if (!value || length <= 0) return 0;
+    const hash = crypto.createHash('sha256').update(String(value)).digest();
+    return hash.readUInt32BE(0) % length;
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
 }
 
 /**
@@ -1059,15 +1070,26 @@ export class ProviderPoolManager {
             return null;
         }
 
-        // 改进：使用统一的评分策略进行选择
-        // 传入当前时间戳 now 确保一致性
-        const selected = availableAndHealthyProviders.sort((a, b) => {
-            const scoreA = this._calculateNodeScore(a, now, minSeq);
-            const scoreB = this._calculateNodeScore(b, now, minSeq);
-            if (scoreA !== scoreB) return scoreA - scoreB;
-            // 如果分值相同，使用 UUID 排序确保确定性
-            return a.uuid < b.uuid ? -1 : 1;
-        })[0];
+        let selected;
+        if (options.stickyProviderKey && isCodexProviderType(providerType)) {
+            const affinityCandidates = [...availableAndHealthyProviders].sort((a, b) => {
+                const uuidA = a.uuid || a.config?.uuid || '';
+                const uuidB = b.uuid || b.config?.uuid || '';
+                return uuidA.localeCompare(uuidB);
+            });
+            selected = affinityCandidates[stableHashToIndex(`${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`, affinityCandidates.length)];
+            this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        } else {
+            // 改进：使用统一的评分策略进行选择
+            // 传入当前时间戳 now 确保一致性
+            selected = availableAndHealthyProviders.sort((a, b) => {
+                const scoreA = this._calculateNodeScore(a, now, minSeq);
+                const scoreB = this._calculateNodeScore(b, now, minSeq);
+                if (scoreA !== scoreB) return scoreA - scoreB;
+                // 如果分值相同，使用 UUID 排序确保确定性
+                return a.uuid < b.uuid ? -1 : 1;
+            })[0];
+        }
 
         // 始终更新 lastUsed（确保 LRU 策略生效，避免并发请求选到同一个 provider）
         // usageCount 只在请求成功后才增加（由 skipUsageCount 控制）

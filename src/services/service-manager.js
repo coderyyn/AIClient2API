@@ -19,6 +19,27 @@ import { MODEL_PROVIDER } from '../utils/constants.js';
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
 
+function isTruthyConfigFlag(value) {
+    return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function withStickyProviderAffinity(config, providerType, options = {}) {
+    const selectionOptions = { ...options };
+    if (
+        !selectionOptions.stickyProviderKey &&
+        isTruthyConfigFlag(config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED) &&
+        config.potluckApiKey &&
+        isCodexProviderType(providerType)
+    ) {
+        selectionOptions.stickyProviderKey = config.potluckApiKey;
+    }
+    return selectionOptions;
+}
+
 /**
  * 扫描 configs 目录并自动关联未关联的配置文件到对应的提供商
  * @param {Object} config - 服务器配置对象
@@ -418,7 +439,8 @@ export async function getApiService(config, requestedModel = null, options = {})
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
         // 如果有号池管理器，并且当前模型提供者类型有对应的号池（或属于号池类型提供商），则从号池中选择一个提供者配置
         // selectProvider 现在是异步的，使用链式锁确保并发安全
-        const selectedProviderConfig = await providerPoolManager.selectProvider(config.MODEL_PROVIDER, actualModelName, { ...options, skipUsageCount: true });
+        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, skipUsageCount: true });
+        const selectedProviderConfig = await providerPoolManager.selectProvider(config.MODEL_PROVIDER, actualModelName, selectionOptions);
         if (selectedProviderConfig) {
             // 合并选中的提供者配置到当前请求的 config 中
             serviceConfig = deepmerge(config, selectedProviderConfig);
@@ -469,18 +491,20 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         const useAcquire = options.acquireSlot === true;
         let selectedResult;
         
+        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, options);
+
         if (useAcquire) {
              // 我们需要一个支持 Fallback 的 acquireSlot
              selectedResult = await providerPoolManager.acquireSlotWithFallback(
                 config.MODEL_PROVIDER,
                 actualModelName,
-                options
+                selectionOptions
             );
         } else {
             selectedResult = await providerPoolManager.selectProviderWithFallback(
                 config.MODEL_PROVIDER,
                 actualModelName,
-                { ...options, skipUsageCount: true }
+                { ...selectionOptions, skipUsageCount: true }
             );
         }
         
