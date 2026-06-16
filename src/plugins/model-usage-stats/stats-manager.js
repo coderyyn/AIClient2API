@@ -50,7 +50,26 @@ function createDefaultStore() {
         updatedAt: null,
         summary: createEmptyUsage(),
         providers: {},
+        accounts: {},
         daily: {} // 新增每日统计
+    };
+}
+
+function createDailyUsage() {
+    return {
+        ...createEmptyUsage(),
+        models: {},
+        accounts: {}
+    };
+}
+
+function createAccountStore(provider, providerUuid, providerName = null) {
+    return {
+        provider,
+        providerUuid,
+        providerName,
+        summary: createEmptyUsage(),
+        models: {}
     };
 }
 
@@ -75,6 +94,7 @@ function normalizeStore(store) {
         updatedAt: store?.updatedAt || null,
         summary: normalizeUsageBlock(store?.summary),
         providers: {},
+        accounts: {},
         daily: {} // 新增每日统计
     };
 
@@ -89,9 +109,47 @@ function normalizeStore(store) {
         }
     }
 
+    for (const [accountKey, accountStore] of Object.entries(store?.accounts || {})) {
+        const [providerFromKey, uuidFromKey] = accountKey.split(':');
+        normalizedStore.accounts[accountKey] = {
+            provider: accountStore?.provider || providerFromKey || 'unknown',
+            providerUuid: accountStore?.providerUuid || uuidFromKey || 'unknown',
+            providerName: accountStore?.providerName || null,
+            summary: normalizeUsageBlock(accountStore?.summary),
+            models: {}
+        };
+
+        for (const [model, modelStore] of Object.entries(accountStore?.models || {})) {
+            normalizedStore.accounts[accountKey].models[model] = normalizeUsageBlock(modelStore);
+        }
+    }
+
     if (store?.daily) {
         for (const [date, dailyStore] of Object.entries(store.daily)) {
-            normalizedStore.daily[date] = normalizeUsageBlock(dailyStore);
+            normalizedStore.daily[date] = {
+                ...normalizeUsageBlock(dailyStore),
+                models: {},
+                accounts: {}
+            };
+
+            for (const [model, modelStore] of Object.entries(dailyStore?.models || {})) {
+                normalizedStore.daily[date].models[model] = normalizeUsageBlock(modelStore);
+            }
+
+            for (const [accountKey, accountStore] of Object.entries(dailyStore?.accounts || {})) {
+                const [providerFromKey, uuidFromKey] = accountKey.split(':');
+                normalizedStore.daily[date].accounts[accountKey] = {
+                    provider: accountStore?.provider || providerFromKey || 'unknown',
+                    providerUuid: accountStore?.providerUuid || uuidFromKey || 'unknown',
+                    providerName: accountStore?.providerName || null,
+                    summary: normalizeUsageBlock(accountStore?.summary),
+                    models: {}
+                };
+
+                for (const [model, modelStore] of Object.entries(accountStore?.models || {})) {
+                    normalizedStore.daily[date].accounts[accountKey].models[model] = normalizeUsageBlock(modelStore);
+                }
+            }
         }
     }
 
@@ -122,6 +180,84 @@ function ensureModelStore(provider, model) {
         providerStore.models[model] = createEmptyUsage();
     }
     return providerStore.models[model];
+}
+
+function getAccountKey(provider, providerUuid) {
+    if (!provider || !providerUuid) return null;
+    return `${provider}:${providerUuid}`;
+}
+
+function ensureAccountStore(provider, providerUuid, providerName = null) {
+    ensureLoaded();
+    const accountKey = getAccountKey(provider, providerUuid);
+    if (!accountKey) return null;
+
+    if (!statsStore.accounts[accountKey]) {
+        statsStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName);
+    }
+
+    if (providerName && !statsStore.accounts[accountKey].providerName) {
+        statsStore.accounts[accountKey].providerName = providerName;
+    }
+
+    return statsStore.accounts[accountKey];
+}
+
+function ensureAccountModelStore(provider, providerUuid, providerName, model) {
+    const accountStore = ensureAccountStore(provider, providerUuid, providerName);
+    if (!accountStore) return null;
+
+    if (!accountStore.models[model]) {
+        accountStore.models[model] = createEmptyUsage();
+    }
+
+    return accountStore.models[model];
+}
+
+function ensureDailyStore(dateKey) {
+    ensureLoaded();
+    if (!statsStore.daily[dateKey]) {
+        statsStore.daily[dateKey] = createDailyUsage();
+    } else {
+        statsStore.daily[dateKey].models = statsStore.daily[dateKey].models || {};
+        statsStore.daily[dateKey].accounts = statsStore.daily[dateKey].accounts || {};
+    }
+    return statsStore.daily[dateKey];
+}
+
+function ensureDailyModelStore(dateKey, model) {
+    const dailyStore = ensureDailyStore(dateKey);
+    if (!dailyStore.models[model]) {
+        dailyStore.models[model] = createEmptyUsage();
+    }
+    return dailyStore.models[model];
+}
+
+function ensureDailyAccountStore(dateKey, provider, providerUuid, providerName = null) {
+    const accountKey = getAccountKey(provider, providerUuid);
+    if (!accountKey) return null;
+
+    const dailyStore = ensureDailyStore(dateKey);
+    if (!dailyStore.accounts[accountKey]) {
+        dailyStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName);
+    }
+
+    if (providerName && !dailyStore.accounts[accountKey].providerName) {
+        dailyStore.accounts[accountKey].providerName = providerName;
+    }
+
+    return dailyStore.accounts[accountKey];
+}
+
+function ensureDailyAccountModelStore(dateKey, provider, providerUuid, providerName, model) {
+    const dailyAccountStore = ensureDailyAccountStore(dateKey, provider, providerUuid, providerName);
+    if (!dailyAccountStore) return null;
+
+    if (!dailyAccountStore.models[model]) {
+        dailyAccountStore.models[model] = createEmptyUsage();
+    }
+
+    return dailyAccountStore.models[model];
 }
 
 function ensureLoaded() {
@@ -338,6 +474,8 @@ function getPendingRequest(requestId, meta = {}) {
             requestId,
             model: meta.model || 'unknown',
             provider: meta.provider || 'unknown',
+            providerUuid: meta.providerUuid || null,
+            providerName: meta.providerName || null,
             fromProvider: meta.fromProvider || null,
             isStream: Boolean(meta.isStream),
             hasResponse: false,
@@ -354,6 +492,8 @@ function getPendingRequest(requestId, meta = {}) {
     const state = pendingRequests.get(requestId);
     state.model = meta.model || state.model;
     state.provider = meta.provider || state.provider;
+    state.providerUuid = state.providerUuid || meta.providerUuid || null;
+    state.providerName = state.providerName || meta.providerName || null;
     state.fromProvider = meta.fromProvider || state.fromProvider;
     state.isStream = meta.isStream ?? state.isStream;
     state.updatedAt = Date.now();
@@ -381,13 +521,53 @@ function resetUsageBlockTokens(block) {
     block.maxTps = 0;
 }
 
+function addCacheHitRatio(block) {
+    if (!block || typeof block !== 'object') return;
+    const promptTokens = toNumber(block.promptTokens);
+    block.cacheHitRatio = promptTokens > 0 ? block.cachedTokens / promptTokens : 0;
+}
+
+function addDerivedUsageMetricsToTree(value) {
+    if (!value || typeof value !== 'object') return;
+
+    if (
+        Object.prototype.hasOwnProperty.call(value, 'promptTokens') ||
+        Object.prototype.hasOwnProperty.call(value, 'cachedTokens')
+    ) {
+        addCacheHitRatio(value);
+    }
+
+    for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') {
+            addDerivedUsageMetricsToTree(child);
+        }
+    }
+}
+
+function resetUsageTokensInTree(value) {
+    if (!value || typeof value !== 'object') return;
+
+    if (
+        Object.prototype.hasOwnProperty.call(value, 'promptTokens') ||
+        Object.prototype.hasOwnProperty.call(value, 'cachedTokens')
+    ) {
+        resetUsageBlockTokens(value);
+    }
+
+    for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') {
+            resetUsageTokensInTree(child);
+        }
+    }
+}
+
 export function setConfigGetter(getter) {
     configGetter = getter;
 }
 
-export function recordUnaryUsage({ requestId, model, provider, fromProvider, nativeResponse, clientResponse }) {
+export function recordUnaryUsage({ requestId, model, provider, providerUuid, providerName, fromProvider, nativeResponse, clientResponse }) {
     if (!requestId) return;
-    const state = getPendingRequest(requestId, { model, provider, fromProvider, isStream: false });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream: false });
     const prevTotalTokens = state.usage.totalTokens;
     const prevCachedTokens = state.usage.cachedTokens;
     state.hasResponse = true;
@@ -397,9 +577,9 @@ export function recordUnaryUsage({ requestId, model, provider, fromProvider, nat
     }
 }
 
-export function recordStreamChunkUsage({ requestId, model, provider, fromProvider, nativeChunk, clientChunk }) {
+export function recordStreamChunkUsage({ requestId, model, provider, providerUuid, providerName, fromProvider, nativeChunk, clientChunk }) {
     if (!requestId) return;
-    const state = getPendingRequest(requestId, { model, provider, fromProvider, isStream: true });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream: true });
     const prevTotalTokens = state.usage.totalTokens;
     const prevCachedTokens = state.usage.cachedTokens;
     state.hasResponse = true;
@@ -409,13 +589,13 @@ export function recordStreamChunkUsage({ requestId, model, provider, fromProvide
     }
 }
 
-export async function finalizeRequest({ requestId, model, provider, fromProvider, isStream }) {
+export async function finalizeRequest({ requestId, model, provider, providerUuid, providerName, fromProvider, isStream }) {
     if (!requestId) {
         logger.warn(`${getTracePrefix(null)} Skip finalize: missing requestId`);
         return false;
     }
 
-    const state = getPendingRequest(requestId, { model, provider, fromProvider, isStream });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream });
     
     // 防重逻辑：如果该请求已经处理过速率统计，则直接删除并返回
     if (state.rateRecorded) {
@@ -436,6 +616,8 @@ export async function finalizeRequest({ requestId, model, provider, fromProvider
     const dateKey = getBeijingDateString();
     const normalizedProvider = state.provider || provider || 'unknown';
     const normalizedModel = state.model || model || 'unknown';
+    const normalizedProviderUuid = state.providerUuid || providerUuid || null;
+    const normalizedProviderName = state.providerName || providerName || null;
     
     const usage = {
         promptTokens: state.usage.promptTokens,
@@ -448,9 +630,18 @@ export async function finalizeRequest({ requestId, model, provider, fromProvider
     applyUsage(ensureProviderStore(normalizedProvider).summary, usage, timestamp);
     applyUsage(ensureModelStore(normalizedProvider, normalizedModel), usage, timestamp);
 
+    const accountStore = ensureAccountStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName);
+    if (accountStore) {
+        applyUsage(accountStore.summary, usage, timestamp);
+        applyUsage(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel), usage, timestamp);
+    }
+
     // 记录速率统计
     rateManager.record(`provider:${normalizedProvider}`, usage.totalTokens);
     rateManager.record(`model:${normalizedModel}`, usage.totalTokens);
+    if (normalizedProviderUuid) {
+        rateManager.record(`account:${normalizedProvider}:${normalizedProviderUuid}`, usage.totalTokens);
+    }
 
     const globalRates = rateManager.getGlobalStats();
     
@@ -464,13 +655,24 @@ export async function finalizeRequest({ requestId, model, provider, fromProvider
     updatePeaks(statsStore.summary);
     updatePeaks(ensureProviderStore(normalizedProvider).summary);
     updatePeaks(ensureModelStore(normalizedProvider, normalizedModel));
-
-    if (!statsStore.daily[dateKey]) {
-        statsStore.daily[dateKey] = createEmptyUsage();
+    if (accountStore) {
+        updatePeaks(accountStore.summary);
+        updatePeaks(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
     }
-    const dailyBlock = statsStore.daily[dateKey];
+
+    const dailyBlock = ensureDailyStore(dateKey);
     applyUsage(dailyBlock, usage, timestamp);
+    applyUsage(ensureDailyModelStore(dateKey, normalizedModel), usage, timestamp);
     updatePeaks(dailyBlock);
+    updatePeaks(ensureDailyModelStore(dateKey, normalizedModel));
+
+    const dailyAccountStore = ensureDailyAccountStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName);
+    if (dailyAccountStore) {
+        applyUsage(dailyAccountStore.summary, usage, timestamp);
+        applyUsage(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel), usage, timestamp);
+        updatePeaks(dailyAccountStore.summary);
+        updatePeaks(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
+    }
 
     logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
     markDirty();
@@ -512,6 +714,18 @@ export async function getStats() {
         }
     }
 
+    for (const [accountKey, accountStore] of Object.entries(stats.accounts || {})) {
+        const aRates = rateManager.getStats(`account:${accountKey}`);
+        accountStore.summary.qps = aRates.qps;
+        accountStore.summary.tps = aRates.tps;
+        accountStore.summary.rpm = aRates.rpm;
+        accountStore.summary.maxQps = Math.max(accountStore.summary.maxQps || 0, aRates.maxQps);
+        accountStore.summary.maxTps = Math.max(accountStore.summary.maxTps || 0, aRates.maxTps);
+        accountStore.summary.maxRpm = Math.max(accountStore.summary.maxRpm || 0, aRates.maxRpm);
+    }
+
+    addDerivedUsageMetricsToTree(stats);
+
     return stats;
 }
 
@@ -529,21 +743,7 @@ export async function resetStats() {
 export async function resetTokenStats() {
     ensureLoaded();
 
-    resetUsageBlockTokens(statsStore.summary);
-
-    if (statsStore.daily) {
-        for (const dayBlock of Object.values(statsStore.daily)) {
-            resetUsageBlockTokens(dayBlock);
-        }
-    }
-
-    for (const providerStore of Object.values(statsStore.providers || {})) {
-        resetUsageBlockTokens(providerStore.summary);
-
-        for (const modelStore of Object.values(providerStore.models || {})) {
-            resetUsageBlockTokens(modelStore);
-        }
-    }
+    resetUsageTokensInTree(statsStore);
 
     pendingRequests.clear();
     rateManager.clear(); // 同时重置速率统计

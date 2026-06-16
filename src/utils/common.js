@@ -916,6 +916,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         chunkToSend,
                         fromProvider,
                         toProvider,
+                        providerUuid: pooluuid,
+                        providerName: customName,
                         model,
                         requestId: hookRequestId
                     });
@@ -1242,6 +1244,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     clientResponse,
                     fromProvider,
                     toProvider,
+                    providerUuid: pooluuid,
+                    providerName: customName,
                     model,
                     requestId: hookRequestId
                 });
@@ -1680,6 +1684,8 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             processedRequestBody,
             fromProvider,
             toProvider,
+            providerUuid: actualUuid,
+            providerName: actualCustomName,
             model,
             isStream
         });

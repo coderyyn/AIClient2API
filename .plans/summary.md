@@ -3,3 +3,6 @@ keep: 定制分支默认观测优先；sticky provider 做可配置能力且默�
 [step-2 | 2026-06-16T20:55:00+08:00] ✓ 为 official usage cache 增加 1 小时 TTL 失败测试
 [step-3 | 2026-06-16T20:57:00+08:00] ✓ 实现 usage cache 1 小时 TTL，并保留内部无 TTL 读取路径
 keep: `refresh=true` 继续绕过缓存；`readUsageCache({ maxAgeMs: null })` 仅用于缓存内部更新。
+[step-4 | 2026-06-16T21:02:00+08:00] ✓ 为 Codex 账号、模型、日期统计和 cache hit ratio 增加失败测试
+[step-5 | 2026-06-16T21:08:00+08:00] ✓ 实现 model-usage-stats 账号维度、日期模型维度与 provider 元信息透传
+keep: stats 新增 `accounts` 与 `daily[date].models/accounts`；usage block 返回 `cacheHitRatio`，不保存原始 prompt。

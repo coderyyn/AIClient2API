@@ -13,9 +13,62 @@ import logger from '../utils/logger.js';
 import busboy from 'busboy';
 import { SUPPORTED_IMAGE_MODELS } from '../utils/constants.js';
 import { convertData } from '../convert/convert.js';
+import { summarizePayloadForLog } from '../utils/log-sanitizer.js';
 
 const IMAGE_GEN_MAX_N = 4;
 const VALID_RESPONSE_FORMATS = new Set(['b64_json', 'url']);
+const IMAGE_PAYLOAD_SUMMARY_MODELS = new Set(['gpt-image-2', 'gmt-image-2']);
+const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'moderation'];
+const IMAGE_TOOL_EDIT_STRING_FIELDS = [...IMAGE_TOOL_STRING_FIELDS, 'input_fidelity'];
+const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];
+
+function shouldLogImagePayloadSummary(model) {
+    return IMAGE_PAYLOAD_SUMMARY_MODELS.has(String(model || '').trim());
+}
+
+function logImagePayloadSummary(scope, model, payload) {
+    if (!shouldLogImagePayloadSummary(model)) return;
+
+    try {
+        logger.info(`[${scope}] Payload summary for model=${model}: ${JSON.stringify(summarizePayloadForLog(payload))}`);
+    } catch (error) {
+        logger.warn(`[${scope}] Failed to summarize payload for model=${model}: ${error.message}`);
+    }
+}
+
+function assignStringImageToolOption(options, source, field) {
+    const value = source?.[field];
+    if (value === undefined || value === null) return;
+
+    const text = String(value).trim();
+    if (text) {
+        options[field] = text;
+    }
+}
+
+function assignNumericImageToolOption(options, source, field) {
+    const value = source?.[field];
+    if (value === undefined || value === null || value === '') return;
+
+    const number = Number.parseInt(value, 10);
+    if (Number.isFinite(number)) {
+        options[field] = number;
+    }
+}
+
+function collectImageToolOptions(source, { includeInputFidelity = false } = {}) {
+    const options = {};
+    const stringFields = includeInputFidelity ? IMAGE_TOOL_EDIT_STRING_FIELDS : IMAGE_TOOL_STRING_FIELDS;
+
+    for (const field of stringFields) {
+        assignStringImageToolOption(options, source, field);
+    }
+    for (const field of IMAGE_TOOL_NUMERIC_FIELDS) {
+        assignNumericImageToolOption(options, source, field);
+    }
+
+    return Object.keys(options).length > 0 ? options : undefined;
+}
 
 /**
  * Handle API authentication and routing
@@ -128,20 +181,23 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     const CONFIG = retryContext?.CONFIG ?? currentConfig;
     let slotProviderType = null;
     let slotUuid = null;
-    let model, n, response_format, size, codexRequestBody, virtualOpenAIRequest;
+    let slotCustomName = null;
+    let model, n, response_format, size, quality, prompt, imageToolOptions, codexRequestBody, virtualOpenAIRequest;
 
     try {
         if (retryContext?.parsedBody) {
-            ({model, n, response_format, size, virtualOpenAIRequest} = retryContext.parsedBody);
+            ({model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest} = retryContext.parsedBody);
             codexRequestBody = virtualOpenAIRequest;
         } else {
             const body = await getRequestBody(req, { maxBytes: CONFIG.REQUEST_BODY_MAX_BYTES });
             model = body.model || 'gpt-image-2';
             response_format = body.response_format || 'b64_json';
             size = body.size;
+            quality = body.quality;
+            imageToolOptions = collectImageToolOptions(body);
             // cap n：至少 1，最多 IMAGE_GEN_MAX_N，非数字降级为 1
             n = Math.min(Math.max(1, parseInt(body.n) || 1), IMAGE_GEN_MAX_N);
-            const prompt = body.prompt;
+            prompt = body.prompt;
 
             if (!SUPPORTED_IMAGE_MODELS.has(model)) {
                 res.writeHead(400, {'Content-Type': 'application/json'});
@@ -172,8 +228,11 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                 messages: [{ role: 'user', content: prompt }],
                 n,
                 size,
+                quality,
                 response_format,
                 _imageSize: size, // 兼容 Codex 内部使用的字段
+                _imageQuality: quality,
+                _imageToolOptions: imageToolOptions,
                 _monitorRequestId: currentConfig._monitorRequestId // 注入监控 ID
             };
 
@@ -196,6 +255,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         if (shouldUsePool && result.uuid) {
             slotProviderType = result.actualProviderType || CONFIG.MODEL_PROVIDER;
             slotUuid = result.uuid;
+            slotCustomName = result.serviceConfig?.customName || null;
         }
         
         const finalProviderProtocol = getProtocolPrefix(slotProviderType || CONFIG.MODEL_PROVIDER);
@@ -216,7 +276,8 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             });
         }
 
-        logger.info(`[Image Generation] model=${model}, protocol=${finalProviderProtocol}, n=${n}, response_format=${response_format}${size ? `, size=${size}` : ''}`);
+        logger.info(`[Image Generation] model=${model}, protocol=${finalProviderProtocol}, n=${n}, response_format=${response_format}${size ? `, size=${size}` : ''}${quality ? `, quality=${quality}` : ''}`);
+        logImagePayloadSummary('Image Generation', model, codexRequestBody);
 
         // 串行发起 n 张图请求，每张独立占用一次上游调用，与号池 slot 计数对应
         const data = [];
@@ -249,23 +310,27 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                 const { getPluginManager } = await import('../core/plugin-manager.js');
                 const pluginManager = getPluginManager();
                 if (pluginManager) {
-                    await pluginManager.executeHook('onContentGenerated', {
-                        ...currentConfig,
-                        originalRequestBody: { model, prompt, n, size, response_format },
-                        processedRequestBody: codexRequestBody,
-                        fromProvider,
-                        toProvider,
-                        model,
-                        isStream: false
-                    });
-
                     await pluginManager.executeHook('onUnaryResponse', {
                         nativeResponse: responses.length === 1 ? responses[0] : responses,
                         clientResponse,
                         fromProvider,
                         toProvider,
+                        providerUuid: slotUuid || currentConfig.uuid,
+                        providerName: slotCustomName || currentConfig.customName,
                         model,
                         requestId: currentConfig._monitorRequestId
+                    });
+
+                    await pluginManager.executeHook('onContentGenerated', {
+                        ...currentConfig,
+                        originalRequestBody: { model, prompt, n, size, quality, response_format },
+                        processedRequestBody: codexRequestBody,
+                        fromProvider,
+                        toProvider,
+                        providerUuid: slotUuid || currentConfig.uuid,
+                        providerName: slotCustomName || currentConfig.customName,
+                        model,
+                        isStream: false
                     });
                 }
             } catch (e) {
@@ -311,7 +376,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     CONFIG,
                     currentRetry: currentRetry + 1,
                     maxRetries,
-                    parsedBody: {model, n, response_format, size, virtualOpenAIRequest}
+                    parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest}
                 });
             } catch (retryError) {
                 logger.error('[Image Generation Retry] Failed to get alternative service:', retryError.message);
@@ -463,6 +528,7 @@ function getMultipartFiles(form, fieldNames) {
 async function handleImageEditsRequest(req, res, currentConfig, providerPoolManager) {
     let slotProviderType = null;
     let slotUuid = null;
+    let slotCustomName = null;
 
     try {
         const form = await parseMultipartForm(req);
@@ -472,6 +538,8 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         const prompt = fields.prompt;
         const response_format = fields.response_format || 'b64_json';
         const size = fields.size;
+        const quality = fields.quality;
+        const imageToolOptions = collectImageToolOptions(fields, { includeInputFidelity: true });
         const n = Math.min(Math.max(1, parseInt(fields.n) || 1), IMAGE_GEN_MAX_N);
 
         // Support both image and image[] field names, preserving repeated file inputs.
@@ -527,8 +595,11 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             }],
             n,
             size,
+            quality,
             response_format,
             _imageSize: size,
+            _imageQuality: quality,
+            _imageToolOptions: imageToolOptions,
             _monitorRequestId: currentConfig._monitorRequestId // 注入监控 ID
         };
 
@@ -545,6 +616,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         if (shouldUsePool && result.uuid) {
             slotProviderType = result.actualProviderType || currentConfig.MODEL_PROVIDER;
             slotUuid = result.uuid;
+            slotCustomName = result.serviceConfig?.customName || null;
         }
 
         const finalProviderProtocol = getProtocolPrefix(slotProviderType || currentConfig.MODEL_PROVIDER);
@@ -566,7 +638,8 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             });
         }
 
-        logger.info(`[Image Edits] model=${model}, protocol=${finalProviderProtocol}, n=${n}, response_format=${response_format}, imageCount=${imageFiles.length}, totalImageSize=${Math.round(totalImageBytes / 1024)}KB${size ? `, size=${size}` : ''}`);
+        logger.info(`[Image Edits] model=${model}, protocol=${finalProviderProtocol}, n=${n}, response_format=${response_format}, imageCount=${imageFiles.length}, totalImageSize=${Math.round(totalImageBytes / 1024)}KB${size ? `, size=${size}` : ''}${quality ? `, quality=${quality}` : ''}`);
+        logImagePayloadSummary('Image Edits', model, codexRequestBody);
 
         const imageRequests = Array.from({ length: n }, () =>
             service.generateContent(model, { ...codexRequestBody })
@@ -600,23 +673,27 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
                 const { getPluginManager } = await import('../core/plugin-manager.js');
                 const pluginManager = getPluginManager();
                 if (pluginManager) {
-                    await pluginManager.executeHook('onContentGenerated', {
-                        ...currentConfig,
-                        originalRequestBody: { model, prompt, n, size, response_format },
-                        processedRequestBody: codexRequestBody,
-                        fromProvider,
-                        toProvider,
-                        model,
-                        isStream: false
-                    });
-
                     await pluginManager.executeHook('onUnaryResponse', {
                         nativeResponse: responses.length === 1 ? responses[0] : responses,
                         clientResponse,
                         fromProvider,
                         toProvider,
+                        providerUuid: slotUuid || currentConfig.uuid,
+                        providerName: slotCustomName || currentConfig.customName,
                         model,
                         requestId: currentConfig._monitorRequestId
+                    });
+
+                    await pluginManager.executeHook('onContentGenerated', {
+                        ...currentConfig,
+                        originalRequestBody: { model, prompt, n, size, quality, response_format },
+                        processedRequestBody: codexRequestBody,
+                        fromProvider,
+                        toProvider,
+                        providerUuid: slotUuid || currentConfig.uuid,
+                        providerName: slotCustomName || currentConfig.customName,
+                        model,
+                        isStream: false
                     });
                 }
             } catch (e) {

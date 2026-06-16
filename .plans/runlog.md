@@ -24,3 +24,19 @@
 
 ## Step 4 - START - 2026-06-16T20:57:00+08:00
 为 model-usage-stats 的账号、模型、日期维度和 cache hit ratio 写 focused 测试。
+
+## Step 4 - DONE - 2026-06-16T21:02:00+08:00
+产物：tests/model-usage-account-stats.test.js。
+关键决策：账号元数据放在 account 对象顶层，summary 仅保留用量字段。
+验证：首次运行 `npx.cmd jest tests/model-usage-account-stats.test.js --runInBand` 按预期失败，缺少 `cacheHitRatio` 和账号结构。
+
+## Step 5 - START - 2026-06-16T21:02:00+08:00
+扩展 model-usage-stats 存储结构，并把实际 provider uuid/name 从请求链路透传到插件 hook。
+
+## Step 5 - DONE - 2026-06-16T21:08:00+08:00
+产物：src/plugins/model-usage-stats/stats-manager.js、src/plugins/model-usage-stats/index.js、src/utils/common.js、src/services/api-manager.js。
+关键决策：新增 `accounts`、`daily[date].models`、`daily[date].accounts`；图片接口 hook 顺序改为先记录 response usage 再 finalize。
+验证：`npx.cmd jest tests/model-usage-account-stats.test.js --runInBand` 与 `npx.cmd jest tests/usage-cache.test.js --runInBand` 均通过。
+
+## Step 6 - START - 2026-06-16T21:08:00+08:00
+为 API Potluck 管理端 key 用量摘要和可选 Codex sticky provider affinity 写 focused 测试。
