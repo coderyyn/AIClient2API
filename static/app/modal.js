@@ -136,6 +136,8 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
         let value = input.value;
         if (key === 'concurrencyLimit' || key === 'queueLimit') {
             value = parseInt(value || '0', 10);
+        } else if (key === 'providerWeight') {
+            value = Number(value || '1');
         }
         providerConfig[key] = value;
     });
@@ -1014,7 +1016,7 @@ function renderProviderConfig(provider) {
     
     // 先渲染基础配置字段（customName、checkModelName 和 checkHealth）
     let html = '<div class="form-grid">';
-    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
     
     baseFields.forEach(fieldKey => {
         const displayLabel = getFieldLabel(fieldKey);
@@ -1023,14 +1025,14 @@ function renderProviderConfig(provider) {
         
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
-        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : ''))));
+        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : '')))));
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
             html += `
                 <div class="config-item">
                     <label>${displayLabel}</label>
-                    <input type="text"
+                    <input type="${fieldKey === 'providerWeight' ? 'number' : 'text'}"
                            value="${displayValue}"
                            readonly
                            data-config-key="${fieldKey}"
@@ -1241,7 +1243,7 @@ function renderProviderConfig(provider) {
  * @returns {Array} 字段名数组
  */
 function getFieldOrder(provider) {
-    const orderedFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const orderedFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
     
     // 需要排除的内部状态字段
     const excludedFields = [
@@ -1645,6 +1647,10 @@ function showAddProviderForm(providerType) {
                 <label><span data-i18n="modal.provider.queueLimit">队列限制</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
                 <input type="number" id="newQueueLimit" placeholder="默认0不限制">
             </div>
+            <div class="form-group">
+                <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
+                <input type="number" id="newProviderWeight" min="0.01" step="0.01" placeholder="默认1，越大分配越多">
+            </div>
         </div>
         <div id="dynamicConfigFields">
             <!-- 动态配置字段将在这里显示 -->
@@ -1682,7 +1688,7 @@ function addDynamicConfigFields(form, providerType) {
     const allFields = getProviderTypeFields(providerType);
     
     // 过滤掉已经在 form-grid 中硬编码显示的五个基础字段，避免重复
-    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
     const filteredFields = allFields.filter(f => !baseFields.some(bf => f.id.toLowerCase().includes(bf.toLowerCase())));
 
     let fields = '';
@@ -1822,13 +1828,15 @@ async function addProvider(providerType) {
     const checkHealth = document.getElementById('newCheckHealth')?.value === 'true';
     const concurrencyLimit = parseInt(document.getElementById('newConcurrencyLimit')?.value || '0');
     const queueLimit = parseInt(document.getElementById('newQueueLimit')?.value || '0');
+    const providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1');
     
     const providerConfig = {
         customName: customName || '', // 允许为空
         checkModelName: checkModelName || '', // 允许为空
         checkHealth,
         concurrencyLimit,
-        queueLimit
+        queueLimit,
+        providerWeight
     };
     
     // 根据提供商类型动态收集配置字段（自动匹配 utils.js 中的定义）

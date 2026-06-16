@@ -52,6 +52,15 @@ function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
 }
 
+function getProviderWeight(config = {}) {
+    const weight = Number(config.providerWeight ?? config.weight ?? 1);
+    return Number.isFinite(weight) && weight > 0 ? weight : 1;
+}
+
+function hasCustomProviderWeights(providers) {
+    return providers.some(provider => getProviderWeight(provider.config) !== 1);
+}
+
 /**
  * Manages a pool of API service providers, handling their health and selection.
  */
@@ -866,6 +875,7 @@ export class ProviderPoolManager {
                     providerConfig.lastHealthCheckModel = providerConfig.lastHealthCheckModel || null;
                     providerConfig.lastErrorMessage = providerConfig.lastErrorMessage || null;
                     providerConfig.customName = providerConfig.customName || null;
+                    providerConfig.providerWeight = getProviderWeight(providerConfig);
 
                     this.providerStatus[providerType].push({
                         config: providerConfig,
@@ -1079,6 +1089,25 @@ export class ProviderPoolManager {
             });
             selected = affinityCandidates[stableHashToIndex(`${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`, affinityCandidates.length)];
             this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        } else if (hasCustomProviderWeights(availableAndHealthyProviders)) {
+            selected = [...availableAndHealthyProviders].sort((a, b) => {
+                const weightA = getProviderWeight(a.config);
+                const weightB = getProviderWeight(b.config);
+                const weightedUsageA = (a.config.usageCount || 0) / weightA;
+                const weightedUsageB = (b.config.usageCount || 0) / weightB;
+                if (weightedUsageA !== weightedUsageB) return weightedUsageA - weightedUsageB;
+
+                const loadA = a.state?.activeCount || 0;
+                const loadB = b.state?.activeCount || 0;
+                if (loadA !== loadB) return loadA - loadB;
+
+                const lastUsedA = a.config.lastUsed ? new Date(a.config.lastUsed).getTime() : 0;
+                const lastUsedB = b.config.lastUsed ? new Date(b.config.lastUsed).getTime() : 0;
+                if (lastUsedA !== lastUsedB) return lastUsedA - lastUsedB;
+
+                return (a.uuid || '').localeCompare(b.uuid || '');
+            })[0];
+            this._log('debug', `Selected provider for ${providerType} by weight: ${this._getDisplayName(selected.config)} (weight=${getProviderWeight(selected.config)})${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         } else {
             // 改进：使用统一的评分策略进行选择
             // 传入当前时间戳 now 确保一致性
