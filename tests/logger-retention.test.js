@@ -87,3 +87,21 @@ describe('log retention cleanup', () => {
         expect(fs.existsSync(otherFile)).toBe(true);
     });
 });
+
+describe('log sanitization', () => {
+    test('redacts email addresses from general logger output', () => {
+        const logger = new Logger();
+        logger.initialize({
+            outputMode: 'console',
+            includeTimestamp: false,
+            includeRequestId: false
+        });
+
+        logger.info('Initialized account user@example.com');
+
+        const logged = consoleSpies.find(spy => spy.getMockName?.() === 'log')?.mock?.calls?.[0]?.[0]
+            || console.log.mock.calls[0][0];
+        expect(logged).not.toContain('user@example.com');
+        expect(logged).toContain('[redacted-email:');
+    });
+});

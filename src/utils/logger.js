@@ -1,7 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+
+function hashPreview(value) {
+    return createHash('sha256').update(String(value)).digest('hex').slice(0, 8);
+}
+
+function sanitizeLogText(value) {
+    return String(value).replace(
+        /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+        (email) => `[redacted-email:${hashPreview(email.toLowerCase())}]`
+    );
+}
 
 /**
  * 统一日志工具类
@@ -179,12 +190,12 @@ class Logger {
         const message = args.map(arg => {
             if (typeof arg === 'object') {
                 try {
-                    return JSON.stringify(arg, null, 2);
+                    return sanitizeLogText(JSON.stringify(arg, null, 2));
                 } catch (e) {
-                    return String(arg);
+                    return sanitizeLogText(arg);
                 }
             }
-            return String(arg);
+            return sanitizeLogText(arg);
         }).join(' ');
 
         parts.push(message);
