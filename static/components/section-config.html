@@ -275,11 +275,21 @@
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="warmupTarget" data-i18n="config.advanced.warmupTarget">系统预热节点数</label>
+                        <label for="warmupTarget" class="config-label-with-help">
+                            <span data-i18n="config.advanced.warmupTarget">系统预热节点数</span>
+                            <span class="config-help-icon" tabindex="0" title="服务启动时自动预热/刷新多少个节点。0 表示不做启动预热；数值越大启动时会触发更多节点初始化。" data-i18n-title="config.advanced.warmupTargetHelp" aria-label="服务启动时自动预热/刷新多少个节点。0 表示不做启动预热；数值越大启动时会触发更多节点初始化。" data-i18n-aria-label="config.advanced.warmupTargetHelp">
+                                <i class="fas fa-question-circle" aria-hidden="true"></i>
+                            </span>
+                        </label>
                         <input type="number" id="warmupTarget" class="form-control" min="0" max="100" value="0">
                     </div>
                     <div class="form-group">
-                        <label for="refreshConcurrencyPerProvider" data-i18n="config.advanced.refreshConcurrencyPerProvider">提供商刷新并发数</label>
+                        <label for="refreshConcurrencyPerProvider" class="config-label-with-help">
+                            <span data-i18n="config.advanced.refreshConcurrencyPerProvider">提供商刷新并发数</span>
+                            <span class="config-help-icon" tabindex="0" title="每个提供商类型内部同时执行刷新任务的最大数量。调大可加快账号池刷新，但会增加上游请求压力；默认 1 更稳。" data-i18n-title="config.advanced.refreshConcurrencyPerProviderHelp" aria-label="每个提供商类型内部同时执行刷新任务的最大数量。调大可加快账号池刷新，但会增加上游请求压力；默认 1 更稳。" data-i18n-aria-label="config.advanced.refreshConcurrencyPerProviderHelp">
+                                <i class="fas fa-question-circle" aria-hidden="true"></i>
+                            </span>
+                        </label>
                         <input type="number" id="refreshConcurrencyPerProvider" class="form-control" min="1" max="10" value="1">
                     </div>
                 </div>

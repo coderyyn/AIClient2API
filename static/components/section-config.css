@@ -100,6 +100,33 @@
     font-size: 0.9rem;
 }
 
+.form-group label.config-label-with-help {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.config-help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    color: var(--text-tertiary);
+    cursor: help;
+    line-height: 1;
+}
+
+.config-help-icon:hover,
+.config-help-icon:focus {
+    color: var(--primary-color);
+    outline: none;
+}
+
+.config-help-icon i {
+    font-size: 0.85rem;
+}
+
 .optional-tag, .form-group label .optional-mark {
     font-size: 0.75rem;
     color: var(--text-tertiary);
