@@ -563,6 +563,7 @@ async function loadConfiguration() {
         const logIncludeTimestampEl = document.getElementById('logIncludeTimestamp');
         const logMaxFileSizeEl = document.getElementById('logMaxFileSize');
         const logMaxFilesEl = document.getElementById('logMaxFiles');
+        const logRetentionDaysEl = document.getElementById('logRetentionDays');
         
         if (logEnabledEl) logEnabledEl.checked = data.LOG_ENABLED !== false;
         if (logOutputModeEl) logOutputModeEl.value = data.LOG_OUTPUT_MODE || 'all';
@@ -572,6 +573,7 @@ async function loadConfiguration() {
         if (logIncludeTimestampEl) logIncludeTimestampEl.checked = data.LOG_INCLUDE_TIMESTAMP !== false;
         if (logMaxFileSizeEl) logMaxFileSizeEl.value = data.LOG_MAX_FILE_SIZE || 10485760;
         if (logMaxFilesEl) logMaxFilesEl.value = data.LOG_MAX_FILES || 10;
+        if (logRetentionDaysEl) logRetentionDaysEl.value = data.LOG_RETENTION_DAYS || 7;
         
         // TLS Sidecar 配置
         const tlsSidecarEnabledEl = document.getElementById('tlsSidecarEnabled');
@@ -756,6 +758,7 @@ async function saveConfiguration(options = {}) {
     config.LOG_INCLUDE_TIMESTAMP = document.getElementById('logIncludeTimestamp')?.checked !== false;
     config.LOG_MAX_FILE_SIZE = parseInt(document.getElementById('logMaxFileSize')?.value || 10485760);
     config.LOG_MAX_FILES = parseInt(document.getElementById('logMaxFiles')?.value || 10);
+    config.LOG_RETENTION_DAYS = parseInt(document.getElementById('logRetentionDays')?.value || 7);
     
     // TLS Sidecar 配置
     config.TLS_SIDECAR_ENABLED = document.getElementById('tlsSidecarEnabled')?.checked || false;

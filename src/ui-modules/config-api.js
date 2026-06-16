@@ -112,6 +112,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOG_INCLUDE_TIMESTAMP: currentConfig.LOG_INCLUDE_TIMESTAMP,
         LOG_MAX_FILE_SIZE: currentConfig.LOG_MAX_FILE_SIZE,
         LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
+        LOG_RETENTION_DAYS: currentConfig.LOG_RETENTION_DAYS,
         SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
         // 脱敏：只返回是否设置了 API Key，不返回原文
         REQUIRED_API_KEY: currentConfig.REQUIRED_API_KEY ? '******' : '',
@@ -270,6 +271,10 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
         if (newConfig.LOG_INCLUDE_TIMESTAMP !== undefined) currentConfig.LOG_INCLUDE_TIMESTAMP = newConfig.LOG_INCLUDE_TIMESTAMP;
         if (newConfig.LOG_MAX_FILE_SIZE !== undefined) currentConfig.LOG_MAX_FILE_SIZE = newConfig.LOG_MAX_FILE_SIZE;
         if (newConfig.LOG_MAX_FILES !== undefined) currentConfig.LOG_MAX_FILES = newConfig.LOG_MAX_FILES;
+        if (newConfig.LOG_RETENTION_DAYS !== undefined) {
+            const v = Number(newConfig.LOG_RETENTION_DAYS);
+            if (Number.isInteger(v) && v > 0) currentConfig.LOG_RETENTION_DAYS = v;
+        }
 
         // Scheduled Health Check settings
         if (newConfig.SCHEDULED_HEALTH_CHECK !== undefined) {
@@ -378,6 +383,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 LOG_INCLUDE_TIMESTAMP: currentConfig.LOG_INCLUDE_TIMESTAMP,
                 LOG_MAX_FILE_SIZE: currentConfig.LOG_MAX_FILE_SIZE,
                 LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
+                LOG_RETENTION_DAYS: currentConfig.LOG_RETENTION_DAYS,
                 TLS_SIDECAR_ENABLED: currentConfig.TLS_SIDECAR_ENABLED,
                 TLS_SIDECAR_ENABLED_PROVIDERS: currentConfig.TLS_SIDECAR_ENABLED_PROVIDERS,
                 TLS_SIDECAR_PORT: currentConfig.TLS_SIDECAR_PORT,

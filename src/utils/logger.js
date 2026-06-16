@@ -17,7 +17,8 @@ class Logger {
             includeRequestId: true,
             includeTimestamp: true,
             maxFileSize: 10 * 1024 * 1024, // 10MB
-            maxFiles: 10
+            maxFiles: 10,
+            retentionDays: 7
         };
         this.currentLogFile = null;
         this.logStream = null;
@@ -356,13 +357,28 @@ class Logger {
                 }))
                 .sort((a, b) => b.time - a.time);
 
+            const retentionDays = Number(this.config.retentionDays);
+            if (Number.isFinite(retentionDays) && retentionDays > 0) {
+                const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+                for (const file of files) {
+                    if (file.time < cutoff) {
+                        try {
+                            fs.unlinkSync(file.path);
+                        } catch (err) {
+                            console.error('[Logger] Failed to delete expired log file:', file.name, err.message);
+                        }
+                    }
+                }
+            }
+
             // 保留最新的 maxFiles 个文件，删除其他的
-            if (files.length > this.config.maxFiles) {
-                for (let i = this.config.maxFiles; i < files.length; i++) {
+            const remainingFiles = files.filter(file => fs.existsSync(file.path));
+            if (remainingFiles.length > this.config.maxFiles) {
+                for (let i = this.config.maxFiles; i < remainingFiles.length; i++) {
                     try {
-                        fs.unlinkSync(files[i].path);
+                        fs.unlinkSync(remainingFiles[i].path);
                     } catch (err) {
-                        console.error('[Logger] Failed to delete old log file:', files[i].name, err.message);
+                        console.error('[Logger] Failed to delete old log file:', remainingFiles[i].name, err.message);
                     }
                 }
             }

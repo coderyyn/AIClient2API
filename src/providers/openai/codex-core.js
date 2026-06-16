@@ -17,6 +17,32 @@ const fastModels = baseModels.map(m => `${m}-fast`);
 const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
 const CODEX_VERSION = '0.130.0';
 export const IMAGE_MODELS = new Set(['gpt-image-2']);
+const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'input_fidelity', 'moderation'];
+const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];
+
+function applyImageToolOptions(imageToolConfig, options) {
+    if (!options || typeof options !== 'object') return;
+
+    for (const field of IMAGE_TOOL_STRING_FIELDS) {
+        const value = options[field];
+        if (value === undefined || value === null) continue;
+
+        const text = String(value).trim();
+        if (text) {
+            imageToolConfig[field] = text;
+        }
+    }
+
+    for (const field of IMAGE_TOOL_NUMERIC_FIELDS) {
+        const value = options[field];
+        if (value === undefined || value === null || value === '') continue;
+
+        const number = Number.parseInt(value, 10);
+        if (Number.isFinite(number)) {
+            imageToolConfig[field] = number;
+        }
+    }
+}
 
 /**
  * Codex API 服务类
@@ -386,16 +412,26 @@ export class CodexApiService {
         if (isImageModel) {
             // 图像模型：强制使用 image_generation 工具，不加 web_search
             const imageToolConfig = {type: 'image_generation'};
-            if (cleanedBody._imageSize) {
+            applyImageToolOptions(imageToolConfig, cleanedBody._imageToolOptions);
+            if (cleanedBody._imageSize && !imageToolConfig.size) {
                 imageToolConfig.size = cleanedBody._imageSize;
             }
+            if (cleanedBody._imageQuality && !imageToolConfig.quality) {
+                imageToolConfig.quality = cleanedBody._imageQuality;
+            }
             delete cleanedBody._imageSize;
+            delete cleanedBody._imageQuality;
+            delete cleanedBody._imageToolOptions;
             cleanedBody.tools = [imageToolConfig];
             // 服务器要求 instructions 非空
             if (!cleanedBody.instructions?.trim()) {
                 cleanedBody.instructions = 'You are a helpful assistant.';
             }
-            logger.info(`[Codex] Image model detected: ${upstreamModel} -> ${effectiveUpstreamModel} with image_generation tool${imageToolConfig.size ? `, size=${imageToolConfig.size}` : ''}`);
+            const imageToolLogDetails = Object.entries(imageToolConfig)
+                .filter(([key]) => key !== 'type')
+                .map(([key, value]) => `${key}=${value}`)
+                .join(', ');
+            logger.info(`[Codex] Image model detected: ${upstreamModel} -> ${effectiveUpstreamModel} with image_generation tool${imageToolLogDetails ? `, ${imageToolLogDetails}` : ''}`);
         } else {
             // 为普通 Codex 模型增加默认工具
             if (!cleanedBody.tools) {
