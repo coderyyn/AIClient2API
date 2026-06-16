@@ -258,6 +258,21 @@
                 </div>
                 <hr>
 
+                <div class="config-inline-heading">
+                    <span data-i18n="config.advanced.codexPotluckStickyTitle">API Potluck Codex 固定账号</span>
+                    <small data-i18n="config.advanced.codexPotluckStickyNote">开启后，同一个 API Potluck 分发 Key 的 Codex 请求会尽量走同一个健康 Codex 账号，提高 prompt cache 复用率；账号不可用时自动切换。</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="config.advanced.codexPotluckStickyEnabled">启用固定账号</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="codexPotluckStickyProviderEnabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <hr>
+
                 <div class="form-row">
                     <div class="form-group">
                         <label for="warmupTarget" data-i18n="config.advanced.warmupTarget">系统预热节点数</label>

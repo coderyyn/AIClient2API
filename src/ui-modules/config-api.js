@@ -86,6 +86,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
         RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
         RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
+        CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
         CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
         CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
         CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,
@@ -216,6 +217,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             const v = Number(newConfig.RATE_LIMIT_COOLDOWN_MAX_MS);
             if (Number.isInteger(v) && v >= 0) currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS = v;
         }
+        if (newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED !== undefined) currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = parseBooleanConfig(newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED);
         if (newConfig.CODEX_PREWARM_ENABLED !== undefined) currentConfig.CODEX_PREWARM_ENABLED = parseBooleanConfig(newConfig.CODEX_PREWARM_ENABLED);
         if (newConfig.CODEX_PREWARM_TIMES !== undefined) {
             currentConfig.CODEX_PREWARM_TIMES = Array.isArray(newConfig.CODEX_PREWARM_TIMES)
@@ -391,6 +393,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
                 RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
                 RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
+                CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
                 CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
                 CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
                 CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,

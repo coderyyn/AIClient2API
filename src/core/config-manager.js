@@ -208,6 +208,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--rate-limit-cooldown-ms', configKey: 'RATE_LIMIT_COOLDOWN_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-jitter-ms', configKey: 'RATE_LIMIT_COOLDOWN_JITTER_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-max-ms', configKey: 'RATE_LIMIT_COOLDOWN_MAX_MS', type: 'int' },
+        { flag: '--codex-potluck-sticky-provider-enabled', configKey: 'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED', type: 'bool' },
         { flag: '--codex-prewarm-enabled', configKey: 'CODEX_PREWARM_ENABLED', type: 'bool' },
         { flag: '--codex-prewarm-times', configKey: 'CODEX_PREWARM_TIMES', type: 'stringList' },
         { flag: '--codex-prewarm-attempts', configKey: 'CODEX_PREWARM_ATTEMPTS', type: 'int' },
