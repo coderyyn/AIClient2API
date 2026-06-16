@@ -1114,7 +1114,7 @@ function renderProviderConfig(provider) {
                 <div class="config-item">
                     <label>${field1Label}</label>
                     <div class="file-input-group">
-                        <input type="${field2Def.type || 'text'}"
+                        <input type="${field1Def.type || 'text'}"
                                id="edit-${provider.uuid}-${field1Key}"
                                value="${(field1Value !== undefined && field1Value !== null) ? field1Value : ''}"
                                readonly

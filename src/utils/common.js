@@ -152,6 +152,49 @@ function extractReadableErrorText(data) {
     }
 }
 
+function isDefinitiveProviderAuthFailure(error) {
+    const status = Number(getErrorStatusCode(error));
+    const responseText = extractReadableErrorText(error?.response?.data);
+    const codeText = [
+        error?.code,
+        error?.status,
+        error?.statusCode,
+        error?.response?.status
+    ].filter(value => value !== undefined && value !== null).join(' ');
+    const searchableText = [
+        error?.message,
+        responseText,
+        codeText
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    if (status === 401) {
+        return true;
+    }
+
+    if (status === 403) {
+        return [
+            'authentication_error',
+            'token_invalidated',
+            'invalid token',
+            'expired token',
+            'unauthorized',
+            'forbidden',
+            're-authenticate',
+            'signing in again'
+        ].some(marker => searchableText.includes(marker));
+    }
+
+    return [
+        'token_invalidated',
+        'authentication_error',
+        'invalid token',
+        'expired token',
+        'authentication token has been invalidated',
+        'please try signing in again',
+        're-authenticate'
+    ].some(marker => searchableText.includes(marker));
+}
+
 export async function getNormalizedErrorResponseText(error) {
     const data = error?.response?.data;
     const fallbackText = extractReadableErrorText(data) || error?.message || '';
@@ -1067,6 +1110,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             }, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
             credentialMarkedUnhealthy = true;
         }
+
+        if (isDefinitiveProviderAuthFailure(error) && providerPoolManager && pooluuid) {
+            logger.info(`[Provider Pool] Marking ${toProvider} (${pooluuid}) immediately unhealthy due to definitive stream auth failure (status: ${status || 'unknown'})`);
+            providerPoolManager.markProviderUnhealthyImmediately(toProvider, {
+                uuid: pooluuid
+            }, error.message);
+            credentialMarkedUnhealthy = true;
+        }
         
         // 如果底层未标记，且不跳过错误计数，则在此处标记
         if (!credentialMarkedUnhealthy && !skipErrorCount && providerPoolManager && pooluuid) {
@@ -1285,6 +1336,14 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             providerPoolManager.markProviderUnhealthyWithRecoveryTime(toProvider, {
                 uuid: pooluuid
             }, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+            credentialMarkedUnhealthy = true;
+        }
+
+        if (isDefinitiveProviderAuthFailure(error) && providerPoolManager && pooluuid) {
+            logger.info(`[Provider Pool] Marking ${toProvider} (${pooluuid}) immediately unhealthy due to definitive unary auth failure (status: ${status || 'unknown'})`);
+            providerPoolManager.markProviderUnhealthyImmediately(toProvider, {
+                uuid: pooluuid
+            }, error.message);
             credentialMarkedUnhealthy = true;
         }
         
