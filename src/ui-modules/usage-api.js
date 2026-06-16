@@ -385,7 +385,7 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
         
         // 如果刷新成功且有全局缓存，建议更新全局缓存（可选，这里先只返回单个结果）
         try {
-            const cache = await readUsageCache();
+            const cache = await readUsageCache({ maxAgeMs: null });
             if (cache && cache.providers && cache.providers[providerType]) {
                 const providerCache = cache.providers[providerType];
                 if (providerCache.instances && Array.isArray(providerCache.instances)) {

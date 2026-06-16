@@ -6,16 +6,43 @@ import path from 'path';
 
 // 用量缓存文件路径
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
+export const DEFAULT_USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
+
+function isUsageCacheFresh(cache, { maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS, now = new Date() } = {}) {
+    if (maxAgeMs === null || maxAgeMs === undefined) {
+        return true;
+    }
+
+    const cachedAt = Date.parse(cache?.timestamp || '');
+    if (!Number.isFinite(cachedAt)) {
+        return false;
+    }
+
+    const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+    if (!Number.isFinite(nowMs)) {
+        return false;
+    }
+
+    return nowMs - cachedAt <= maxAgeMs;
+}
 
 /**
  * 读取用量缓存文件
+ * @param {Object} [options] - 缓存读取选项
+ * @param {number|null} [options.maxAgeMs=DEFAULT_USAGE_CACHE_TTL_MS] - 最大缓存年龄；null 表示不做 TTL 判断
+ * @param {Date|string|number} [options.now] - 测试用当前时间
  * @returns {Promise<Object|null>} 缓存的用量数据，如果不存在或读取失败则返回 null
  */
-export async function readUsageCache() {
+export async function readUsageCache(options = {}) {
     try {
         if (existsSync(USAGE_CACHE_FILE)) {
             const content = await fs.readFile(USAGE_CACHE_FILE, 'utf8');
-            return JSON.parse(content);
+            const cache = JSON.parse(content);
+            if (!isUsageCacheFresh(cache, options)) {
+                logger.info('[Usage Cache] Cached usage data is stale, ignoring cache');
+                return null;
+            }
+            return cache;
         }
         return null;
     } catch (error) {
@@ -60,7 +87,7 @@ export async function readProviderUsageCache(providerType) {
  * @param {Object} usageData - 用量数据
  */
 export async function updateProviderUsageCache(providerType, usageData) {
-    let cache = await readUsageCache();
+    let cache = await readUsageCache({ maxAgeMs: null });
     if (!cache) {
         cache = {
             timestamp: new Date().toISOString(),
