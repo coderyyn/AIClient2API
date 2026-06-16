@@ -9,3 +9,5 @@ keep: stats 新增 `accounts` 与 `daily[date].models/accounts`；usage block �
 [step-6 | 2026-06-16T21:17:00+08:00] ✓ 为 API Potluck key usage summary 和 Codex sticky provider 增加失败测试
 [step-7 | 2026-06-16T21:24:00+08:00] ✓ 实现 Potluck token-first 管理视图摘要与可选 Codex sticky provider
 keep: `CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=false` 为默认；开启后仅 Codex provider 使用同 key affinity。
+[step-8 | 2026-06-16T21:45:00+08:00] ✓ 更新文档，完成集中测试和本地容器 smoke
+keep: 原始需求中的 Codex token 配额过滤、早晨预热和官方 `/usage` 字段展示留作下一批。

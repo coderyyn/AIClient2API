@@ -60,3 +60,8 @@
 ## Step 8 - PROGRESS - 2026-06-16T21:45:00+08:00
 补齐 provider weight 本地能力并提交；更新决策 HTML 和缓存命中率调查文档，明确已完成/待完成范围。
 验证：集中运行 9 个 Jest suite，共 23 个测试通过。
+
+## Step 8 - DONE - 2026-06-16T21:45:00+08:00
+产物：docs/yyn-customized-branch-plan.html、docs/yyn-codex-usage-cache-hit-investigation.md、测试镜像 aiclient2api:customized-branch-20260616、本地容器 aiclient2api-image2-test。
+关键决策：普通日志邮箱脱敏作为本地定制能力补充提交；原始需求中更改路由/窗口的能力保留到下一批，不混入观测优先批次。
+验证：集中运行 9 个 Jest suite，共 24 个测试通过；Docker 镜像构建成功；测试容器重启后 healthy；/health 返回 healthy；potluck.html 返回 200；启动日志邮箱已脱敏。
