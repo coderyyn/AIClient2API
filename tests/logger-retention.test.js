@@ -104,4 +104,21 @@ describe('log sanitization', () => {
         expect(logged).not.toContain('user@example.com');
         expect(logged).toContain('[redacted-email:');
     });
+
+    test('redacts query API keys and bearer tokens from general logger output', () => {
+        const logger = new Logger();
+        logger.initialize({
+            outputMode: 'console',
+            includeTimestamp: false,
+            includeRequestId: false
+        });
+
+        logger.info('GET /v1/models?key=0123456789abcdef0123456789abcdef Authorization=Bearer abcdef0123456789abcdef0123456789');
+
+        const logged = console.log.mock.calls[0][0];
+        expect(logged).not.toContain('0123456789abcdef0123456789abcdef');
+        expect(logged).not.toContain('abcdef0123456789abcdef0123456789');
+        expect(logged).toContain('key=[redacted:');
+        expect(logged).toContain('Bearer [redacted:');
+    });
 });

@@ -15,8 +15,8 @@ import { fetch } from 'undici';
  */
 
 // Test server configuration
-const TEST_SERVER_BASE_URL = 'http://localhost:3000';
-const TEST_API_KEY = '123456'; // You may need to adjust this based on your server config
+const TEST_SERVER_BASE_URL = process.env.TEST_SERVER_BASE_URL || 'http://localhost:3000';
+const TEST_API_KEY = process.env.TEST_API_KEY || '123456'; // You may need to adjust this based on your server config
 const MODEL_PROVIDER = {
     // Model provider constants
     GEMINI_CLI: 'gemini-cli-oauth',

@@ -8,10 +8,19 @@ function hashPreview(value) {
 }
 
 function sanitizeLogText(value) {
-    return String(value).replace(
-        /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-        (email) => `[redacted-email:${hashPreview(email.toLowerCase())}]`
-    );
+    return String(value)
+        .replace(
+            /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+            (email) => `[redacted-email:${hashPreview(email.toLowerCase())}]`
+        )
+        .replace(
+            /([?&](?:key|api[_-]?key|access_token|refresh_token|id_token|token|password|client_secret|cf_clearance|__cf_bm)=)([^&#\s]+)/gi,
+            (_match, prefix, secret) => `${prefix}[redacted:${hashPreview(secret)}]`
+        )
+        .replace(
+            /\b(Bearer\s+)([A-Za-z0-9._~+/=-]{10,})/gi,
+            (_match, prefix, secret) => `${prefix}[redacted:${hashPreview(secret)}]`
+        );
 }
 
 /**
