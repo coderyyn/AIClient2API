@@ -12,6 +12,11 @@ const PROVIDER_POSITIVE_NUMBER_CONFIG_FIELDS = [
     'providerWeight'
 ];
 
+const PROVIDER_NON_NEGATIVE_NUMBER_CONFIG_FIELDS = [
+    'codexMax5hTokens',
+    'codexMaxWeeklyTokens'
+];
+
 function normalizeStringArrayConfigValue(value) {
     if (Array.isArray(value)) {
         return value
@@ -81,6 +86,19 @@ function normalizePositiveNumberConfigValue(value, fallback = 1) {
     return parsed;
 }
 
+function normalizeNonNegativeNumberConfigValue(value, fallback = 0) {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return fallback;
+    }
+
+    return parsed;
+}
+
 /**
  * Provider edit UI renders unknown provider fields as text inputs. If root-level
  * proxy/TLS settings are stored on a provider node, arrays and booleans can
@@ -106,6 +124,12 @@ export function normalizeProviderConfigFields(data) {
     for (const key of PROVIDER_POSITIVE_NUMBER_CONFIG_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(result, key)) {
             result[key] = normalizePositiveNumberConfigValue(result[key], 1);
+        }
+    }
+
+    for (const key of PROVIDER_NON_NEGATIVE_NUMBER_CONFIG_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(result, key)) {
+            result[key] = normalizeNonNegativeNumberConfigValue(result[key], 0);
         }
     }
 

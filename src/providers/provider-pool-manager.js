@@ -5,6 +5,7 @@ import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { convertData } from '../convert/convert.js';
+import { getAccountTokenUsageSummary } from '../plugins/model-usage-stats/stats-manager.js';
 
 import {
     getConfiguredSupportedModels,
@@ -59,6 +60,48 @@ function getProviderWeight(config = {}) {
 
 function hasCustomProviderWeights(providers) {
     return providers.some(provider => getProviderWeight(provider.config) !== 1);
+}
+
+function getPositiveTokenLimit(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getCodexTokenQuotaStatus(providerType, providerStatus) {
+    const config = providerStatus?.config || {};
+    const max5hTokens = getPositiveTokenLimit(config.codexMax5hTokens);
+    const maxWeeklyTokens = getPositiveTokenLimit(config.codexMaxWeeklyTokens);
+    if (!max5hTokens && !maxWeeklyTokens) {
+        return { limited: false, exceeded: false };
+    }
+
+    const uuid = config.uuid || providerStatus?.uuid;
+    if (!uuid) {
+        return { limited: true, exceeded: false, reason: null };
+    }
+
+    try {
+        const usage = getAccountTokenUsageSummary(providerType, uuid);
+        if (max5hTokens && usage.rolling5hTokens >= max5hTokens) {
+            return {
+                limited: true,
+                exceeded: true,
+                reason: `5h token quota reached (${usage.rolling5hTokens}/${max5hTokens})`,
+                usage
+            };
+        }
+        if (maxWeeklyTokens && usage.weeklyTokens >= maxWeeklyTokens) {
+            return {
+                limited: true,
+                exceeded: true,
+                reason: `weekly token quota reached (${usage.weeklyTokens}/${maxWeeklyTokens})`,
+                usage
+            };
+        }
+        return { limited: true, exceeded: false, usage };
+    } catch (error) {
+        return { limited: true, exceeded: false, reason: `quota stats unavailable: ${error.message}` };
+    }
 }
 
 /**
@@ -1080,6 +1123,10 @@ export class ProviderPoolManager {
             return null;
         }
 
+        if (isCodexProviderType(providerType)) {
+            availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders);
+        }
+
         let selected;
         if (options.stickyProviderKey && isCodexProviderType(providerType)) {
             const affinityCandidates = [...availableAndHealthyProviders].sort((a, b) => {
@@ -1140,6 +1187,38 @@ export class ProviderPoolManager {
         this._log('debug', `Selected provider for ${providerType} (LRU): ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}${options.skipUsageCount ? ' (skip usage count)' : ''}`);
         
         return selected.config;
+    }
+
+    _filterCodexProvidersByTokenQuota(providerType, providers) {
+        let limitedCount = 0;
+        const allowed = [];
+
+        for (const provider of providers) {
+            const quotaStatus = getCodexTokenQuotaStatus(providerType, provider);
+            if (!quotaStatus.limited) {
+                allowed.push(provider);
+                continue;
+            }
+
+            limitedCount += 1;
+            if (quotaStatus.exceeded) {
+                this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
+                continue;
+            }
+            if (quotaStatus.reason) {
+                this._log('warn', `Codex quota check for ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
+            }
+            allowed.push(provider);
+        }
+
+        if (allowed.length === 0 && providers.length > 0 && limitedCount > 0) {
+            const error = new Error('All Codex providers exceeded configured token quotas');
+            error.status = 429;
+            error.code = 429;
+            throw error;
+        }
+
+        return allowed;
     }
 
     /**

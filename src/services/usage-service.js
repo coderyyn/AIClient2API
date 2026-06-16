@@ -651,6 +651,149 @@ export function formatGrokCliUsage(usageData) {
     };
 }
 
+function numberOrNull(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstNumber(...values) {
+    for (const value of values) {
+        const parsed = numberOrNull(value);
+        if (parsed !== null) return parsed;
+    }
+    return 0;
+}
+
+function getNestedValue(source, pathParts) {
+    let current = source;
+    for (const part of pathParts) {
+        if (!current || typeof current !== 'object') return null;
+        current = current[part];
+    }
+    return current || null;
+}
+
+function normalizeCodexTokenBlock(block) {
+    if (!block || typeof block !== 'object') return null;
+
+    const inputTokens = firstNumber(
+        block.input_tokens,
+        block.inputTokens,
+        block.prompt_tokens,
+        block.promptTokens
+    );
+    const outputTokens = firstNumber(
+        block.output_tokens,
+        block.outputTokens,
+        block.completion_tokens,
+        block.completionTokens
+    );
+    const cachedTokens = firstNumber(
+        block.cached_input_tokens,
+        block.cachedInputTokens,
+        block.cached_tokens,
+        block.cachedTokens,
+        block.prompt_tokens_details?.cached_tokens,
+        block.input_tokens_details?.cached_tokens
+    );
+    const totalTokens = firstNumber(
+        block.total_tokens,
+        block.totalTokens,
+        block.tokens,
+        block.total,
+        inputTokens + outputTokens
+    );
+    const limitTokens = numberOrNull(
+        block.limit_tokens ??
+        block.limitTokens ??
+        block.token_limit ??
+        block.tokenLimit ??
+        block.limit
+    );
+    const remainingTokens = numberOrNull(
+        block.remaining_tokens ??
+        block.remainingTokens ??
+        block.remaining
+    );
+
+    if (inputTokens === 0 && outputTokens === 0 && cachedTokens === 0 && totalTokens === 0 && limitTokens === null && remainingTokens === null) {
+        return null;
+    }
+
+    return {
+        inputTokens,
+        outputTokens,
+        cachedTokens,
+        totalTokens,
+        limitTokens,
+        remainingTokens,
+        resetAt: formatTimestamp(block.reset_at ?? block.resetAt ?? block.next_reset_at ?? block.nextResetAt)
+    };
+}
+
+function findCodexTokenBlock(usageData, scope) {
+    const aliases = {
+        daily: ['daily', 'day', 'today'],
+        weekly: ['weekly', 'week'],
+        total: ['total', 'cumulative', 'lifetime', 'all']
+    }[scope] || [scope];
+
+    const roots = [
+        ['token_usage'],
+        ['tokenUsage'],
+        ['tokens'],
+        ['usage'],
+        ['data'],
+        []
+    ];
+
+    for (const root of roots) {
+        for (const alias of aliases) {
+            const candidates = [
+                [...root, alias],
+                [...root, `${alias}_usage`],
+                [...root, `${alias}Usage`],
+                [...root, `${alias}_tokens`],
+                [...root, `${alias}Tokens`]
+            ];
+
+            for (const pathParts of candidates) {
+                const normalized = normalizeCodexTokenBlock(getNestedValue(usageData, pathParts));
+                if (normalized) return normalized;
+            }
+        }
+    }
+
+    return null;
+}
+
+function extractCodexTokenUsage(usageData) {
+    const daily = findCodexTokenBlock(usageData, 'daily');
+    const weekly = findCodexTokenBlock(usageData, 'weekly');
+    const total = findCodexTokenBlock(usageData, 'total');
+    if (!daily && !weekly && !total) return null;
+    return { daily, weekly, total };
+}
+
+function buildCodexTokenUsageItem(id, label, block) {
+    if (!block) return null;
+    const limit = block.limitTokens ?? null;
+    const percent = limit && limit > 0 ? Math.min(100, (block.totalTokens / limit) * 100) : 0;
+    return {
+        id,
+        label,
+        used: block.totalTokens,
+        limit,
+        percent,
+        unit: 'tokens',
+        status: getStatus(percent),
+        resetAt: block.resetAt,
+        cachedTokens: block.cachedTokens,
+        inputTokens: block.inputTokens,
+        outputTokens: block.outputTokens
+    };
+}
+
 /**
  * 格式化 Codex 用量
  */
@@ -707,6 +850,14 @@ export function formatCodexUsage(usageData) {
     }
 
     const plan = usageData.plan_type || usageData.planType || 'FREE';
+    const tokenUsage = extractCodexTokenUsage(usageData);
+    if (tokenUsage) {
+        [
+            buildCodexTokenUsageItem('daily_token_usage', 'Daily Tokens', tokenUsage.daily),
+            buildCodexTokenUsageItem('weekly_token_usage', 'Weekly Tokens', tokenUsage.weekly),
+            buildCodexTokenUsageItem('total_token_usage', 'Total Tokens', tokenUsage.total)
+        ].filter(Boolean).forEach(item => items.push(item));
+    }
 
     return {
         summary: {
@@ -715,7 +866,8 @@ export function formatCodexUsage(usageData) {
             resetAt: formatTimestamp(worstResetAtTimestamp),
             plan,
             planClass: getPlanClass(plan),
-            unit: 'percent'
+            unit: 'percent',
+            tokenUsage
         },
         user: { 
             email: usageData.account || null

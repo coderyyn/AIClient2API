@@ -211,6 +211,8 @@ function getFieldLabel(key) {
         'concurrencyLimit': t('modal.provider.concurrencyLimit') + ' ' + t('config.optional'),
         'queueLimit': t('modal.provider.queueLimit') + ' ' + t('config.optional'),
         'providerWeight': (t('modal.provider.providerWeight') || '节点权重') + ' ' + t('config.optional'),
+        'codexMax5hTokens': t('modal.provider.codexMax5hTokens') + ' ' + t('config.optional'),
+        'codexMaxWeeklyTokens': t('modal.provider.codexMaxWeeklyTokens') + ' ' + t('config.optional'),
         'OPENAI_API_KEY': 'OpenAI API Key',
         'OPENAI_BASE_URL': 'OpenAI Base URL',
         'CLAUDE_API_KEY': 'Claude API Key',
@@ -437,6 +439,18 @@ function getProviderTypeFields(providerType) {
                 label: `${t('modal.provider.field.codexBaseUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'text',
                 placeholder: 'https://api.openai.com/v1/codex'
+            },
+            {
+                id: 'codexMax5hTokens',
+                label: `${t('modal.provider.codexMax5hTokens')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: '0 = 不限制'
+            },
+            {
+                id: 'codexMaxWeeklyTokens',
+                label: `${t('modal.provider.codexMaxWeeklyTokens')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: '0 = 不限制'
             }
         ],
         'grok-cli-oauth': [

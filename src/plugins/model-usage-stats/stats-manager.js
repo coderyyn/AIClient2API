@@ -10,6 +10,8 @@ const STATS_STORE_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.
 const DEFAULT_CONFIG = {
     persistInterval: 5000
 };
+const ACCOUNT_EVENT_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
+const ROLLING_5H_MS = 5 * 60 * 60 * 1000;
 
 let configGetter = null;
 let statsStore = null;
@@ -51,6 +53,7 @@ function createDefaultStore() {
         summary: createEmptyUsage(),
         providers: {},
         accounts: {},
+        accountUsageEvents: {},
         daily: {} // 新增每日统计
     };
 }
@@ -95,6 +98,7 @@ function normalizeStore(store) {
         summary: normalizeUsageBlock(store?.summary),
         providers: {},
         accounts: {},
+        accountUsageEvents: {},
         daily: {} // 新增每日统计
     };
 
@@ -122,6 +126,16 @@ function normalizeStore(store) {
         for (const [model, modelStore] of Object.entries(accountStore?.models || {})) {
             normalizedStore.accounts[accountKey].models[model] = normalizeUsageBlock(modelStore);
         }
+    }
+
+    for (const [accountKey, events] of Object.entries(store?.accountUsageEvents || {})) {
+        if (!Array.isArray(events)) continue;
+        normalizedStore.accountUsageEvents[accountKey] = events
+            .map(event => ({
+                timestamp: event?.timestamp || null,
+                totalTokens: toNumber(event?.totalTokens)
+            }))
+            .filter(event => event.timestamp && event.totalTokens > 0);
     }
 
     if (store?.daily) {
@@ -521,6 +535,56 @@ function resetUsageBlockTokens(block) {
     block.maxTps = 0;
 }
 
+function getBeijingDateStringFromDate(date) {
+    const source = date instanceof Date ? date : new Date(date);
+    const utc8Time = new Date(source.getTime() + (8 * 60 * 60 * 1000));
+    return utc8Time.toISOString().split('T')[0];
+}
+
+function getCurrentBeijingWeekDateKeys(now = new Date()) {
+    const utc8Time = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    const year = utc8Time.getUTCFullYear();
+    const month = utc8Time.getUTCMonth();
+    const day = utc8Time.getUTCDate();
+    const dayOfWeek = utc8Time.getUTCDay();
+    const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const mondayMs = Date.UTC(year, month, day) - daysSinceMonday * 24 * 60 * 60 * 1000;
+    const keys = new Set();
+    for (let offset = 0; offset < 7; offset++) {
+        keys.add(new Date(mondayMs + offset * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+    }
+    return keys;
+}
+
+function cleanupAccountUsageEvents(nowMs = Date.now()) {
+    if (!statsStore?.accountUsageEvents) return;
+    const cutoff = nowMs - ACCOUNT_EVENT_RETENTION_MS;
+    for (const [accountKey, events] of Object.entries(statsStore.accountUsageEvents)) {
+        const retained = Array.isArray(events)
+            ? events.filter(event => Date.parse(event.timestamp) >= cutoff)
+            : [];
+        if (retained.length > 0) {
+            statsStore.accountUsageEvents[accountKey] = retained;
+        } else {
+            delete statsStore.accountUsageEvents[accountKey];
+        }
+    }
+}
+
+function recordAccountUsageEvent(provider, providerUuid, usage, timestamp) {
+    const accountKey = getAccountKey(provider, providerUuid);
+    if (!accountKey) return;
+    statsStore.accountUsageEvents = statsStore.accountUsageEvents || {};
+    if (!statsStore.accountUsageEvents[accountKey]) {
+        statsStore.accountUsageEvents[accountKey] = [];
+    }
+    statsStore.accountUsageEvents[accountKey].push({
+        timestamp,
+        totalTokens: usage.totalTokens || (usage.promptTokens + usage.completionTokens)
+    });
+    cleanupAccountUsageEvents(Date.parse(timestamp));
+}
+
 function addCacheHitRatio(block) {
     if (!block || typeof block !== 'object') return;
     const promptTokens = toNumber(block.promptTokens);
@@ -634,6 +698,7 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     if (accountStore) {
         applyUsage(accountStore.summary, usage, timestamp);
         applyUsage(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel), usage, timestamp);
+        recordAccountUsageEvent(normalizedProvider, normalizedProviderUuid, usage, timestamp);
     }
 
     // 记录速率统计
@@ -727,6 +792,42 @@ export async function getStats() {
     addDerivedUsageMetricsToTree(stats);
 
     return stats;
+}
+
+export function getAccountTokenUsageSummary(provider, providerUuid, options = {}) {
+    ensureLoaded();
+    const accountKey = getAccountKey(provider, providerUuid);
+    const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+    const nowMs = now.getTime();
+    const rollingWindowMs = toNumber(options.rollingWindowMs) || ROLLING_5H_MS;
+    const rollingCutoff = nowMs - rollingWindowMs;
+    const weekDateKeys = getCurrentBeijingWeekDateKeys(now);
+    const events = accountKey ? (statsStore.accountUsageEvents?.[accountKey] || []) : [];
+
+    let rolling5hTokens = 0;
+    let weeklyTokens = 0;
+    let totalTokens = 0;
+
+    for (const event of events) {
+        const eventMs = Date.parse(event.timestamp);
+        if (!Number.isFinite(eventMs)) continue;
+        const total = toNumber(event.totalTokens);
+        totalTokens += total;
+        if (eventMs >= rollingCutoff && eventMs <= nowMs) {
+            rolling5hTokens += total;
+        }
+        if (weekDateKeys.has(getBeijingDateStringFromDate(new Date(eventMs)))) {
+            weeklyTokens += total;
+        }
+    }
+
+    return {
+        accountKey,
+        rolling5hTokens,
+        weeklyTokens,
+        totalTokens,
+        eventCount: events.length
+    };
 }
 
 export async function resetStats() {

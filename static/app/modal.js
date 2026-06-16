@@ -138,6 +138,8 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
             value = parseInt(value || '0', 10);
         } else if (key === 'providerWeight') {
             value = Number(value || '1');
+        } else if (key === 'codexMax5hTokens' || key === 'codexMaxWeeklyTokens') {
+            value = Number(value || '0');
         }
         providerConfig[key] = value;
     });
@@ -1026,13 +1028,14 @@ function renderProviderConfig(provider) {
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
         const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : '')))));
+        const inputType = fieldDef.type || (fieldKey === 'providerWeight' ? 'number' : 'text');
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
             html += `
                 <div class="config-item">
                     <label>${displayLabel}</label>
-                    <input type="${fieldKey === 'providerWeight' ? 'number' : 'text'}"
+                    <input type="${inputType}"
                            value="${displayValue}"
                            readonly
                            data-config-key="${fieldKey}"
@@ -1061,7 +1064,7 @@ function renderProviderConfig(provider) {
             html += `
                 <div class="config-item">
                     <label>${displayLabel}</label>
-                    <input type="text"
+                    <input type="${inputType}"
                            value="${displayValue}"
                            readonly
                            data-config-key="${fieldKey}"
@@ -1111,7 +1114,7 @@ function renderProviderConfig(provider) {
                 <div class="config-item">
                     <label>${field1Label}</label>
                     <div class="file-input-group">
-                        <input type="text"
+                        <input type="${field2Def.type || 'text'}"
                                id="edit-${provider.uuid}-${field1Key}"
                                value="${(field1Value !== undefined && field1Value !== null) ? field1Value : ''}"
                                readonly
@@ -1129,7 +1132,7 @@ function renderProviderConfig(provider) {
             html += `
                 <div class="config-item">
                     <label>${field1Label}</label>
-                    <input type="text"
+                    <input type="${field1Def.type || 'text'}"
                            value="${field1DisplayValue}"
                            readonly
                            data-config-key="${field1Key}"
@@ -1844,7 +1847,11 @@ async function addProvider(providerType) {
     allFields.forEach(field => {
         const element = document.getElementById(`new${field.id}`);
         if (element) {
-            providerConfig[field.id] = element.value || '';
+            if (field.id === 'codexMax5hTokens' || field.id === 'codexMaxWeeklyTokens') {
+                providerConfig[field.id] = Number(element.value || '0');
+            } else {
+                providerConfig[field.id] = element.value || '';
+            }
         }
     });
     

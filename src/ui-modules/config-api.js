@@ -86,6 +86,14 @@ export async function handleGetConfig(req, res, currentConfig) {
         RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
         RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
         RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
+        CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
+        CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
+        CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,
+        CODEX_PREWARM_TIMEZONE: currentConfig.CODEX_PREWARM_TIMEZONE,
+        CODEX_PREWARM_DUE_WINDOW_MS: currentConfig.CODEX_PREWARM_DUE_WINDOW_MS,
+        CODEX_PREWARM_POLL_INTERVAL_MS: currentConfig.CODEX_PREWARM_POLL_INTERVAL_MS,
+        CODEX_PREWARM_STATE_FILE: currentConfig.CODEX_PREWARM_STATE_FILE,
+        CODEX_PREWARM_MODEL: currentConfig.CODEX_PREWARM_MODEL,
         CRON_NEAR_MINUTES: currentConfig.CRON_NEAR_MINUTES,
         CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
         LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
@@ -208,6 +216,27 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             const v = Number(newConfig.RATE_LIMIT_COOLDOWN_MAX_MS);
             if (Number.isInteger(v) && v >= 0) currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS = v;
         }
+        if (newConfig.CODEX_PREWARM_ENABLED !== undefined) currentConfig.CODEX_PREWARM_ENABLED = parseBooleanConfig(newConfig.CODEX_PREWARM_ENABLED);
+        if (newConfig.CODEX_PREWARM_TIMES !== undefined) {
+            currentConfig.CODEX_PREWARM_TIMES = Array.isArray(newConfig.CODEX_PREWARM_TIMES)
+                ? newConfig.CODEX_PREWARM_TIMES.map(item => String(item).trim()).filter(Boolean)
+                : String(newConfig.CODEX_PREWARM_TIMES).split(',').map(item => item.trim()).filter(Boolean);
+        }
+        if (newConfig.CODEX_PREWARM_ATTEMPTS !== undefined) {
+            const v = Number(newConfig.CODEX_PREWARM_ATTEMPTS);
+            if (Number.isInteger(v) && v > 0) currentConfig.CODEX_PREWARM_ATTEMPTS = v;
+        }
+        if (newConfig.CODEX_PREWARM_TIMEZONE !== undefined) currentConfig.CODEX_PREWARM_TIMEZONE = newConfig.CODEX_PREWARM_TIMEZONE;
+        if (newConfig.CODEX_PREWARM_DUE_WINDOW_MS !== undefined) {
+            const v = Number(newConfig.CODEX_PREWARM_DUE_WINDOW_MS);
+            if (Number.isInteger(v) && v > 0) currentConfig.CODEX_PREWARM_DUE_WINDOW_MS = v;
+        }
+        if (newConfig.CODEX_PREWARM_POLL_INTERVAL_MS !== undefined) {
+            const v = Number(newConfig.CODEX_PREWARM_POLL_INTERVAL_MS);
+            if (Number.isInteger(v) && v > 0) currentConfig.CODEX_PREWARM_POLL_INTERVAL_MS = v;
+        }
+        if (newConfig.CODEX_PREWARM_STATE_FILE !== undefined) currentConfig.CODEX_PREWARM_STATE_FILE = newConfig.CODEX_PREWARM_STATE_FILE;
+        if (newConfig.CODEX_PREWARM_MODEL !== undefined) currentConfig.CODEX_PREWARM_MODEL = newConfig.CODEX_PREWARM_MODEL;
         if (newConfig.CRON_NEAR_MINUTES !== undefined) currentConfig.CRON_NEAR_MINUTES = newConfig.CRON_NEAR_MINUTES;
         if (newConfig.CRON_REFRESH_TOKEN !== undefined) currentConfig.CRON_REFRESH_TOKEN = newConfig.CRON_REFRESH_TOKEN;
         if (newConfig.LOGIN_EXPIRY !== undefined) currentConfig.LOGIN_EXPIRY = newConfig.LOGIN_EXPIRY;
@@ -362,6 +391,14 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
                 RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
                 RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
+                CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
+                CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
+                CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,
+                CODEX_PREWARM_TIMEZONE: currentConfig.CODEX_PREWARM_TIMEZONE,
+                CODEX_PREWARM_DUE_WINDOW_MS: currentConfig.CODEX_PREWARM_DUE_WINDOW_MS,
+                CODEX_PREWARM_POLL_INTERVAL_MS: currentConfig.CODEX_PREWARM_POLL_INTERVAL_MS,
+                CODEX_PREWARM_STATE_FILE: currentConfig.CODEX_PREWARM_STATE_FILE,
+                CODEX_PREWARM_MODEL: currentConfig.CODEX_PREWARM_MODEL,
                 CRON_NEAR_MINUTES: currentConfig.CRON_NEAR_MINUTES,
                 CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
                 LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,

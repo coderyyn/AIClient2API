@@ -1,6 +1,6 @@
 # Codex Usage Cache and Cache Hit Investigation
 
-更新时间：2026-06-16 19:30 +08:00
+更新时间：2026-06-16 23:25 +08:00
 
 ## 目标
 
@@ -245,20 +245,24 @@ Provider pool 状态：
 
 ## 定制分支落地状态
 
-时间：2026-06-16 21:45 +08:00
+时间：2026-06-16 23:25 +08:00
 
 已完成：
 
 - 官方 usage cache 默认 1 小时 TTL；`refresh=true` 继续绕过缓存。
 - `model-usage-stats` 新增 Codex 账号/provider UUID、模型、日期维度，并返回 `cacheHitRatio`。
+- `model-usage-stats` 新增账号 token 事件窗口，可用于 Codex rolling 5h token 和本周 token 统计。
 - 文本请求与图片请求的插件 hook 已透传实际 provider uuid/name；图片接口 hook 顺序改为先记录 response usage 再 finalize。
 - API Potluck 管理端 key 列表新增今日/本周/累计 token、cache hit ratio、最近 7 天每日 token，并默认按今日 Token 排序。
 - 可选 Codex sticky provider affinity 已实现，默认关闭；开启后同一个 API Potluck key 的 Codex 请求固定到同一个健康账号，账号不可用时自动 fallback。
 - provider weight 已作为本地定制能力实现，默认权重 1。
+- Codex provider 新增 `codexMax5hTokens` 与 `codexMaxWeeklyTokens`，只按 token 过滤，所有可选 Codex 账号超额时返回 429。
+- Codex prewarm 服务已实现，默认 `06:30` 与 `11:30 Asia/Shanghai`，覆盖所有启用的 Codex 账号，每账号每窗口触发 2 次轻量请求，并按账号/日期/时间点去重。
+- 官方 Codex `/usage` 格式化层已兼容 daily/weekly/total token 字段，并保留 1 小时缓存与手动刷新绕过。
+- `model-usage-stats.html` 新增低 cache hit ratio 提醒，默认标出低于 30% 的 Codex 账号。
 
-仍待下一批：
+仍需验证/观察：
 
-- 官方 Codex `/usage` 字段探测与账号 daily/weekly/total 展示。
-- Codex 5h/周 token 配额过滤。
-- 早晨提前触发 5h 窗口预热。
-- 低 cache hit ratio 告警 UI 和诊断入口。
+- 官方 `/usage` 实际字段可能随上游调整；当前解析是防御式兼容，仍需用启用账号的真实响应做只读 smoke。
+- 低命中提醒先做观测，不自动按 cache hit ratio 改路由；需要积累 1-2 天样本后再决定是否做策略化调度。
+- prewarm 会真实消耗少量请求/token，当前默认按用户要求启用；若远端验证成本过高，可通过 `CODEX_PREWARM_ENABLED=false` 关闭。

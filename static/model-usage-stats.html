@@ -881,6 +881,12 @@
       <div class="panel"><h2 class="section-title" style="font-size: 16px;"><i class="fas fa-sitemap"></i>Provider 分布</h2><div class="bars" id="providerBars"></div></div>
       <div class="panel"><h2 class="section-title" style="font-size: 16px;"><i class="fas fa-fire"></i>Top Models</h2><div class="bars" id="topModelBars"></div></div>
     </section>
+    <section class="panel" id="cacheWarningPanel" style="display:none">
+      <div class="tools">
+        <h2 class="section-title" style="margin:0"><i class="fas fa-triangle-exclamation"></i>Codex 缓存命中率提醒</h2>
+      </div>
+      <div class="providers" id="cacheWarningList"></div>
+    </section>
     <div id="usageTooltip" class="calendar-tooltip"></div>
     <section>
       <div class="tools">
@@ -953,6 +959,16 @@
         }
         return fmt(value)
       };
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[ch]))
+    }
 
     function rel(iso) {
       if (!iso) return '未记录';
@@ -1104,6 +1120,53 @@
       })
     }
 
+    function renderCacheWarnings(data) {
+      const panel = el('cacheWarningPanel');
+      const list = el('cacheWarningList');
+      if (!panel || !list) return;
+
+      const accounts = Object.values(data.accounts || {})
+        .filter(account => account.provider === 'openai-codex-oauth' || String(account.provider || '').startsWith('openai-codex-oauth-'))
+        .map(account => {
+          const s = account.summary || {};
+          const promptTokens = Number(s.promptTokens || 0);
+          const cachedTokens = Number(s.cachedTokens || 0);
+          const ratio = promptTokens > 0 ? cachedTokens / promptTokens : 0;
+          return { account, summary: s, ratio, promptTokens, cachedTokens };
+        })
+        .filter(item => item.promptTokens > 0 && item.ratio < 0.3)
+        .sort((a, b) => a.ratio - b.ratio);
+
+      if (!accounts.length) {
+        panel.style.display = 'none';
+        list.innerHTML = '';
+        return;
+      }
+
+      panel.style.display = '';
+      list.innerHTML = '';
+      accounts.forEach(item => {
+        const name = item.account.providerName || item.account.providerUuid || 'unknown';
+        const node = document.createElement('article');
+        node.className = 'provider';
+        node.innerHTML = `
+          <div class="provider-head">
+            <div>
+              <div class="provider-name">${escapeHtml(name)}</div>
+              <div class="provider-sub">缓存命中率 ${(item.ratio * 100).toFixed(1)}%，低于 30% 阈值</div>
+            </div>
+            <span class="provider-badge"><i class="fas fa-database"></i>${fmtToken(item.cachedTokens)} Cached</span>
+          </div>
+          <div class="mini">
+            <div class="mini-box"><div class="mini-label">输入 Token</div><div class="mini-value">${fmtToken(item.promptTokens)}</div></div>
+            <div class="mini-box"><div class="mini-label">缓存 Token</div><div class="mini-value">${fmtToken(item.cachedTokens)}</div></div>
+            <div class="mini-box"><div class="mini-label">总 Token</div><div class="mini-value">${fmtToken(item.summary.totalTokens)}</div></div>
+            <div class="mini-box"><div class="mini-label">最近使用</div><div class="mini-value" style="font-size:14px">${rel(item.summary.lastUsedAt)}</div></div>
+          </div>`;
+        list.appendChild(node)
+      })
+    }
+
     function filteredRows() {
       const keyword = el('searchInput').value.trim().toLowerCase();
       const [field, dir] = el('sortSelect').value.split('-');
@@ -1226,6 +1289,7 @@
       bars('providerBars', providers, i => i.totalTokens, i => i.name);
       bars('topModelBars', topModels, i => i.totalTokens, i => i.isOther ? i.name : `${i.provider} / ${i.model}`);
       renderProviders(data);
+      renderCacheWarnings(data);
       renderTable();
       renderCalendar(data.daily || {});
     }

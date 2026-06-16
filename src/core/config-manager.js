@@ -132,6 +132,14 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         RATE_LIMIT_COOLDOWN_JITTER_MS: 5000, // 429 限流冷却随机抖动（毫秒）
         RATE_LIMIT_COOLDOWN_MAX_MS: 300000, // Retry-After 允许的最大冷却时间（毫秒）
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
+        CODEX_PREWARM_ENABLED: true, // 是否按固定时间对所有启用的 Codex 账号做轻量预热请求
+        CODEX_PREWARM_TIMES: ['06:30', '11:30'], // Asia/Shanghai 每日预热时间
+        CODEX_PREWARM_ATTEMPTS: 2, // 每个账号在每个预热时间点触发次数
+        CODEX_PREWARM_TIMEZONE: 'Asia/Shanghai',
+        CODEX_PREWARM_DUE_WINDOW_MS: 600000,
+        CODEX_PREWARM_POLL_INTERVAL_MS: 60000,
+        CODEX_PREWARM_STATE_FILE: 'configs/codex-prewarm-state.json',
+        CODEX_PREWARM_MODEL: 'gpt-5-codex-mini',
         CRON_NEAR_MINUTES: 15,
         CRON_REFRESH_TOKEN: false,
         LOGIN_EXPIRY: 3600, // 登录过期时间（秒），默认1小时
@@ -200,6 +208,14 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--rate-limit-cooldown-ms', configKey: 'RATE_LIMIT_COOLDOWN_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-jitter-ms', configKey: 'RATE_LIMIT_COOLDOWN_JITTER_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-max-ms', configKey: 'RATE_LIMIT_COOLDOWN_MAX_MS', type: 'int' },
+        { flag: '--codex-prewarm-enabled', configKey: 'CODEX_PREWARM_ENABLED', type: 'bool' },
+        { flag: '--codex-prewarm-times', configKey: 'CODEX_PREWARM_TIMES', type: 'stringList' },
+        { flag: '--codex-prewarm-attempts', configKey: 'CODEX_PREWARM_ATTEMPTS', type: 'int' },
+        { flag: '--codex-prewarm-timezone', configKey: 'CODEX_PREWARM_TIMEZONE', type: 'string' },
+        { flag: '--codex-prewarm-due-window-ms', configKey: 'CODEX_PREWARM_DUE_WINDOW_MS', type: 'int' },
+        { flag: '--codex-prewarm-poll-interval-ms', configKey: 'CODEX_PREWARM_POLL_INTERVAL_MS', type: 'int' },
+        { flag: '--codex-prewarm-state-file', configKey: 'CODEX_PREWARM_STATE_FILE', type: 'string' },
+        { flag: '--codex-prewarm-model', configKey: 'CODEX_PREWARM_MODEL', type: 'string' },
         { flag: '--cron-near-minutes',    configKey: 'CRON_NEAR_MINUTES',      type: 'int' },
         { flag: '--cron-refresh-token',   configKey: 'CRON_REFRESH_TOKEN',     type: 'bool' },
         { flag: '--provider-pools-file',  configKey: 'PROVIDER_POOLS_FILE_PATH', type: 'string' },

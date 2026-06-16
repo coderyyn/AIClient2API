@@ -480,7 +480,7 @@
     <main>
       <section id="decisions">
         <h2>决策闭环</h2>
-        <p class="lead">用户已确认关键策略，当前没有必须阻塞实现的产品决策。已先完成观测和低风险路由辅助能力；token 配额过滤、早晨预热和官方 /usage 字段接入仍是下一批实现。</p>
+        <p class="lead">用户已确认关键策略，当前没有必须阻塞实现的产品决策。本轮已补齐 Codex token 配额过滤、定时预热、官方 /usage token 字段解析和低命中提醒，后续重点是跑测试、重建本地容器并保持定制分支可持续合并上游。</p>
         <div class="status-row">
           <div class="status">
             <strong>分支策略</strong>
@@ -510,7 +510,7 @@
           </li>
           <li>
             <strong><span class="badge green">已定</span> 早晨预热覆盖所有启用 Codex 账号</strong>
-            默认按 <code>06:00 Asia/Shanghai</code> 执行；如后续要改时间，只改配置，不改业务代码。
+            默认按 <code>06:30</code> 与 <code>11:30 Asia/Shanghai</code> 执行；每个启用 Codex 账号每个时间点触发 <code>2</code> 次轻量请求。启用口径只排除显式禁用账号，不因当前 unhealthy 跳过。
           </li>
           <li>
             <strong><span class="badge green">已定</span> 定制分支不只做 usage 相关能力</strong>
@@ -531,8 +531,8 @@
             <p><span class="badge blue">Observe first</span> sticky provider 已实现但默认关闭：<code>CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=false</code>。开启后仅 API Potluck key 的 Codex 请求按 key 固定到健康账号，账号不可用时自动 fallback。</p>
           </div>
           <div class="panel">
-            <h3>仍待实现</h3>
-            <p><span class="badge amber">Next</span> Codex 5h/周 token 配额过滤、早晨提前触发 5h 窗口、官方 Codex <code>/usage</code> 字段探测与用量页账号展示、低命中告警 UI。</p>
+            <h3>本轮新增</h3>
+            <p><span class="badge blue">Pending commit</span> Codex 5h/周 token 配额过滤、<code>06:30</code>/<code>11:30</code> 定时预热、官方 Codex <code>/usage</code> token 字段解析、低 cache hit ratio 告警 UI。</p>
           </div>
         </div>
       </section>
@@ -654,13 +654,13 @@
           </div>
           <div class="panel">
             <h3>早晨 5h 窗口预热</h3>
-            <p>新增 Codex prewarm 服务，每天按配置时间遍历所有启用 Codex 账号，做低成本请求或确认可触发窗口的请求。按账号记录当日是否已预热，避免重复触发。</p>
-            <p><span class="badge amber">默认</span> <code>06:00 Asia/Shanghai</code>。</p>
+            <p>新增 Codex prewarm 服务，每天按配置时间遍历所有启用 Codex 账号，做低成本请求以提前触发 5h 窗口。按账号、日期、时间点记录执行状态，避免服务重启后重复触发同一窗口。</p>
+            <p><span class="badge green">默认</span> <code>06:30</code> 与 <code>11:30 Asia/Shanghai</code>，每账号每窗口 <code>2</code> 次。</p>
           </div>
           <div class="panel">
             <h3>官方 Codex /usage 接入</h3>
-            <p>复用 <code>CodexApiService</code> 的鉴权信息，只做只读 usage 探测。字段确认后展示 daily/weekly/total；接口不可用时降级显示本地统计。</p>
-            <p><span class="badge green">已完成基础</span> 官方 usage 查询默认缓存 <code>1h</code>；现有用量页刷新按钮和 <code>refresh=true</code> 可绕过缓存。官方字段解析和账号展示仍待下一步接入。</p>
+            <p>复用 <code>CodexApiService</code> 的鉴权信息，只做只读 usage 查询。格式化层已兼容多种 daily/weekly/total token 字段形态；接口不可用或字段变化时保留原 rate limit 百分比展示。</p>
+            <p><span class="badge green">已完成</span> 官方 usage 查询默认缓存 <code>1h</code>；现有用量页刷新按钮和 <code>refresh=true</code> 可绕过缓存。</p>
           </div>
           <div class="panel">
             <h3>API Potluck key 用量视图</h3>
@@ -785,8 +785,8 @@
               <tr>
                 <td>Codex usage 与账号统计</td>
                 <td><code>src/plugins/model-usage-stats/stats-manager.js</code><br><code>src/plugins/model-usage-stats/api-routes.js</code><br><code>src/utils/common.js</code><br><code>src/services/api-manager.js</code><br><code>src/providers/openai/codex-core.js</code></td>
-                <td><code>static/app/usage-manager.js</code><br><code>static/components/section-usage.html</code></td>
-                <td>新增 Codex usage、账号+模型+日期维度统计、cache hit ratio、官方 usage 1 小时 TTL 与强制刷新测试</td>
+                <td><code>static/app/usage-manager.js</code><br><code>static/model-usage-stats.html</code><br><code>static/components/section-usage.html</code></td>
+                <td>已新增 Codex usage、账号+模型+日期维度统计、cache hit ratio、官方 usage 1 小时 TTL、强制刷新和 token 字段格式化测试</td>
               </tr>
               <tr>
                 <td>Codex 配额路由</td>
@@ -796,9 +796,9 @@
               </tr>
               <tr>
                 <td>Codex 预热</td>
-                <td>新增 <code>src/services/codex-prewarm-service.js</code> 或放入现有 services 层<br><code>src/core/master.js</code> 启动挂载</td>
-                <td><code>configs/config.json.example</code><br>配置页新增 prewarm 控件</td>
-                <td>新增 scheduler 去重、禁用账号跳过、失败重试测试</td>
+                <td><code>src/services/codex-prewarm-service.js</code><br><code>src/services/api-server.js</code> 启动挂载</td>
+                <td><code>configs/config.json.example</code><br><code>src/core/config-manager.js</code><br><code>src/ui-modules/config-api.js</code></td>
+                <td>已新增默认时间、全启用账号覆盖、每账号 2 次和同窗口去重测试</td>
               </tr>
               <tr>
                 <td>API Potluck key 用量</td>
@@ -816,7 +816,7 @@
         <ul class="task-list">
           <li>
             <strong>单元测试</strong>
-            跑现有 Jest，并新增 token 统计、provider 过滤、prewarm 去重、API Potluck key 聚合、日志脱敏和图片参数测试。
+            已新增 token 窗口统计、provider token quota、prewarm 去重、官方 usage token 格式化测试；收口前继续跑集中 Jest 回归。
           </li>
           <li>
             <strong>只读官方 usage 探测</strong>
@@ -843,12 +843,12 @@
       <section id="next">
         <h2>下一步执行清单</h2>
         <ol>
-          <li>继续实现 Codex 5h/周 token 配额过滤，仅对 Codex provider 生效。</li>
-          <li>实现早晨提前触发 5h 窗口，默认覆盖所有启用 Codex 账号。</li>
-          <li>探测并接入官方 Codex <code>/usage</code> 字段，把账号当日/本周/累计 usage 接入用量查询页。</li>
-          <li>重建并验证 <code>aiclient2api-image2-test</code>，重点看配置页、用量页、API Potluck 插件页、Codex 路由和图片接口。</li>
+          <li>跑集中 Jest 与语法检查，确认本轮新增实现没有破坏现有 usage/cache/sticky/weight 测试。</li>
+          <li>重建并验证 <code>aiclient2api-image2-test</code>，重点看健康检查、用量页、API Potluck 插件页、Codex 路由和图片接口。</li>
+          <li>把本轮新增能力作为一个原子提交留在 <code>yyn/customized-branch</code>，不 push。</li>
+          <li>后续合并上游 <code>origin/main</code> 时继续以 token 口径为准；请求次数只保留为统计展示。</li>
         </ol>
-        <p class="small">更新时间：2026-06-16 21:45 +08:00；当前分支领先 <code>origin/main@7005774</code>，已完成观测、Potluck token-first、sticky provider、provider weight、日志和图片增强。本文为本地只读决策制品，不包含密钥、cookie、真实 token 或账号凭据。</p>
+        <p class="small">更新时间：2026-06-16 23:25 +08:00；当前分支 <code>yyn/customized-branch</code> 已完成观测、Potluck token-first、sticky provider、provider weight、日志和图片增强，并新增 Codex token 配额、定时预热、官方 usage token 解析和低命中提醒。本文为本地只读决策制品，不包含密钥、cookie、真实 token 或账号凭据。</p>
       </section>
     </main>
 

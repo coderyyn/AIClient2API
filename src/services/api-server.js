@@ -9,6 +9,7 @@ import { createRequestHandler } from '../handlers/request-handler.js';
 import { discoverPlugins, getPluginManager } from '../core/plugin-manager.js';
 import { getTLSSidecar } from '../utils/tls-sidecar.js';
 import { HEALTH_CHECK } from '../utils/constants.js';
+import { startCodexPrewarmService } from './codex-prewarm-service.js';
 
 /**
  * @license
@@ -126,6 +127,7 @@ const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
 
 // 存储服务器实例，用于优雅关闭
 let serverInstance = null;
+let codexPrewarmService = null;
 
 /**
  * 发送消息给主进程
@@ -190,6 +192,11 @@ async function gracefulShutdown() {
         }
     } catch (err) {
         logger.error('[Server] Error destroying plugins:', err.message);
+    }
+
+    if (codexPrewarmService) {
+        codexPrewarmService.stop();
+        codexPrewarmService = null;
     }
 
     // 停止 TLS sidecar
@@ -293,6 +300,7 @@ async function startServer() {
 
     // Initialize API services
     const services = await initApiService(CONFIG, true);
+    codexPrewarmService = startCodexPrewarmService(CONFIG, getProviderPoolManager());
     
     // Initialize UI management features
     initializeUIManagement(CONFIG);
