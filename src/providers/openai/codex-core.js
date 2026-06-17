@@ -11,6 +11,7 @@ import {configureTLSSidecar, isTLSSidecarEnabledForProvider} from '../../utils/p
 import {MODEL_PROVIDER, formatExpiryLog, normalizeProviderErrorMessage} from '../../utils/common.js';
 import {getProxyConfigForProvider} from '../../utils/proxy-utils.js';
 import {getProviderModels} from '../provider-models.js';
+import {getProvidedPromptCacheKey, resolveCodexSessionId} from './codex-session-utils.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
@@ -385,11 +386,8 @@ export class CodexApiService {
      * 准备请求体
      */
     async prepareRequestBody(model, requestBody, stream) {
-        // 提取 metadata 并从请求体中移除，避免透传到上游
-        const metadata = requestBody.metadata || {};
-
-        // 明确会话维度：优先使用 session_id 或 conversation_id，其次 user_id
-        const sessionId = metadata.session_id || metadata.conversation_id || metadata.user_id || 'default';
+        // 明确会话维度：优先 OpenAI metadata，其次 Codex CLI client_metadata
+        const sessionId = resolveCodexSessionId(requestBody);
 
         // 判断是否为 fast 模型并确定默认值
         const normalizedModel = String(model || '').trim();
@@ -463,9 +461,10 @@ export class CodexApiService {
             cacheKey = `${model}-default`;
         }
 
-        let cache = this.conversationCache.get(cacheKey);
+        const providedPromptCacheKey = getProvidedPromptCacheKey(requestBody);
+        let cache = providedPromptCacheKey ? {id: providedPromptCacheKey} : this.conversationCache.get(cacheKey);
 
-        if (!cache || cache.expire < Date.now()) {
+        if (!providedPromptCacheKey && (!cache || cache.expire < Date.now())) {
             cache = {
                 id: crypto.randomUUID(),
                 expire: Date.now() + 3600000 // 1 小时
