@@ -1247,6 +1247,10 @@ function renderProviderConfig(provider) {
  */
 function getFieldOrder(provider) {
     const orderedFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
+    const hiddenProviderConfigFields = [
+        'codexMax5hTokens',
+        'codexMaxWeeklyTokens'
+    ];
     
     // 需要排除的内部状态字段
     const excludedFields = [
@@ -1293,6 +1297,7 @@ function getFieldOrder(provider) {
     // 获取当前对象中存在且不在预定义列表中的其他字段
     const otherFields = Object.keys(provider).filter(key =>
         !excludedFields.includes(key) &&
+        !hiddenProviderConfigFields.includes(key) &&
         !orderedFields.includes(key) &&
         !predefinedOrder.includes(key)
     );
@@ -1303,7 +1308,8 @@ function getFieldOrder(provider) {
     
     // 只有在字段确实存在于 provider 中，或者它是该提供商类型的预定义字段时才显示
     return allExpectedFields.filter(key =>
-        Object.prototype.hasOwnProperty.call(provider, key) || predefinedOrder.includes(key)
+        !hiddenProviderConfigFields.includes(key) &&
+        (Object.prototype.hasOwnProperty.call(provider, key) || predefinedOrder.includes(key))
     );
 }
 

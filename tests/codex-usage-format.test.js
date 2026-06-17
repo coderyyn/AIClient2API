@@ -53,9 +53,9 @@ describe('Codex usage formatting', () => {
             total: { totalTokens: 60000, cachedTokens: 20000 }
         });
         expect(formatted.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'daily_token_usage', label: 'Daily Tokens', used: 1200, unit: 'tokens' }),
-            expect.objectContaining({ id: 'weekly_token_usage', label: 'Weekly Tokens', used: 9000, unit: 'tokens' }),
-            expect.objectContaining({ id: 'total_token_usage', label: 'Total Tokens', used: 60000, unit: 'tokens' })
+            expect.objectContaining({ id: 'daily_token_usage', label: 'Daily Tokens', used: 1200, unit: 'tokens', displayValue: '0.00M' }),
+            expect.objectContaining({ id: 'weekly_token_usage', label: 'Weekly Tokens', used: 9000, unit: 'tokens', displayValue: '0.01M' }),
+            expect.objectContaining({ id: 'total_token_usage', label: 'Total Tokens', used: 60000, unit: 'tokens', displayValue: '0.06M' })
         ]));
     });
 
@@ -104,9 +104,45 @@ describe('Codex usage formatting', () => {
         });
         expect(formatted.summary.tokenUsageProfile.stats.lifetime_tokens).toBe(123456);
         expect(formatted.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'daily_token_usage', used: 1200, unit: 'tokens' }),
-            expect.objectContaining({ id: 'weekly_token_usage', used: 2600, unit: 'tokens' }),
-            expect.objectContaining({ id: 'total_token_usage', used: 123456, unit: 'tokens' })
+            expect.objectContaining({ id: 'daily_token_usage', used: 1200, unit: 'tokens', displayValue: '0.00M' }),
+            expect.objectContaining({ id: 'weekly_token_usage', used: 2600, unit: 'tokens', displayValue: '0.00M' }),
+            expect.objectContaining({ id: 'total_token_usage', used: 123456, unit: 'tokens', displayValue: '0.12M' })
+        ]));
+    });
+
+    test('formats additional Codex Spark rate limit windows from official usage payload', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 25, reset_at: 1780000000 },
+                secondary_window: { used_percent: 60, reset_at: 1780500000 }
+            },
+            additional_rate_limits: [
+                {
+                    limit_name: 'GPT-5.3-Codex-Spark',
+                    metered_feature: 'codex_bengalfox',
+                    rate_limit: {
+                        primary_window: { used_percent: 12, reset_at: 1780100000 },
+                        secondary_window: { used_percent: 34, reset_at: 1780600000 }
+                    }
+                }
+            ]
+        });
+
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'additional_gpt_5_3_codex_spark_primary_window',
+                label: 'GPT-5.3-Codex-Spark (5h)',
+                used: 12,
+                unit: 'percent'
+            }),
+            expect.objectContaining({
+                id: 'additional_gpt_5_3_codex_spark_secondary_window',
+                label: 'GPT-5.3-Codex-Spark (Weekly)',
+                used: 34,
+                unit: 'percent'
+            })
         ]));
     });
 });

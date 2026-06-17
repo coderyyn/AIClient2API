@@ -860,6 +860,11 @@ function mergeCodexTokenUsage(primary, fallback) {
     return (merged.daily || merged.weekly || merged.total) ? merged : null;
 }
 
+function formatTokensAsMillions(tokens) {
+    const parsed = numberOrNull(tokens) ?? 0;
+    return `${(parsed / 1000000).toFixed(2)}M`;
+}
+
 function buildCodexTokenUsageItem(id, label, block) {
     if (!block) return null;
     const limit = block.limitTokens ?? null;
@@ -871,12 +876,73 @@ function buildCodexTokenUsageItem(id, label, block) {
         limit,
         percent,
         unit: 'tokens',
+        displayValue: formatTokensAsMillions(block.totalTokens),
         status: getStatus(percent),
         resetAt: block.resetAt,
         cachedTokens: block.cachedTokens,
         inputTokens: block.inputTokens,
         outputTokens: block.outputTokens
     };
+}
+
+function slugifyCodexRateLimitName(name, fallback) {
+    return String(name || fallback || 'additional')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'additional';
+}
+
+function getCodexWindowUsedPercent(windowData) {
+    return numberOrNull(windowData?.used_percent ?? windowData?.usedPercent) ?? 0;
+}
+
+function buildCodexRateLimitWindowItem(id, label, windowData) {
+    if (!windowData) return null;
+    const usedPercent = getCodexWindowUsedPercent(windowData);
+    return {
+        id,
+        label,
+        used: usedPercent,
+        limit: 100,
+        percent: usedPercent,
+        unit: 'percent',
+        status: getStatus(usedPercent),
+        resetAt: formatTimestamp(windowData.reset_at ?? windowData.resetAt)
+    };
+}
+
+function buildAdditionalCodexRateLimitItems(usageData) {
+    const additionalRateLimits = Array.isArray(usageData?.additional_rate_limits)
+        ? usageData.additional_rate_limits
+        : (Array.isArray(usageData?.additionalRateLimits) ? usageData.additionalRateLimits : []);
+
+    const items = [];
+    additionalRateLimits.forEach((limitData, index) => {
+        if (!limitData || typeof limitData !== 'object') return;
+
+        const rateLimit = limitData.rate_limit || limitData.rateLimit || limitData;
+        const primary = rateLimit?.primary_window || rateLimit?.primaryWindow;
+        const secondary = rateLimit?.secondary_window || rateLimit?.secondaryWindow;
+        if (!primary && !secondary) return;
+
+        const label = limitData.limit_name || limitData.limitName || limitData.metered_feature || limitData.meteredFeature || `Additional Limit ${index + 1}`;
+        const slug = slugifyCodexRateLimitName(label, `additional_${index + 1}`);
+        const primaryItem = buildCodexRateLimitWindowItem(
+            `additional_${slug}_primary_window`,
+            `${label} (5h)`,
+            primary
+        );
+        const secondaryItem = buildCodexRateLimitWindowItem(
+            `additional_${slug}_secondary_window`,
+            `${label} (Weekly)`,
+            secondary
+        );
+
+        if (primaryItem) items.push(primaryItem);
+        if (secondaryItem) items.push(secondaryItem);
+    });
+
+    return items;
 }
 
 /**
@@ -896,11 +962,17 @@ export function formatCodexUsage(usageData) {
     let maxUsedPercent = 0;
     let worstResetAtTimestamp = null;
     const items = [];
+    const considerResetWindow = (usedPercent, resetAtTimestamp) => {
+        if (usedPercent > maxUsedPercent) {
+            maxUsedPercent = usedPercent;
+            worstResetAtTimestamp = resetAtTimestamp;
+        }
+    };
 
     // 1. 处理主窗口（短时间配额）
     if (primary) {
-        maxUsedPercent = primaryUsedPercent;
-        worstResetAtTimestamp = primary?.reset_at ?? primary?.resetAt;
+        const primaryResetAt = primary?.reset_at ?? primary?.resetAt;
+        considerResetWindow(primaryUsedPercent, primaryResetAt);
         
         items.push({
             id: 'primary_window',
@@ -917,10 +989,7 @@ export function formatCodexUsage(usageData) {
     // 2. 比较并添加从窗口（周配额）
     if (secondary) {
         const secondaryResetAt = secondary?.reset_at ?? secondary?.resetAt;
-        if (secondaryUsedPercent > maxUsedPercent) {
-            maxUsedPercent = secondaryUsedPercent;
-            worstResetAtTimestamp = secondaryResetAt;
-        }
+        considerResetWindow(secondaryUsedPercent, secondaryResetAt);
         
         items.push({
             id: 'secondary_window',
@@ -933,6 +1002,12 @@ export function formatCodexUsage(usageData) {
             resetAt: formatTimestamp(secondaryResetAt)
         });
     }
+
+    const additionalRateLimitItems = buildAdditionalCodexRateLimitItems(usageData);
+    additionalRateLimitItems.forEach(item => {
+        considerResetWindow(item.used, item.resetAt);
+        items.push(item);
+    });
 
     const plan = usageData.plan_type || usageData.planType || 'FREE';
     const tokenUsageProfile = getCodexTokenUsageProfile(usageData);

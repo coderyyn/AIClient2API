@@ -460,7 +460,9 @@ function renderUsageDetails(usage) {
         const breakdown = document.createElement('div');
         breakdown.className = 'usage-section usage-breakdown-compact';
         items.forEach(item => {
-            const val = item.unit === 'percent'
+            const val = item.displayValue !== undefined && item.displayValue !== null
+                ? item.displayValue
+                : item.unit === 'percent'
                 ? `${item.percent.toFixed(1)}%`
                 : (item.limit === null || item.limit === undefined ? formatNumber(item.used) : `${formatNumber(item.used)} / ${formatNumber(item.limit)}`);
             const itemEl = document.createElement('div');
