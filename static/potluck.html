@@ -192,6 +192,39 @@
         }
         .search-box::placeholder { color: var(--text-tertiary); }
 
+        .usage-range-toggle {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px;
+            gap: 2px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            flex-wrap: nowrap;
+        }
+        .range-option {
+            min-height: 32px;
+            padding: 0 10px;
+            border: none;
+            border-radius: var(--radius-md);
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: var(--transition);
+        }
+        .range-option:hover {
+            color: var(--text-primary);
+            background: var(--bg-secondary);
+        }
+        .range-option.active {
+            color: #ffffff;
+            background: var(--primary-color);
+            box-shadow: var(--shadow-sm);
+        }
+
         /* Key 列表 */
         .keys-section { margin-top: 10px; }
         .keys-header {
@@ -410,6 +443,106 @@
             gap: 12px;
         }
 
+        .key-detail-modal {
+            max-width: 900px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .key-detail-summary {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+        .detail-metric {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 12px;
+        }
+        .detail-metric .label {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-bottom: 6px;
+        }
+        .detail-metric .value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .detail-metric .subvalue {
+            margin-top: 4px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .detail-meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px 16px;
+            padding: 12px;
+            margin-bottom: 18px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            font-size: 13px;
+        }
+        .detail-meta span {
+            color: var(--text-secondary);
+        }
+        .detail-meta strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        .detail-sections {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        .detail-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 14px;
+        }
+        .detail-section h4 {
+            margin: 0 0 12px;
+            font-size: 13px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .detail-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .detail-list-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+            font-size: 12px;
+        }
+        .detail-list-item .name {
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .detail-list-item .count {
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+        .detail-empty {
+            color: var(--text-tertiary);
+            font-size: 13px;
+            padding: 10px 0;
+        }
+        .calendar-day.out-of-range {
+            opacity: 0.28;
+        }
+
         /* 表单 */
         .form-group { margin-bottom: 20px; }
         .form-group label {
@@ -502,10 +635,18 @@
         @media (max-width: 480px) {
             .stat-card .value { font-size: 1.5rem; }
             .keys-header { flex-direction: column; align-items: stretch; gap: 12px; }
-            .toolbar {
-                flex-direction: column;
-                align-items: stretch;
-            }
+                .toolbar {
+                    flex-direction: column;
+                    align-items: stretch;
+                }
+                .usage-range-toggle {
+                    width: 100%;
+                    overflow-x: auto;
+                }
+                .range-option {
+                    flex: 1;
+                    min-width: 64px;
+                }
             .toolbar .search-wrapper {
                 display: flex;
                 gap: 8px;
@@ -548,7 +689,15 @@
             .theme-toggle { width: 36px; height: 36px; font-size: 1rem; }
         }
 
-        @keyframes slideIn {
+        @media (max-width: 768px) {
+            .key-detail-summary,
+            .detail-sections,
+            .detail-meta {
+                grid-template-columns: 1fr;
+            }
+        }
+
+            @keyframes slideIn {
             from { transform: scale(0.95); opacity: 0; }
             to { transform: scale(1); opacity: 1; }
         }
@@ -632,6 +781,12 @@
                 <span class="badge">管理端</span>
             </div>
             <div class="navbar-actions" style="display: flex; align-items: center; gap: 12px;">
+                <div class="usage-range-toggle" id="usageRangeToggle" aria-label="用量时间范围">
+                    <button class="range-option active" data-range="total" onclick="setUsageRange('total')" aria-pressed="true">累计</button>
+                    <button class="range-option" data-range="30d" onclick="setUsageRange('30d')" aria-pressed="false">近30天</button>
+                    <button class="range-option" data-range="7d" onclick="setUsageRange('7d')" aria-pressed="false">近1周</button>
+                    <button class="range-option" data-range="today" onclick="setUsageRange('today')" aria-pressed="false">当天</button>
+                </div>
                 <button class="theme-toggle" id="themeToggle" title="切换主题">
                     <i class="fas fa-sun"></i>
                     <i class="fas fa-moon"></i>
@@ -738,6 +893,8 @@
                     <div class="search-wrapper">
                         <input type="text" id="searchBox" class="search-box" placeholder="搜索名称或 Key...">
                         <select id="sortSelect" class="sort-select">
+                            <option value="rangeTokens-desc">当前范围 Token ↓</option>
+                            <option value="rangeUsage-desc">当前范围调用 ↓</option>
                             <option value="todayTokens-desc">今日 Token ↓</option>
                             <option value="weeklyTokens-desc">本周 Token ↓</option>
                             <option value="totalTokens-desc">累计 Token ↓</option>
@@ -873,9 +1030,28 @@
         </div>
     </div>
 
+    <!-- Key 详情模态框 -->
+    <div id="keyDetailModal" class="modal-overlay">
+        <div class="modal key-detail-modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-chart-line"></i> Key 详情</h3>
+                <button class="modal-close" onclick="closeKeyDetailModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="keyDetailBody">
+                <div class="detail-empty">正在加载...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeKeyDetailModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentNewKey = '';
         let allKeys = [];
+        let currentStats = null;
+        let currentUsageRange = 'total';
+        let currentDetailKeyId = null;
         let systemConfig = { defaultDailyLimit: 500 };
         const API_BASE = '/api/potluck';
 
@@ -908,8 +1084,140 @@
             const parts = String(dateKey || '').split('-');
             return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : dateKey;
         }
-        function renderKeyDailyUsage(usageHistory = {}) {
-            const entries = Object.entries(usageHistory || {}).sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+
+        function getTodayDateKey() {
+            const utc8Date = new Date(Date.now() + (8 * 60 * 60 * 1000));
+            return utc8Date.toISOString().split('T')[0];
+        }
+
+        function shiftDateKey(dateKey, deltaDays) {
+            const parts = String(dateKey || '').split('-').map(Number);
+            if (parts.length !== 3 || parts.some(part => !Number.isFinite(part))) return dateKey;
+            const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+            date.setUTCDate(date.getUTCDate() + deltaDays);
+            return date.toISOString().split('T')[0];
+        }
+
+        function getUsageRangeLabel(range = currentUsageRange) {
+            const labels = {
+                total: '累计',
+                '30d': '近30天',
+                '7d': '近1周',
+                today: '当天'
+            };
+            return labels[range] || labels.total;
+        }
+
+        function getUsageRangeDates(range, usageHistory = {}) {
+            const dates = Object.keys(usageHistory || {}).sort();
+            if (range === 'total') return dates;
+
+            const todayKey = getTodayDateKey();
+            if (range === 'today') return dates.filter(date => date === todayKey);
+
+            const days = range === '30d' ? 30 : 7;
+            const cutoffKey = shiftDateKey(todayKey, -(days - 1));
+            return dates.filter(date => date >= cutoffKey && date <= todayKey);
+        }
+
+        function createUsageSummaryBucket() {
+            return {
+                requestCount: 0,
+                promptTokens: 0,
+                completionTokens: 0,
+                totalTokens: 0,
+                cachedTokens: 0,
+                maxQps: 0,
+                maxRpm: 0,
+                maxTps: 0
+            };
+        }
+
+        function addUsageBucket(target, usage = {}) {
+            target.requestCount += usageCount(usage);
+            target.promptTokens += Number(usage?.promptTokens || 0);
+            target.completionTokens += Number(usage?.completionTokens || 0);
+            target.totalTokens += usageTokens(usage);
+            target.cachedTokens += Number(usage?.cachedTokens || 0);
+            target.maxQps = Math.max(target.maxQps || 0, Number(usage?.maxQps || 0));
+            target.maxRpm = Math.max(target.maxRpm || 0, Number(usage?.maxRpm || 0));
+            target.maxTps = Math.max(target.maxTps || 0, Number(usage?.maxTps || 0));
+        }
+
+        function addUsageMap(target, name, usage = {}) {
+            if (!target[name]) target[name] = createUsageSummaryBucket();
+            addUsageBucket(target[name], usage);
+        }
+
+        function withCacheHitRatio(summary) {
+            return {
+                ...summary,
+                cacheHitRatio: summary.promptTokens > 0 ? summary.cachedTokens / summary.promptTokens : 0
+            };
+        }
+
+        function summarizeUsageHistoryForRange(usageHistory = {}, range = currentUsageRange) {
+            const dates = getUsageRangeDates(range, usageHistory);
+            const summary = createUsageSummaryBucket();
+            const providers = {};
+            const models = {};
+
+            dates.forEach(date => {
+                const day = usageHistory[date] || {};
+                addUsageBucket(summary, day.summary || {});
+                Object.entries(day.providers || {}).forEach(([name, usage]) => addUsageMap(providers, name, usage));
+                Object.entries(day.models || {}).forEach(([name, usage]) => addUsageMap(models, name, usage));
+            });
+
+            return {
+                dates,
+                summary: withCacheHitRatio(summary),
+                providers,
+                models
+            };
+        }
+
+        function getKeyRangeMetrics(key, range = currentUsageRange) {
+            if (range === 'total') {
+                return {
+                    requestCount: Number(key.totalUsage || 0),
+                    totalTokens: Number(key.totalTokens || 0),
+                    cachedTokens: Number(key.totalCachedTokens || 0),
+                    cacheHitRatio: Number(key.totalCacheHitRatio || 0)
+                };
+            }
+
+            if (range === 'today') {
+                return {
+                    requestCount: Number(key.todayUsage || 0),
+                    totalTokens: Number(key.todayTotalTokens || 0),
+                    cachedTokens: Number(key.todayCachedTokens || 0),
+                    cacheHitRatio: Number(key.todayCacheHitRatio || 0)
+                };
+            }
+
+            if (range === '7d') {
+                return {
+                    requestCount: Number(key.weeklyUsage || 0),
+                    totalTokens: Number(key.weeklyTotalTokens || 0),
+                    cachedTokens: Number(key.weeklyCachedTokens || 0),
+                    cacheHitRatio: Number(key.weeklyCacheHitRatio || 0)
+                };
+            }
+
+            const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, range).summary;
+            return {
+                requestCount: rangeSummary.requestCount,
+                totalTokens: rangeSummary.totalTokens,
+                cachedTokens: rangeSummary.cachedTokens,
+                cacheHitRatio: rangeSummary.cacheHitRatio
+            };
+        }
+
+        function renderKeyDailyUsage(usageHistory = {}, range = currentUsageRange) {
+            const activeDates = getUsageRangeDates(range, usageHistory);
+            const sourceDates = range === 'total' ? Object.keys(usageHistory || {}).sort().slice(-7) : activeDates.slice(-7);
+            const entries = sourceDates.map(date => [date, usageHistory[date]]).filter(([, day]) => day);
             if (entries.length === 0) return '';
             return `<div class="key-daily-usage">${entries.map(([date, day]) => {
                 const summary = day.summary || {};
@@ -931,6 +1239,7 @@
             const result = await apiRequest(`${API_BASE}/keys`);
             if (!result || !result.success) { showToast('加载失败', 'error'); return; }
             const { keys, stats } = result.data;
+            currentStats = stats;
             document.getElementById('totalKeys').textContent = stats.totalKeys;
             document.getElementById('enabledKeys').textContent = stats.enabledKeys;
             document.getElementById('todayUsage').textContent = stats.todayTotalUsage;
@@ -947,7 +1256,7 @@
             document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
             
             // 渲染使用历史分布
-            renderUsageHistory(stats.usageHistory);
+            renderUsageHistory(stats.usageHistory, currentUsageRange);
             renderCalendar(stats.usageHistory || {});
             
             allKeys = keys;
@@ -958,6 +1267,7 @@
             const grid = document.getElementById('calendarGrid'), tooltip = document.getElementById('usageTooltip');
             if (!grid) return;
             grid.innerHTML = '';
+            const activeDates = new Set(getUsageRangeDates(currentUsageRange, usageHistory));
             const now = new Date();
             const startDate = new Date();
             startDate.setMonth(now.getMonth() - 3);
@@ -991,7 +1301,8 @@
                 const entry = dailyData[dateKey] || { totalTokens: 0, requestCount: 0 };
                 const tokens = entry.totalTokens;
                 const requests = entry.requestCount;
-                currentTotal += tokens;
+                const isInRange = currentUsageRange === 'total' || activeDates.has(dateKey);
+                if (isInRange) currentTotal += tokens;
                 
                 let level = 0;
                 if (tokens > 0) {
@@ -1004,6 +1315,7 @@
                 
                 const day = document.createElement('div');
                 day.className = 'calendar-day';
+                if (!isInRange) day.classList.add('out-of-range');
                 day.dataset.level = level;
                 
                 const tipText = `${dateKey}: ${formatNumber(requests)} 次请求, ${formatTokenCompact(tokens)} Tokens${entry.maxQps ? `\n峰值: ${entry.maxQps.toFixed(2)} QPS / ${entry.maxRpm.toFixed(0)} RPM / ${entry.maxTps.toFixed(2)} TPS` : ''}`;
@@ -1018,43 +1330,39 @@
                 
                 grid.appendChild(day);
             }
-            document.getElementById('calendarFooter').textContent = `最近三个月累计消耗: ${formatTokenCompact(currentTotal)} Tokens`;
+            document.getElementById('calendarFooter').textContent = `${getUsageRangeLabel()}累计消耗: ${formatTokenCompact(currentTotal)} Tokens`;
         }
 
         /**
-         * 渲染最近 7 天使用历史分布
+         * 渲染当前时间范围内的使用历史分布
          */
-        function renderUsageHistory(usageHistory) {
+        function renderUsageHistory(usageHistory, range = currentUsageRange) {
             if (!usageHistory || Object.keys(usageHistory).length === 0) {
                 document.getElementById('usageStatsSection').style.display = 'none';
                 return;
             }
 
             document.getElementById('usageStatsSection').style.display = 'block';
-            
+            document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
+
+            const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
             const aggregatedProviders = {};
             const aggregatedModels = {};
-            let totalCalls = 0;
-            let totalTokens = 0;
+            const totalCalls = rangeSummary.summary.requestCount;
+            const totalTokens = rangeSummary.summary.totalTokens;
 
-            // 汇总最近 7 天的数据
-            Object.values(usageHistory).forEach(day => {
-                if (day.providers) {
-                    Object.entries(day.providers).forEach(([p, usage]) => {
-                        aggregatedProviders[p] = (aggregatedProviders[p] || 0) + usageCount(usage);
-                        totalCalls += usageCount(usage);
-                        totalTokens += usageTokens(usage);
-                    });
-                }
-                if (day.models) {
-                    Object.entries(day.models).forEach(([m, usage]) => {
-                        aggregatedModels[m] = (aggregatedModels[m] || 0) + usageCount(usage);
-                    });
-                }
+            Object.entries(rangeSummary.providers).forEach(([p, usage]) => {
+                aggregatedProviders[p] = usageCount(usage);
+            });
+            Object.entries(rangeSummary.models).forEach(([m, usage]) => {
+                aggregatedModels[m] = usageCount(usage);
             });
 
             if (totalCalls === 0) {
-                document.getElementById('usageStatsSection').style.display = 'none';
+                document.getElementById('providerDistribution').innerHTML = '<div class="detail-empty">当前范围暂无服务商数据</div>';
+                document.getElementById('modelDistribution').innerHTML = '<div class="detail-empty">当前范围暂无模型数据</div>';
+                document.getElementById('providerTotalCount').textContent = `0 次 / 0 Tokens`;
+                document.getElementById('modelTotalCount').textContent = `0 次`;
                 return;
             }
 
@@ -1070,6 +1378,10 @@
         function renderDistribution(elementId, data, total) {
             const container = document.getElementById(elementId);
             const sorted = Object.entries(data).sort((a, b) => b[1] - a[1]);
+            if (total <= 0 || sorted.length === 0) {
+                container.innerHTML = '<div class="detail-empty">当前范围暂无数据</div>';
+                return;
+            }
             
             // 最多显示前 3 个
             const topData = sorted.slice(0, 3);
@@ -1103,6 +1415,26 @@
                         </div>
                     </div>
                 `;
+            }
+        }
+
+        function setUsageRange(range) {
+            currentUsageRange = ['total', '30d', '7d', 'today'].includes(range) ? range : 'total';
+            document.querySelectorAll('#usageRangeToggle .range-option').forEach(button => {
+                const isActive = button.dataset.range === currentUsageRange;
+                button.classList.toggle('active', isActive);
+                button.setAttribute('aria-pressed', String(isActive));
+            });
+
+            if (currentStats) {
+                renderUsageHistory(currentStats.usageHistory || {}, currentUsageRange);
+                renderCalendar(currentStats.usageHistory || {});
+            }
+            applyFilterAndSort();
+
+            if (currentDetailKeyId) {
+                const key = allKeys.find(item => item.id === currentDetailKeyId);
+                if (key) renderKeyDetailModal(key);
             }
         }
 
@@ -1147,6 +1479,8 @@
                 let va, vb;
                 if (field === 'name') { va = a.name.toLowerCase(); vb = b.name.toLowerCase(); }
                 else if (field === 'usage') { va = a.todayUsage; vb = b.todayUsage; }
+                else if (field === 'rangeUsage') { va = getKeyRangeMetrics(a).requestCount; vb = getKeyRangeMetrics(b).requestCount; }
+                else if (field === 'rangeTokens') { va = getKeyRangeMetrics(a).totalTokens; vb = getKeyRangeMetrics(b).totalTokens; }
                 else if (field === 'total') { va = a.totalUsage; vb = b.totalUsage; }
                 else if (field === 'todayTokens') { va = a.todayTotalTokens || 0; vb = b.todayTotalTokens || 0; }
                 else if (field === 'weeklyTokens') { va = a.weeklyTotalTokens || 0; vb = b.weeklyTotalTokens || 0; }
@@ -1194,26 +1528,19 @@
                 const usagePercent = key.dailyLimit > 0 ? (key.todayUsage / key.dailyLimit * 100) : 0;
                 const progressClass = usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warning' : '';
                 const valueClass = usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warning' : '';
-                
-                // 汇总该 Key 的提供商分布 (最近 7 天)
-                const providers = {};
-                if (key.usageHistory) {
-                    Object.values(key.usageHistory).forEach(day => {
-                        if (day.providers) {
-                            Object.entries(day.providers).forEach(([p, usage]) => {
-                                providers[p] = (providers[p] || 0) + usageTokens(usage);
-                            });
-                        }
-                    });
-                }
-                const topProviders = Object.entries(providers)
+
+                const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
+                const rangeMetrics = getKeyRangeMetrics(key, currentUsageRange);
+                const rangeLabel = getUsageRangeLabel(currentUsageRange);
+                const topProviders = Object.entries(rangeSummary.providers)
+                    .map(([name, usage]) => [name, usageTokens(usage)])
                     .sort((a, b) => b[1] - a[1])
                     .slice(0, 3);
                 
                 const providerBadges = topProviders.map(([name, count]) => 
                     `<span class="dist-badge">${escapeHtml(name)}: <b>${formatTokenCompact(count)}</b></span>`
                 ).join('');
-                const dailyUsage = renderKeyDailyUsage(key.usageHistory);
+                const dailyUsage = renderKeyDailyUsage(key.usageHistory, currentUsageRange);
 
                 return `<div class="key-card ${key.enabled ? '' : 'disabled'}">
                     <div class="key-info">
@@ -1229,13 +1556,13 @@
                             <div class="value ${valueClass}">${key.todayUsage}/${key.dailyLimit}</div>
                             <div class="value muted">${formatTokenCompact(key.todayTotalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.todayCacheHitRatio)}</div>
                             <div class="progress-bar"><div class="fill ${progressClass}" style="width:${Math.min(usagePercent, 100)}%"></div></div>
-                        </div>
-                        <div class="key-stat">
-                            <div class="label">本周 Token</div>
-                            <div class="value">${formatTokenCompact(key.weeklyTotalTokens || 0)}</div>
-                            <div class="value muted">缓存 ${formatTokenCompact(key.weeklyCachedTokens || 0)} · ${formatPercentRatio(key.weeklyCacheHitRatio)}</div>
-                        </div>
-                        <div class="key-stat">
+                            </div>
+                            <div class="key-stat">
+                                <div class="label">${rangeLabel} Token</div>
+                                <div class="value">${formatTokenCompact(rangeMetrics.totalTokens || 0)}</div>
+                                <div class="value muted">${formatNumber(rangeMetrics.requestCount || 0)} 次 · 缓存 ${formatPercentRatio(rangeMetrics.cacheHitRatio)}</div>
+                            </div>
+                            <div class="key-stat">
                             <div class="label">累计数据</div>
                             <div class="value">${key.totalUsage} 次请求</div>
                             <div class="value muted">${formatTokenCompact(key.totalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.totalCacheHitRatio)}</div>
@@ -1260,6 +1587,7 @@
                         </div>
                     </div>
                     <div class="key-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="showKeyDetail('${key.id}')" title="查看用户端视图"><i class="fas fa-chart-line"></i> <span class="btn-text">详情</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="resetUsage('${key.id}')" title="重置今日用量"><i class="fas fa-redo"></i> <span class="btn-text">重置</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="resetTokenStats('${key.id}')" title="重置 Token 统计"><i class="fas fa-eraser"></i> <span class="btn-text">Token</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="openEditLimit('${key.id}', ${key.dailyLimit})" title="修改限额"><i class="fas fa-sliders-h"></i> <span class="btn-text">限额</span></button>
@@ -1319,6 +1647,136 @@
             } else {
                 copyToClipboardFallback(text);
             }
+        }
+
+        function renderKeyDetailDistribution(data = {}) {
+            const sorted = Object.entries(data)
+                .sort(([, a], [, b]) => usageTokens(b) - usageTokens(a))
+                .slice(0, 8);
+
+            if (sorted.length === 0) {
+                return '<div class="detail-empty">当前范围暂无数据</div>';
+            }
+
+            return `<div class="detail-list">${sorted.map(([name, usage]) => {
+                const calls = usageCount(usage);
+                const tokens = usageTokens(usage);
+                return `
+                    <div class="detail-list-item">
+                        <span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+                        <span class="count">${formatNumber(calls)} 次 / ${formatTokenCompact(tokens)}</span>
+                    </div>
+                `;
+            }).join('')}</div>`;
+        }
+
+        function renderKeyDetailDailyUsage(usageHistory = {}) {
+            const dates = getUsageRangeDates(currentUsageRange, usageHistory);
+            const sourceDates = (currentUsageRange === 'total' ? Object.keys(usageHistory || {}).sort() : dates).slice(-14).reverse();
+            if (sourceDates.length === 0) {
+                return '<div class="detail-empty">当前范围暂无每日明细</div>';
+            }
+
+            return `<div class="detail-list">${sourceDates.map(date => {
+                const summary = usageHistory[date]?.summary || {};
+                return `
+                    <div class="detail-list-item">
+                        <span class="name">${formatShortDate(date)}</span>
+                        <span class="count">${formatNumber(usageCount(summary))} 次 / ${formatTokenCompact(usageTokens(summary))}</span>
+                    </div>
+                `;
+            }).join('')}</div>`;
+        }
+
+        async function showKeyDetail(keyId) {
+            currentDetailKeyId = keyId;
+            document.getElementById('keyDetailBody').innerHTML = '<div class="detail-empty">正在加载...</div>';
+            openModal('keyDetailModal');
+
+            const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}`);
+            if (result && result.success) {
+                renderKeyDetailModal(result.data);
+                return;
+            }
+
+            const fallbackKey = allKeys.find(key => key.id === keyId);
+            if (fallbackKey) {
+                renderKeyDetailModal(fallbackKey);
+                showToast('详情接口读取失败，已显示列表缓存', 'error');
+                return;
+            }
+
+            document.getElementById('keyDetailBody').innerHTML = '<div class="detail-empty">未找到该 Key</div>';
+        }
+
+        function renderKeyDetailModal(key) {
+            currentDetailKeyId = key.id;
+            const rangeLabel = getUsageRangeLabel(currentUsageRange);
+            const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
+            const rangeMetrics = getKeyRangeMetrics(key, currentUsageRange);
+            const maskedKey = key.maskedKey || `${key.id.substring(0, 12)}...${key.id.substring(key.id.length - 4)}`;
+            const usagePercent = key.dailyLimit > 0 ? Math.round((Number(key.todayUsage || 0) / key.dailyLimit) * 100) : 0;
+            const statusText = key.enabled ? '启用' : '禁用';
+
+            document.getElementById('keyDetailBody').innerHTML = `
+                <div class="detail-meta">
+                    <span>用户端视图：<strong>${escapeHtml(key.name || '未命名 Key')}</strong></span>
+                    <span>Key：<strong>${escapeHtml(maskedKey)}</strong></span>
+                    <span>状态：<strong>${statusText}</strong></span>
+                    <span>最后调用：<strong>${formatTime(key.lastUsedAt)}</strong></span>
+                    <span>创建时间：<strong>${formatTime(key.createdAt)}</strong></span>
+                    <span>当前范围：<strong>${rangeLabel}</strong></span>
+                </div>
+                <div class="key-detail-summary">
+                    <div class="detail-metric">
+                        <div class="label">今日/限额</div>
+                        <div class="value">${formatNumber(key.todayUsage || 0)}/${formatNumber(key.dailyLimit || 0)}</div>
+                        <div class="subvalue">${usagePercent}% · ${formatTokenCompact(key.todayTotalTokens || 0)} Tokens</div>
+                    </div>
+                    <div class="detail-metric">
+                        <div class="label">${rangeLabel}调用</div>
+                        <div class="value">${formatNumber(rangeMetrics.requestCount || 0)}</div>
+                        <div class="subvalue">保留历史天数 ${rangeSummary.dates.length}</div>
+                    </div>
+                    <div class="detail-metric">
+                        <div class="label">${rangeLabel}Token</div>
+                        <div class="value">${formatTokenCompact(rangeMetrics.totalTokens || 0)}</div>
+                        <div class="subvalue">缓存 ${formatTokenCompact(rangeMetrics.cachedTokens || 0)} · ${formatPercentRatio(rangeMetrics.cacheHitRatio)}</div>
+                    </div>
+                    <div class="detail-metric">
+                        <div class="label">实时速率</div>
+                        <div class="value">${(key.qps || 0).toFixed(2)} QPS</div>
+                        <div class="subvalue">${(key.rpm || 0).toFixed(0)} RPM · ${(key.tps || 0).toFixed(1)} TPS</div>
+                    </div>
+                </div>
+                <div class="detail-sections">
+                    <div class="detail-section">
+                        <h4><i class="fas fa-server"></i> 范围内服务商</h4>
+                        ${renderKeyDetailDistribution(rangeSummary.providers)}
+                    </div>
+                    <div class="detail-section">
+                        <h4><i class="fas fa-microchip"></i> 范围内模型</h4>
+                        ${renderKeyDetailDistribution(rangeSummary.models)}
+                    </div>
+                    <div class="detail-section">
+                        <h4><i class="fas fa-calendar-day"></i> 最近用量</h4>
+                        ${renderKeyDetailDailyUsage(key.usageHistory || {})}
+                    </div>
+                    <div class="detail-section">
+                        <h4><i class="fas fa-gauge-high"></i> 峰值速率</h4>
+                        <div class="detail-list">
+                            <div class="detail-list-item"><span class="name">QPS 峰值</span><span class="count">${(key.maxQps || 0).toFixed(2)}</span></div>
+                            <div class="detail-list-item"><span class="name">RPM 峰值</span><span class="count">${(key.maxRpm || 0).toFixed(0)}</span></div>
+                            <div class="detail-list-item"><span class="name">TPS 峰值</span><span class="count">${(key.maxTps || 0).toFixed(1)}</span></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function closeKeyDetailModal() {
+            currentDetailKeyId = null;
+            closeModal('keyDetailModal');
         }
 
         async function resetUsage(keyId) {
