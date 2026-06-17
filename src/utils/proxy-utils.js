@@ -194,14 +194,16 @@ export function getProxyConfigForProvider(config, providerType) {
  * @returns {Object} 更新后的 axios 配置
  */
 export function configureAxiosProxy(axiosConfig, config, providerType) {
+    // Proxy is controlled by config.json/UI. Disable axios env proxy fallback so
+    // HTTP_PROXY/HTTPS_PROXY from the container cannot silently override config.
+    axiosConfig.proxy = false;
+
     const proxyConfig = getProxyConfigForProvider(config, providerType);
 
     if (proxyConfig) {
         // 使用代理 agent
         axiosConfig.httpAgent = proxyConfig.httpAgent;
         axiosConfig.httpsAgent = proxyConfig.httpsAgent;
-        // 禁用 axios 内置的代理配置，使用我们的 agent
-        axiosConfig.proxy = false;
     }
 
     return axiosConfig;

@@ -18,6 +18,39 @@ function parseBooleanConfig(value) {
     return Boolean(value);
 }
 
+const PROXY_RUNTIME_CONFIG_KEYS = [
+    'PROXY_URL',
+    'PROXY_ENABLED_PROVIDERS',
+    'TLS_SIDECAR_ENABLED',
+    'TLS_SIDECAR_ENABLED_PROVIDERS',
+    'TLS_SIDECAR_PROXY_URL'
+];
+
+function normalizeComparableConfigValue(value) {
+    if (Array.isArray(value)) {
+        return [...value].map(item => String(item)).sort();
+    }
+    return value ?? null;
+}
+
+function snapshotProxyRuntimeConfig(config) {
+    return Object.fromEntries(
+        PROXY_RUNTIME_CONFIG_KEYS.map(key => [key, normalizeComparableConfigValue(config?.[key])])
+    );
+}
+
+function hasProxyRuntimeConfigChanged(previous, current) {
+    return JSON.stringify(previous) !== JSON.stringify(snapshotProxyRuntimeConfig(current));
+}
+
+function invalidateServiceInstancesForProxyChange() {
+    const keys = Object.keys(serviceInstances);
+    keys.forEach(key => delete serviceInstances[key]);
+    if (keys.length > 0) {
+        logger.info(`[UI API] Proxy configuration changed, invalidated ${keys.length} service adapter(s)`);
+    }
+}
+
 /**
  * 重载配置文件
  */
@@ -150,6 +183,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
 async function _handleUpdateConfig(req, res, currentConfig, body) {
     try {
         const newConfig = body;
+        const previousProxyRuntimeConfig = snapshotProxyRuntimeConfig(currentConfig);
 
         // Update config values in memory（含类型校验）
         if (newConfig.REQUIRED_API_KEY !== undefined) {
@@ -455,6 +489,9 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
 
         // Update the global CONFIG object to reflect changes immediately
         Object.assign(CONFIG, currentConfig);
+        if (hasProxyRuntimeConfigChanged(previousProxyRuntimeConfig, currentConfig)) {
+            invalidateServiceInstancesForProxyChange();
+        }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({

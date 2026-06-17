@@ -131,8 +131,8 @@
                 <h3 data-i18n="config.proxy.title"><i class="fas fa-globe"></i> 代理设置</h3>
                 <div class="form-group">
                     <label for="proxyUrl" data-i18n="config.proxy.url">代理地址</label>
-                    <input type="text" id="proxyUrl" class="form-control" data-i18n-placeholder="config.proxy.urlPlaceholder" placeholder="例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
-                    <small class="form-text" data-i18n="config.proxy.urlNote">支持 HTTP、HTTPS 和 SOCKS5 代理，留空则不使用代理</small>
+                    <input type="text" id="proxyUrl" class="form-control" data-i18n-placeholder="config.proxy.urlPlaceholder" placeholder="例如: http://host.docker.internal:7890 或 socks5://host.docker.internal:1080">
+                    <small class="form-text" data-i18n="config.proxy.urlNote">支持 HTTP、HTTPS 和 SOCKS5 代理；Docker 容器中请使用 host.docker.internal 或宿主机局域网 IP，留空则不使用代理</small>
                 </div>
                 <div class="form-group pool-section">
                     <label data-i18n="config.proxy.enabledProviders">启用代理的提供商</label>
@@ -201,8 +201,8 @@
                 </div>
                 <div class="form-group">
                     <label for="tlsSidecarProxyUrl" data-i18n="config.proxy.tlsSidecarProxyUrl">Sidecar 上游代理</label>
-                    <input type="text" id="tlsSidecarProxyUrl" class="form-control" data-i18n-placeholder="config.proxy.urlPlaceholder" placeholder="例如: http://127.0.0.1:7890">
-                    <small class="form-text" data-i18n="config.proxy.urlNote">TLS Sidecar 专用上游代理，留空则不使用代理</small>
+                    <input type="text" id="tlsSidecarProxyUrl" class="form-control" data-i18n-placeholder="config.proxy.urlPlaceholder" placeholder="例如: http://host.docker.internal:7890">
+                    <small class="form-text" data-i18n="config.proxy.urlNote">TLS Sidecar 专用上游代理；Docker 容器中请使用 host.docker.internal 或宿主机局域网 IP，留空则不使用代理</small>
                 </div>
                 <div class="form-group pool-section">
                     <label data-i18n="config.proxy.tlsSidecarEnabledProviders">启用 TLS Sidecar 的提供商</label>
