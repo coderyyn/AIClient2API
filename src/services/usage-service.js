@@ -775,6 +775,91 @@ function extractCodexTokenUsage(usageData) {
     return { daily, weekly, total };
 }
 
+function makeCodexTokenBlock(totalTokens) {
+    const parsed = numberOrNull(totalTokens);
+    if (parsed === null) return null;
+    return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        totalTokens: parsed,
+        limitTokens: null,
+        remainingTokens: null,
+        resetAt: null
+    };
+}
+
+function dateKeyFromOffset(offsetDays = 0) {
+    const date = new Date();
+    date.setUTCHours(12, 0, 0, 0);
+    date.setUTCDate(date.getUTCDate() + offsetDays);
+    return date.toISOString().slice(0, 10);
+}
+
+function getCodexTokenUsageProfile(usageData) {
+    const candidates = [
+        usageData?.token_usage_profile,
+        usageData?.tokenUsageProfile,
+        usageData?.profile,
+        usageData?.token_profile,
+        usageData?.tokenProfile,
+        usageData?.stats ? usageData : null
+    ];
+
+    return candidates.find(candidate => candidate?.stats && typeof candidate.stats === 'object') || null;
+}
+
+function extractCodexProfileTokenUsage(usageData) {
+    const profile = getCodexTokenUsageProfile(usageData);
+    const stats = profile?.stats;
+    if (!stats) return null;
+
+    const buckets = Array.isArray(stats.daily_usage_buckets)
+        ? stats.daily_usage_buckets
+        : (Array.isArray(stats.dailyUsageBuckets) ? stats.dailyUsageBuckets : []);
+    const todayKey = dateKeyFromOffset(0);
+    const weekKeys = new Set(Array.from({ length: 7 }, (_, index) => dateKeyFromOffset(-index)));
+
+    let dailyTokens = null;
+    let weeklyTokens = null;
+    if (buckets.length > 0) {
+        dailyTokens = 0;
+        weeklyTokens = 0;
+        for (const bucket of buckets) {
+            const startDate = bucket?.start_date || bucket?.startDate || bucket?.date;
+            const tokens = numberOrNull(bucket?.tokens);
+            if (!startDate || tokens === null) continue;
+
+            if (startDate === todayKey) {
+                dailyTokens += tokens;
+            }
+            if (weekKeys.has(startDate)) {
+                weeklyTokens += tokens;
+            }
+        }
+    }
+
+    const totalTokens = numberOrNull(stats.lifetime_tokens ?? stats.lifetimeTokens);
+    const daily = dailyTokens !== null ? makeCodexTokenBlock(dailyTokens) : null;
+    const weekly = weeklyTokens !== null ? makeCodexTokenBlock(weeklyTokens) : null;
+    const total = totalTokens !== null ? makeCodexTokenBlock(totalTokens) : null;
+
+    if (!daily && !weekly && !total) return null;
+    return { daily, weekly, total };
+}
+
+function mergeCodexTokenUsage(primary, fallback) {
+    if (!primary) return fallback;
+    if (!fallback) return primary;
+
+    const merged = {
+        daily: primary.daily || fallback.daily,
+        weekly: primary.weekly || fallback.weekly,
+        total: primary.total || fallback.total
+    };
+    return (merged.daily || merged.weekly || merged.total) ? merged : null;
+}
+
 function buildCodexTokenUsageItem(id, label, block) {
     if (!block) return null;
     const limit = block.limitTokens ?? null;
@@ -850,7 +935,11 @@ export function formatCodexUsage(usageData) {
     }
 
     const plan = usageData.plan_type || usageData.planType || 'FREE';
-    const tokenUsage = extractCodexTokenUsage(usageData);
+    const tokenUsageProfile = getCodexTokenUsageProfile(usageData);
+    const tokenUsage = mergeCodexTokenUsage(
+        extractCodexTokenUsage(usageData),
+        extractCodexProfileTokenUsage(usageData)
+    );
     if (tokenUsage) {
         [
             buildCodexTokenUsageItem('daily_token_usage', 'Daily Tokens', tokenUsage.daily),
@@ -868,6 +957,7 @@ export function formatCodexUsage(usageData) {
             planClass: getPlanClass(plan),
             unit: 'percent',
             tokenUsage,
+            tokenUsageProfile,
             tokenUsageAvailable: Boolean(tokenUsage),
             tokenUsageUnavailableReason: tokenUsage ? null : 'official_usage_token_fields_missing'
         },

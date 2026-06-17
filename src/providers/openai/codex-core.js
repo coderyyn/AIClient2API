@@ -970,6 +970,30 @@ export class CodexApiService {
         }
     }
 
+    buildUsageHeaders() {
+        return {
+            'user-agent': `codex-tui/${CODEX_VERSION} (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; ${CODEX_VERSION})`,
+            'authorization': `Bearer ${this.accessToken}`,
+            'chatgpt-account-id': this.accountId,
+            'accept': '*/*',
+            'host': 'chatgpt.com',
+            'Connection': 'close'
+        };
+    }
+
+    async requestCodexUsageJson(url, headers) {
+        const axiosRequestConfig = {
+            method: 'get',
+            url,
+            headers,
+            timeout: 30000
+        };
+        this._applySidecar(axiosRequestConfig);
+
+        const response = await axios.request(axiosRequestConfig);
+        return response.data;
+    }
+
     /**
      * 获取使用限制信息（返回 API 原始数据）
      * @returns {Promise<Object>} 原始响应数据
@@ -981,30 +1005,23 @@ export class CodexApiService {
 
         try {
             const url = 'https://chatgpt.com/backend-api/wham/usage';
-            const headers = {
-                'user-agent': `codex-tui/${CODEX_VERSION} (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; ${CODEX_VERSION})`,
-                'authorization': `Bearer ${this.accessToken}`,
-                'chatgpt-account-id': this.accountId,
-                'accept': '*/*',
-                'host': 'chatgpt.com',
-                'Connection': 'close'
-            };
+            const profileUrl = 'https://chatgpt.com/backend-api/wham/profiles/me';
+            const headers = this.buildUsageHeaders();
+            const usageData = await this.requestCodexUsageJson(url, headers);
 
-            const config = {
-                headers,
-                timeout: 30000
-            };
+            let tokenUsageProfile = null;
+            try {
+                tokenUsageProfile = await this.requestCodexUsageJson(profileUrl, headers);
+            } catch (profileError) {
+                if (profileError.response?.status === 401) {
+                    throw profileError;
+                }
+                logger.warn('[Codex] Failed to get token usage profile:', profileError.message);
+            }
 
-            const axiosRequestConfig = {
-                method: 'get',
-                url,
-                ...config
-            };
-            this._applySidecar(axiosRequestConfig);
-
-            const response = await axios.request(axiosRequestConfig);
             return {
-                ...response.data,
+                ...usageData,
+                token_usage_profile: tokenUsageProfile,
                 account: this.email
             };
         } catch (error) {

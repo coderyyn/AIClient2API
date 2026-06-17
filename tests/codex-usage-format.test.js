@@ -10,6 +10,13 @@ jest.mock('../src/providers/adapter.js', () => ({
 }));
 
 describe('Codex usage formatting', () => {
+    function dateKey(offsetDays = 0) {
+        const date = new Date();
+        date.setHours(12, 0, 0, 0);
+        date.setDate(date.getDate() + offsetDays);
+        return date.toISOString().slice(0, 10);
+    }
+
     test('extracts daily weekly and cumulative token usage from official usage payload', () => {
         const formatted = formatCodexUsage({
             account: 'codex@example.com',
@@ -67,5 +74,39 @@ describe('Codex usage formatting', () => {
         expect(formatted.summary.tokenUsageUnavailableReason).toBe('official_usage_token_fields_missing');
         expect(formatted.items.map(item => item.id)).not.toContain('weekly_token_usage');
         expect(formatted.items.map(item => item.id)).not.toContain('total_token_usage');
+    });
+
+    test('extracts account token usage from Codex CLI profile payload', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 25, reset_at: 1780000000 },
+                secondary_window: { used_percent: 60, reset_at: 1780500000 }
+            },
+            token_usage_profile: {
+                stats: {
+                    lifetime_tokens: 123456,
+                    daily_usage_buckets: [
+                        { start_date: dateKey(), tokens: 1200 },
+                        { start_date: dateKey(-1), tokens: 800 },
+                        { start_date: dateKey(-6), tokens: 600 },
+                        { start_date: dateKey(-8), tokens: 9000 }
+                    ]
+                }
+            }
+        });
+
+        expect(formatted.summary.tokenUsage).toMatchObject({
+            daily: { totalTokens: 1200 },
+            weekly: { totalTokens: 2600 },
+            total: { totalTokens: 123456 }
+        });
+        expect(formatted.summary.tokenUsageProfile.stats.lifetime_tokens).toBe(123456);
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'daily_token_usage', used: 1200, unit: 'tokens' }),
+            expect.objectContaining({ id: 'weekly_token_usage', used: 2600, unit: 'tokens' }),
+            expect.objectContaining({ id: 'total_token_usage', used: 123456, unit: 'tokens' })
+        ]));
     });
 });

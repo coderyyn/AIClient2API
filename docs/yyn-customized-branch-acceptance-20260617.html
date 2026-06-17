@@ -239,10 +239,10 @@
     <header>
       <div>
         <h1>AIClient2API 定制分支人工验收</h1>
-        <p class="subtle">范围：提供商池账号可见性、Codex 认证失效健康标记、真实本地大模型接口请求。</p>
+        <p class="subtle">范围：提供商池账号可见性、Codex 认证失效健康标记、真实本地接口请求、Codex CLI 同源用量查询。</p>
       </div>
       <div class="stamp">
-        <div>2026-06-17 01:35 CST</div>
+        <div>2026-06-17 10:34 CST</div>
         <div><code>yyn/customized-branch</code></div>
       </div>
     </header>
@@ -259,14 +259,14 @@
         <div class="note"><code>/v1/models</code> 成功</div>
       </div>
       <div class="metric">
-        <div class="label">真实 Chat 请求</div>
-        <div class="value">401</div>
-        <div class="note">上游 OAuth 已失效</div>
+        <div class="label">Codex 用量查询</div>
+        <div class="value">1/1</div>
+        <div class="note"><code>openai-codex-oauth</code> 刷新成功</div>
       </div>
       <div class="metric">
-        <div class="label">请求后健康状态</div>
-        <div class="value">0/1</div>
-        <div class="note">立即标记不健康</div>
+        <div class="label">Token 明细</div>
+        <div class="value">3 项</div>
+        <div class="note">今日、近 7 天、累计</div>
       </div>
     </section>
 
@@ -288,10 +288,17 @@
           </div>
         </div>
         <div class="item">
+          <div class="key">CLI 同源 token usage</div>
+          <div class="value">
+            <span class="pill ok">已修复</span>
+            <p class="subtle">Codex CLI 的 <code>/usage</code> 会读取 <code>wham/profiles/me</code> 中的 <code>daily_usage_buckets</code>。后端现在会同时查询 <code>wham/usage</code> 和 <code>wham/profiles/me</code>，并在用量查询里展示今日、近 7 天、累计 token。</p>
+          </div>
+        </div>
+        <div class="item">
           <div class="key">当前账号状态</div>
           <div class="value">
-            <span class="pill warn">需要重新授权</span>
-            <p class="subtle">本地 API 路由成功，唯一 Codex OAuth 账号真实请求返回 token invalidated。重新授权后再验内容生成成功。</p>
+            <span class="pill ok">用量查询成功</span>
+            <p class="subtle">本地容器真实请求 <code>/api/usage/openai-codex-oauth?refresh=true</code> 成功，唯一启用账号返回 5h/周额度与 token 明细。历史 Chat 请求的凭据失效记录仍保留在下方验证表中。</p>
           </div>
         </div>
       </section>
@@ -304,7 +311,7 @@
         </div>
         <div class="item">
           <div class="key">镜像</div>
-          <div class="value"><code>aiclient2api:customized-branch-20260616</code></div>
+          <div class="value"><code>aiclient2api:customized-branch-20260617-codex-profile-usage</code></div>
         </div>
         <div class="item">
           <div class="key">服务</div>
@@ -359,6 +366,21 @@
             <td><code>/v1/chat/completions</code> 返回 <code>401 authentication_error</code>，错误类别为 <code>token_invalidated</code>。</td>
           </tr>
           <tr>
+            <td>Codex CLI profile endpoint</td>
+            <td><span class="pill ok">通过</span></td>
+            <td>官方 Codex CLI 源码确认 <code>/usage</code> 读取 <code>https://chatgpt.com/backend-api/wham/profiles/me</code>。</td>
+          </tr>
+          <tr>
+            <td>Codex token usage 格式化</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>tests/codex-usage-format.test.js</code> 覆盖 <code>daily_usage_buckets</code> 到今日、近 7 天、累计 token 的转换。</td>
+          </tr>
+          <tr>
+            <td>真实 Codex 用量查询</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>/api/usage/openai-codex-oauth?refresh=true</code> 返回 <code>primary_window</code>、<code>secondary_window</code>、<code>daily_token_usage</code>、<code>weekly_token_usage</code>、<code>total_token_usage</code>。</td>
+          </tr>
+          <tr>
             <td>管理页 DOM 验证</td>
             <td><span class="pill ok">通过</span></td>
             <td>Codex 管理弹窗 <code>providerRows=1</code>，总账户 <code>1</code>，健康账户 <code>0</code>。</td>
@@ -372,11 +394,12 @@
       <ul>
         <li>打开 <code>http://localhost:3000/#providers</code>，确认 OpenAI Codex OAuth 显示 <code>0/1</code>。</li>
         <li>点击 OpenAI Codex OAuth 分组，确认弹窗里总账户数为 <code>1</code>，并能看到 1 条账号行。</li>
-        <li>该账号当前应显示为异常或不健康；这不是前端丢账号，而是上游 OAuth token 已失效。</li>
+        <li>打开用量查询，选择或刷新 Codex，确认出现 <code>Daily Tokens</code>、<code>Weekly Tokens</code>、<code>Total Tokens</code> 三个 token 明细项。</li>
+        <li>该账号若在提供商池仍显示异常或不健康，说明内容生成链路曾触发过上游 OAuth 失效；这不影响本次用量查询修复的验收。</li>
         <li>重新授权 Codex 账号后，再用模型测试或 <code>/v1/chat/completions</code> 做内容生成验收。</li>
       </ul>
       <div class="callout">
-        <strong>当前唯一阻塞：</strong>真实 Codex OAuth 凭据需要重新登录/授权。代码侧已经能显示账号、识别失效并更新健康状态。
+        <strong>本次追加结论：</strong>用量查询现在已接入 Codex CLI 同源 token profile；5h/周额度百分比仍来自 <code>wham/usage</code>，今日、近 7 天、累计 token 来自 <code>wham/profiles/me</code>。
       </div>
     </section>
 
