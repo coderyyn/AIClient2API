@@ -867,7 +867,9 @@ export function formatCodexUsage(usageData) {
             plan,
             planClass: getPlanClass(plan),
             unit: 'percent',
-            tokenUsage
+            tokenUsage,
+            tokenUsageAvailable: Boolean(tokenUsage),
+            tokenUsageUnavailableReason: tokenUsage ? null : 'official_usage_token_fields_missing'
         },
         user: { 
             email: usageData.account || null

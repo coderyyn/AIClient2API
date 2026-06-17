@@ -138,7 +138,7 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
             value = parseInt(value || '0', 10);
         } else if (key === 'providerWeight') {
             value = Number(value || '1');
-        } else if (key === 'codexMax5hTokens' || key === 'codexMaxWeeklyTokens') {
+        } else if (key === 'codexMax5hTokens' || key === 'codexMaxWeeklyTokens' || key === 'codexMax5hPercent' || key === 'codexMaxWeeklyPercent') {
             value = Number(value || '0');
         }
         providerConfig[key] = value;
@@ -1847,7 +1847,7 @@ async function addProvider(providerType) {
     allFields.forEach(field => {
         const element = document.getElementById(`new${field.id}`);
         if (element) {
-            if (field.id === 'codexMax5hTokens' || field.id === 'codexMaxWeeklyTokens') {
+            if (field.id === 'codexMax5hTokens' || field.id === 'codexMaxWeeklyTokens' || field.id === 'codexMax5hPercent' || field.id === 'codexMaxWeeklyPercent') {
                 providerConfig[field.id] = Number(element.value || '0');
             } else {
                 providerConfig[field.id] = element.value || '';

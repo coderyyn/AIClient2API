@@ -51,4 +51,21 @@ describe('Codex usage formatting', () => {
             expect.objectContaining({ id: 'total_token_usage', label: 'Total Tokens', used: 60000, unit: 'tokens' })
         ]));
     });
+
+    test('marks token usage unavailable when official Codex payload only returns quota windows', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 25, reset_at: 1780000000 },
+                secondary_window: { used_percent: 60, reset_at: 1780500000 }
+            }
+        });
+
+        expect(formatted.summary.tokenUsage).toBeNull();
+        expect(formatted.summary.tokenUsageAvailable).toBe(false);
+        expect(formatted.summary.tokenUsageUnavailableReason).toBe('official_usage_token_fields_missing');
+        expect(formatted.items.map(item => item.id)).not.toContain('weekly_token_usage');
+        expect(formatted.items.map(item => item.id)).not.toContain('total_token_usage');
+    });
 });

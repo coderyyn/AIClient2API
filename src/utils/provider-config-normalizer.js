@@ -14,7 +14,9 @@ const PROVIDER_POSITIVE_NUMBER_CONFIG_FIELDS = [
 
 const PROVIDER_NON_NEGATIVE_NUMBER_CONFIG_FIELDS = [
     'codexMax5hTokens',
-    'codexMaxWeeklyTokens'
+    'codexMaxWeeklyTokens',
+    'codexMax5hPercent',
+    'codexMaxWeeklyPercent'
 ];
 
 function normalizeStringArrayConfigValue(value) {

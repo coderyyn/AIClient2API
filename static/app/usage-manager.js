@@ -475,6 +475,18 @@ function renderUsageDetails(usage) {
         container.appendChild(breakdown);
     }
 
+    if (summary?.tokenUsageAvailable === false) {
+        const tokenNote = document.createElement('div');
+        tokenNote.className = 'usage-section usage-token-note';
+        tokenNote.innerHTML = `
+            <div class="extra-usage-info official-token-note">
+                <i class="fas fa-info-circle"></i>
+                <span>${t('usage.card.codexTokenUsageUnavailable')}</span>
+            </div>
+        `;
+        container.appendChild(tokenNote);
+    }
+
     return container;
 }
 

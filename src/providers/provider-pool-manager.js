@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import path from 'path';
 import { getServiceAdapter, getRegisteredProviders, invalidateServiceAdapter } from './adapter.js';
 import crypto from 'crypto';
 import logger from '../utils/logger.js';
@@ -67,17 +68,133 @@ function getPositiveTokenLimit(value) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function getCodexTokenQuotaStatus(providerType, providerStatus) {
+const USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
+
+function getPositivePercentLimit(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return Math.min(parsed, 100);
+}
+
+function normalizePercentValue(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return null;
+    }
+    return Math.min(parsed, 100);
+}
+
+function isUsageCacheFresh(cache, maxAgeMs = USAGE_CACHE_TTL_MS) {
+    const cachedAt = Date.parse(cache?.timestamp || '');
+    return Number.isFinite(cachedAt) && Date.now() - cachedAt <= maxAgeMs;
+}
+
+function readUsageCacheSync() {
+    const usageCachePath = path.join(process.cwd(), 'configs', 'usage-cache.json');
+    try {
+        if (!fs.existsSync(usageCachePath)) return null;
+        const cache = JSON.parse(fs.readFileSync(usageCachePath, 'utf8'));
+        return isUsageCacheFresh(cache) ? cache : null;
+    } catch {
+        return null;
+    }
+}
+
+function getCachedCodexUsageForProvider(providerType, uuid, usageCache) {
+    if (!uuid || !usageCache?.providers) return null;
+
+    const providerCache = usageCache.providers[providerType]
+        || (isCodexProviderType(providerType) ? usageCache.providers[MODEL_PROVIDER.CODEX_API] : null);
+    const instances = Array.isArray(providerCache?.instances) ? providerCache.instances : [];
+    const matched = instances.find(instance => {
+        const instanceUuid = instance?.uuid || instance?.config?.uuid || instance?.providerUuid;
+        return instanceUuid === uuid;
+    });
+
+    return matched?.usage || null;
+}
+
+function getUsageItemPercent(usage, itemId) {
+    const items = Array.isArray(usage?.items) ? usage.items : [];
+    const item = items.find(entry => entry?.id === itemId || entry?.key === itemId || entry?.name === itemId);
+    if (!item) return null;
+    return normalizePercentValue(item.percent ?? item.usedPercent ?? item.used);
+}
+
+function getRawRateLimitWindowPercent(rawUsage, windowId) {
+    const rateLimit = rawUsage?.rate_limit || rawUsage?.rateLimit;
+    const windowAliases = windowId === 'primary_window'
+        ? ['primary_window', 'primaryWindow']
+        : ['secondary_window', 'secondaryWindow'];
+
+    for (const alias of windowAliases) {
+        const window = rateLimit?.[alias];
+        const percent = normalizePercentValue(window?.used_percent ?? window?.usedPercent ?? window?.percent ?? window?.used);
+        if (percent !== null) return percent;
+    }
+
+    return null;
+}
+
+function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId) {
+    const usage = getCachedCodexUsageForProvider(providerType, uuid, usageCache);
+    if (!usage) return null;
+
+    const itemPercent = getUsageItemPercent(usage, windowId);
+    if (itemPercent !== null) return itemPercent;
+
+    return getRawRateLimitWindowPercent(usage.raw || usage, windowId);
+}
+
+function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = null) {
     const config = providerStatus?.config || {};
     const max5hTokens = getPositiveTokenLimit(config.codexMax5hTokens);
     const maxWeeklyTokens = getPositiveTokenLimit(config.codexMaxWeeklyTokens);
-    if (!max5hTokens && !maxWeeklyTokens) {
+    const max5hPercent = getPositivePercentLimit(config.codexMax5hPercent);
+    const maxWeeklyPercent = getPositivePercentLimit(config.codexMaxWeeklyPercent);
+    if (!max5hTokens && !maxWeeklyTokens && !max5hPercent && !maxWeeklyPercent) {
         return { limited: false, exceeded: false };
     }
 
     const uuid = config.uuid || providerStatus?.uuid;
     if (!uuid) {
         return { limited: true, exceeded: false, reason: null };
+    }
+
+    const warnings = [];
+
+    if (max5hPercent) {
+        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'primary_window');
+        if (usagePercent === null) {
+            warnings.push('official 5h usage percent unavailable');
+        } else if (usagePercent >= max5hPercent) {
+            return {
+                limited: true,
+                exceeded: true,
+                reason: `5h usage quota reached (${usagePercent.toFixed(1)}%/${max5hPercent}%)`,
+                usagePercent
+            };
+        }
+    }
+
+    if (maxWeeklyPercent) {
+        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'secondary_window');
+        if (usagePercent === null) {
+            warnings.push('official weekly usage percent unavailable');
+        } else if (usagePercent >= maxWeeklyPercent) {
+            return {
+                limited: true,
+                exceeded: true,
+                reason: `weekly usage quota reached (${usagePercent.toFixed(1)}%/${maxWeeklyPercent}%)`,
+                usagePercent
+            };
+        }
+    }
+
+    if (!max5hTokens && !maxWeeklyTokens) {
+        return { limited: true, exceeded: false, reason: warnings.join('; ') || null };
     }
 
     try {
@@ -98,7 +215,7 @@ function getCodexTokenQuotaStatus(providerType, providerStatus) {
                 usage
             };
         }
-        return { limited: true, exceeded: false, usage };
+        return { limited: true, exceeded: false, usage, reason: warnings.join('; ') || null };
     } catch (error) {
         return { limited: true, exceeded: false, reason: `quota stats unavailable: ${error.message}` };
     }
@@ -1192,9 +1309,10 @@ export class ProviderPoolManager {
     _filterCodexProvidersByTokenQuota(providerType, providers) {
         let limitedCount = 0;
         const allowed = [];
+        const usageCache = readUsageCacheSync();
 
         for (const provider of providers) {
-            const quotaStatus = getCodexTokenQuotaStatus(providerType, provider);
+            const quotaStatus = getCodexTokenQuotaStatus(providerType, provider, usageCache);
             if (!quotaStatus.limited) {
                 allowed.push(provider);
                 continue;
@@ -1212,7 +1330,7 @@ export class ProviderPoolManager {
         }
 
         if (allowed.length === 0 && providers.length > 0 && limitedCount > 0) {
-            const error = new Error('All Codex providers exceeded configured token quotas');
+            const error = new Error('All Codex providers exceeded configured usage quotas');
             error.status = 429;
             error.code = 429;
             throw error;
