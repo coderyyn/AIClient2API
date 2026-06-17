@@ -53,9 +53,9 @@ describe('Codex usage formatting', () => {
             total: { totalTokens: 60000, cachedTokens: 20000 }
         });
         expect(formatted.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'daily_token_usage', label: 'Daily Tokens', used: 1200, unit: 'tokens', displayValue: '0.00M' }),
-            expect.objectContaining({ id: 'weekly_token_usage', label: 'Weekly Tokens', used: 9000, unit: 'tokens', displayValue: '0.01M' }),
-            expect.objectContaining({ id: 'total_token_usage', label: 'Total Tokens', used: 60000, unit: 'tokens', displayValue: '0.06M' })
+            expect.objectContaining({ id: 'daily_token_usage', label: 'Daily Tokens', used: 1200, unit: 'tokens', displayValue: '1.20k' }),
+            expect.objectContaining({ id: 'weekly_token_usage', label: 'Weekly Tokens', used: 9000, unit: 'tokens', displayValue: '9.00k' }),
+            expect.objectContaining({ id: 'total_token_usage', label: 'Total Tokens', used: 60000, unit: 'tokens', displayValue: '60.00k' })
         ]));
     });
 
@@ -104,9 +104,27 @@ describe('Codex usage formatting', () => {
         });
         expect(formatted.summary.tokenUsageProfile.stats.lifetime_tokens).toBe(123456);
         expect(formatted.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'daily_token_usage', used: 1200, unit: 'tokens', displayValue: '0.00M' }),
-            expect.objectContaining({ id: 'weekly_token_usage', used: 2600, unit: 'tokens', displayValue: '0.00M' }),
-            expect.objectContaining({ id: 'total_token_usage', used: 123456, unit: 'tokens', displayValue: '0.12M' })
+            expect.objectContaining({ id: 'daily_token_usage', used: 1200, unit: 'tokens', displayValue: '1.20k' }),
+            expect.objectContaining({ id: 'weekly_token_usage', used: 2600, unit: 'tokens', displayValue: '2.60k' }),
+            expect.objectContaining({ id: 'total_token_usage', used: 123456, unit: 'tokens', displayValue: '123.46k' })
+        ]));
+    });
+
+    test('formats large Codex token usage in billions', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            token_usage: {
+                daily: { total_tokens: 999000000 },
+                weekly: { total_tokens: 1000000000 },
+                total: { total_tokens: 7400433719 }
+            }
+        });
+
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'daily_token_usage', used: 999000000, displayValue: '999.00M' }),
+            expect.objectContaining({ id: 'weekly_token_usage', used: 1000000000, displayValue: '1.00B' }),
+            expect.objectContaining({ id: 'total_token_usage', used: 7400433719, displayValue: '7.40B' })
         ]));
     });
 

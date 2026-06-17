@@ -860,9 +860,13 @@ function mergeCodexTokenUsage(primary, fallback) {
     return (merged.daily || merged.weekly || merged.total) ? merged : null;
 }
 
-function formatTokensAsMillions(tokens) {
+function formatTokenCount(tokens) {
     const parsed = numberOrNull(tokens) ?? 0;
-    return `${(parsed / 1000000).toFixed(2)}M`;
+    const abs = Math.abs(parsed);
+    if (abs >= 1000000000) return `${(parsed / 1000000000).toFixed(2)}B`;
+    if (abs >= 1000000) return `${(parsed / 1000000).toFixed(2)}M`;
+    if (abs >= 1000) return `${(parsed / 1000).toFixed(2)}k`;
+    return `${Math.round(parsed)}`;
 }
 
 function buildCodexTokenUsageItem(id, label, block) {
@@ -876,7 +880,7 @@ function buildCodexTokenUsageItem(id, label, block) {
         limit,
         percent,
         unit: 'tokens',
-        displayValue: formatTokensAsMillions(block.totalTokens),
+        displayValue: formatTokenCount(block.totalTokens),
         status: getStatus(percent),
         resetAt: block.resetAt,
         cachedTokens: block.cachedTokens,
