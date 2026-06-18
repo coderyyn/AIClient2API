@@ -68,7 +68,7 @@ function getPositiveTokenLimit(value) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-const USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
+const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function getPositivePercentLimit(value) {
     const parsed = Number(value);

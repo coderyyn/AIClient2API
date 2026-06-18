@@ -32,10 +32,10 @@ afterEach(() => {
 });
 
 describe('usage cache TTL', () => {
-    test('returns fresh cached usage within the default 1 hour TTL', async () => {
+    test('returns fresh cached usage within the default 10 minute TTL', async () => {
         const now = new Date('2026-06-16T12:00:00.000Z');
         writeCache({
-            timestamp: '2026-06-16T11:30:00.000Z',
+            timestamp: '2026-06-16T11:50:00.000Z',
             providers: {
                 'openai-codex-oauth': { totalCount: 1 }
             }
@@ -50,10 +50,10 @@ describe('usage cache TTL', () => {
         });
     });
 
-    test('treats cached usage older than 1 hour as stale by default', async () => {
+    test('treats cached usage older than 10 minutes as stale by default', async () => {
         const now = new Date('2026-06-16T12:00:00.000Z');
         writeCache({
-            timestamp: '2026-06-16T10:59:59.999Z',
+            timestamp: '2026-06-16T11:49:59.999Z',
             providers: {
                 'openai-codex-oauth': { totalCount: 1 }
             }

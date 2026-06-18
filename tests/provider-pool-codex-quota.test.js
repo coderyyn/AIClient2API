@@ -191,7 +191,7 @@ describe('provider pool Codex token quota', () => {
     });
 
     test('does not skip Codex accounts based on stale official usage percent cache', async () => {
-        const staleTimestamp = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+        const staleTimestamp = new Date(Date.now() - (11 * 60 * 1000)).toISOString();
         writeCodexUsageCache([
             {
                 uuid: 'aaa-codex-over',
