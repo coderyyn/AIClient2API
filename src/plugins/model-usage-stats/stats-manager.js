@@ -13,6 +13,7 @@ const DEFAULT_CONFIG = {
 };
 const ACCOUNT_EVENT_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const ROLLING_5H_MS = 5 * 60 * 60 * 1000;
+const USAGE_CACHE_SNAPSHOT_TTL_MS = 1000;
 
 let configGetter = null;
 let statsStore = null;
@@ -25,6 +26,8 @@ let persistPromise = null;
 
 const rateManager = new RateManager(60); // 使用 60 秒滑动窗口，更平滑
 const pendingRequests = new Map();
+let usageCacheSnapshot = null;
+let usageCacheSnapshotLoadedAt = 0;
 
 function getTraceRequestId(requestId) {
     return requestId || 'N/A';
@@ -391,12 +394,23 @@ function toNumber(value) {
 }
 
 function readUsageCacheSnapshot() {
+    const now = Date.now();
+    if (now - usageCacheSnapshotLoadedAt < USAGE_CACHE_SNAPSHOT_TTL_MS) {
+        return usageCacheSnapshot;
+    }
+
+    usageCacheSnapshotLoadedAt = now;
     try {
-        if (!existsSync(USAGE_CACHE_FILE)) return null;
-        return JSON.parse(readFileSync(USAGE_CACHE_FILE, 'utf8'));
+        if (!existsSync(USAGE_CACHE_FILE)) {
+            usageCacheSnapshot = null;
+            return usageCacheSnapshot;
+        }
+        usageCacheSnapshot = JSON.parse(readFileSync(USAGE_CACHE_FILE, 'utf8'));
+        return usageCacheSnapshot;
     } catch (error) {
         logger.warn('[Request Audit] Failed to read usage cache:', error.message);
-        return null;
+        usageCacheSnapshot = null;
+        return usageCacheSnapshot;
     }
 }
 

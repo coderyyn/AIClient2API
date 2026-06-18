@@ -164,4 +164,65 @@ describe('model usage account statistics', () => {
         expect(logged).toContain('Total: 1120');
         expect(logged).toContain('Cached: 400');
     });
+
+    test('reuses usage cache snapshot for request audit logs within the short ttl window', async () => {
+        const configsDir = path.join(tempDir, 'configs');
+        const usageCachePath = path.join(configsDir, 'usage-cache.json');
+        fs.mkdirSync(configsDir, { recursive: true });
+        fs.writeFileSync(usageCachePath, JSON.stringify({
+            timestamp: new Date(Date.now() - 5000).toISOString(),
+            providers: {
+                'openai-codex-oauth': {
+                    providerType: 'openai-codex-oauth',
+                    instances: [{
+                        uuid: 'codex-account-a',
+                        name: 'US Account A',
+                        usage: {
+                            items: [
+                                { id: 'primary_window', label: 'Request Quota (5h)', percent: 73.5, unit: 'percent' }
+                            ]
+                        }
+                    }]
+                }
+            }
+        }), 'utf8');
+
+        const readSpy = jest.spyOn(fs, 'readFileSync');
+        const statsManager = await loadStatsManager();
+
+        for (const requestId of ['req-codex-audit-cache-1', 'req-codex-audit-cache-2']) {
+            statsManager.recordUnaryUsage({
+                requestId,
+                model: 'gpt-5.5',
+                provider: 'openai-codex-oauth',
+                providerUuid: 'codex-account-a',
+                providerName: 'US Account A',
+                nativeResponse: {
+                    usage: {
+                        prompt_tokens: 10,
+                        completion_tokens: 2,
+                        total_tokens: 12,
+                        prompt_tokens_details: {
+                            cached_tokens: 4
+                        }
+                    }
+                }
+            });
+
+            await statsManager.finalizeRequest({
+                requestId,
+                model: 'gpt-5.5',
+                provider: 'openai-codex-oauth',
+                providerUuid: 'codex-account-a',
+                providerName: 'US Account A',
+                isStream: false
+            });
+        }
+
+        const usageCacheReads = readSpy.mock.calls
+            .map(([filePath]) => String(filePath))
+            .filter(filePath => path.normalize(filePath) === path.normalize(usageCachePath));
+
+        expect(usageCacheReads).toHaveLength(1);
+    });
 });
