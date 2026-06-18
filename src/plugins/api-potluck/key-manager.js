@@ -223,62 +223,6 @@ function getRecentHistorySummary(usageHistory = {}, days = 7) {
     return summary;
 }
 
-function shiftDateKey(dateKey, deltaDays) {
-    const parts = String(dateKey || '').split('-').map(Number);
-    if (parts.length !== 3 || parts.some(part => !Number.isFinite(part))) return dateKey;
-    const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
-    date.setUTCDate(date.getUTCDate() + deltaDays);
-    return date.toISOString().split('T')[0];
-}
-
-function getUsageRangeDates(usageHistory = {}, range = 'total') {
-    const dates = Object.keys(usageHistory || {}).sort();
-    if (range === 'total') return dates;
-
-    const todayKey = getTodayDateString();
-    if (range === 'today') return dates.filter(date => date === todayKey);
-
-    const days = range === '30d' ? 30 : 7;
-    const cutoffKey = shiftDateKey(todayKey, -(days - 1));
-    return dates.filter(date => date >= cutoffKey && date <= todayKey);
-}
-
-function summarizeUsageHistoryForRange(usageHistory = {}, range = 'total') {
-    const dates = getUsageRangeDates(usageHistory, range);
-    const summary = createUsageBucket();
-    const providers = {};
-    const models = {};
-
-    for (const date of dates) {
-        const day = usageHistory[date] || {};
-        addUsage(summary, day.summary);
-
-        for (const [provider, usage] of Object.entries(day.providers || {})) {
-            providers[provider] = normalizeUsageBucket(providers[provider]);
-            addUsage(providers[provider], usage);
-        }
-
-        for (const [model, usage] of Object.entries(day.models || {})) {
-            models[model] = normalizeUsageBucket(models[model]);
-            addUsage(models[model], usage);
-        }
-    }
-
-    addCacheHitRatio(summary);
-    for (const usage of Object.values(providers)) addCacheHitRatio(usage);
-    for (const usage of Object.values(models)) addCacheHitRatio(usage);
-
-    return { dates, summary, providers, models };
-}
-
-function pickRecentUsageHistory(usageHistory = {}, days = 7) {
-    return Object.fromEntries(
-        Object.entries(usageHistory || {})
-            .sort(([a], [b]) => a.localeCompare(b))
-            .slice(-days)
-    );
-}
-
 function enrichKeyUsage(keyData) {
     const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
@@ -473,27 +417,6 @@ export async function listKeys() {
         });
     }
     return keys;
-}
-
-/**
- * 获取轻量 Key 列表，用于管理端首屏渲染
- */
-export async function listKeySummaries() {
-    const keys = await listKeys();
-    return keys.map(key => {
-        const usageHistory = key.usageHistory || {};
-        const { usageHistory: _usageHistory, ...summaryKey } = key;
-        return {
-            ...summaryKey,
-            recentUsageHistory: pickRecentUsageHistory(usageHistory, 7),
-            rangeSummaries: {
-                total: summarizeUsageHistoryForRange(usageHistory, 'total'),
-                '30d': summarizeUsageHistoryForRange(usageHistory, '30d'),
-                '7d': summarizeUsageHistoryForRange(usageHistory, '7d'),
-                today: summarizeUsageHistoryForRange(usageHistory, 'today')
-            }
-        };
-    });
 }
 
 /**
