@@ -163,4 +163,32 @@ describe('Codex usage formatting', () => {
             })
         ]));
     });
+
+    test('extracts available Codex rate limit reset credits from official usage payload', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 91, reset_at: 1780000000 },
+                secondary_window: { used_percent: 64, reset_at: 1780500000 }
+            },
+            rate_limit_reset_credits: {
+                available_count: 3
+            }
+        });
+
+        expect(formatted.summary.rateLimitResetCredits).toEqual({
+            availableCount: 3,
+            canReset: true
+        });
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'rate_limit_reset_credits',
+                label: 'Rate Limit Resets',
+                used: 3,
+                unit: 'count',
+                displayValue: '3 available'
+            })
+        ]));
+    });
 });

@@ -235,6 +235,80 @@ export async function refreshProviderUsage(providerType) {
     }
 }
 
+function getCodexResetAvailableCount(rateLimitResetCredits) {
+    const availableCount = Number(rateLimitResetCredits?.availableCount ?? 0);
+    return Number.isFinite(availableCount) ? availableCount : 0;
+}
+
+function canUseCodexRateLimitReset(rateLimitResetCredits) {
+    return Boolean(rateLimitResetCredits && (rateLimitResetCredits.canReset || getCodexResetAvailableCount(rateLimitResetCredits) > 0));
+}
+
+function confirmCodexRateLimitReset(displayName, availableCount) {
+    return window.confirm([
+        `Use one Codex rate-limit reset for ${displayName}?`,
+        `Available resets: ${availableCount}`,
+        'This contacts OpenAI and may consume one reset credit.'
+    ].join('\n'));
+}
+
+async function resetCodexRateLimit(providerType, uuid, displayName, button, availableCount) {
+    if (providerType !== 'openai-codex-oauth') return;
+    if (availableCount <= 0) {
+        showToast(t('common.warning'), 'No Codex rate-limit resets are available', 'warning');
+        return;
+    }
+    if (!confirmCodexRateLimitReset(displayName, availableCount)) return;
+
+    const redeemRequestId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const originalHtml = button?.innerHTML;
+
+    try {
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        const response = await fetch(`/api/usage/${providerType}/${encodeURIComponent(uuid)}/rate-limit-reset`, {
+            method: 'POST',
+            headers: {
+                ...getAuthHeaders(),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ redeemRequestId })
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const code = data.result?.code;
+        if (code === 'reset' || code === 'already_redeemed') {
+            showToast(t('common.success'), 'Codex usage windows reset', 'success');
+            await refreshSingleInstanceUsage(providerType, uuid, displayName);
+        } else if (code === 'nothing_to_reset') {
+            showToast(t('common.info'), 'Usage does not need a reset right now', 'info');
+        } else if (code === 'no_credit') {
+            showToast(t('common.warning'), 'No Codex rate-limit resets are available', 'warning');
+            await refreshSingleInstanceUsage(providerType, uuid, displayName);
+        } else {
+            showToast(t('common.info'), `Codex reset returned: ${code || 'unknown'}`, 'info');
+            await refreshSingleInstanceUsage(providerType, uuid, displayName);
+        }
+    } catch (error) {
+        console.error('重置 Codex 用量窗口失败:', error);
+        showToast(t('common.error'), error.message || t('common.requestFailed'), 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
+    }
+}
+
 /**
  * 更新单个提供商分组 (局部更新 DOM)
  */
@@ -367,6 +441,13 @@ function createInstanceUsageCard(instance, providerType) {
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
     const displayName = user.email || instance.name || instance.uuid;
+    const rateLimitResetCredits = summary.rateLimitResetCredits;
+    const showCodexReset = providerType === 'openai-codex-oauth' && rateLimitResetCredits;
+    const resetAvailableCount = getCodexResetAvailableCount(rateLimitResetCredits);
+    const canResetCodex = Boolean(showCodexReset && canUseCodexRateLimitReset(rateLimitResetCredits));
+    const resetButtonTitle = canResetCodex
+        ? `Use Codex rate-limit reset (${resetAvailableCount} available)`
+        : 'No Codex rate-limit resets available';
 
     // 使用后端返回的 planClass，如果缺失则兜底
     const planClass = summary.planClass || 'plan-default';
@@ -398,6 +479,7 @@ function createInstanceUsageCard(instance, providerType) {
                     <div class="instance-status-badges">
                         ${instance.configFilePath ? `<button class="btn-download-config" title="${t('usage.card.downloadConfig')}"><i class="fas fa-download"></i></button>` : ''}
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
+                        ${showCodexReset ? `<button type="button" class="btn-reset-codex-usage" title="${resetButtonTitle}" aria-label="${resetButtonTitle}" ${canResetCodex ? '' : 'disabled'}><i class="fas fa-rotate-left"></i></button>` : ''}
                         ${instance.isDisabled ? `<span class="badge badge-disabled">${t('usage.card.status.disabled')}</span>` : `<span class="badge ${instance.isHealthy ? 'badge-healthy' : 'badge-unhealthy'}">${t(instance.isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')}</span>`}
                     </div>
                 </div>
@@ -420,13 +502,19 @@ function createInstanceUsageCard(instance, providerType) {
         e.stopPropagation(); 
         refreshSingleInstanceUsage(providerType, instance.uuid, displayName); 
     };
-
     const contentArea = card.querySelector('.usage-instance-content');
     if (instance.error) {
         contentArea.innerHTML = `<div class="usage-error-message"><i class="fas fa-exclamation-triangle"></i> <span>${instance.error}</span></div>`;
     } else if (instance.usage) {
         contentArea.appendChild(renderUsageDetails(instance.usage));
     }
+
+    card.querySelectorAll('.btn-reset-codex-usage, .btn-reset-codex-usage-inline').forEach(resetButton => {
+        resetButton.onclick = (e) => {
+            e.stopPropagation();
+            resetCodexRateLimit(providerType, instance.uuid, displayName, resetButton, resetAvailableCount);
+        };
+    });
 
     return card;
 }
@@ -456,10 +544,41 @@ function renderUsageDetails(usage) {
         container.appendChild(total);
     }
 
-    if (items?.length > 0) {
+    if (summary?.rateLimitResetCredits) {
+        const credits = summary.rateLimitResetCredits;
+        const availableCount = getCodexResetAvailableCount(credits);
+        const canReset = canUseCodexRateLimitReset(credits);
+        const buttonTitle = canReset
+            ? `Use Codex rate-limit reset (${availableCount} available)`
+            : 'No Codex rate-limit resets available';
+        const resetInfo = document.createElement('div');
+        resetInfo.className = 'usage-section usage-reset-credits';
+        resetInfo.innerHTML = `
+            <div class="codex-reset-action-row">
+                <div class="codex-reset-meta">
+                    <span class="codex-reset-icon"><i class="fas fa-rotate-left"></i></span>
+                    <div class="codex-reset-copy">
+                        <span class="codex-reset-label">Rate-limit resets</span>
+                        <span class="codex-reset-count">${availableCount} available</span>
+                    </div>
+                </div>
+                <button type="button" class="btn-reset-codex-usage-inline" title="${buttonTitle}" aria-label="${buttonTitle}" ${canReset ? '' : 'disabled'}>
+                    <i class="fas fa-rotate-left"></i>
+                    <span>${canReset ? 'Use reset' : 'Unavailable'}</span>
+                </button>
+            </div>
+        `;
+        container.appendChild(resetInfo);
+    }
+
+    const visibleItems = summary?.rateLimitResetCredits
+        ? items?.filter(item => item.id !== 'rate_limit_reset_credits')
+        : items;
+
+    if (visibleItems?.length > 0) {
         const breakdown = document.createElement('div');
         breakdown.className = 'usage-section usage-breakdown-compact';
-        items.forEach(item => {
+        visibleItems.forEach(item => {
             const val = item.displayValue !== undefined && item.displayValue !== null
                 ? item.displayValue
                 : item.unit === 'percent'

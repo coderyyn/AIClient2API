@@ -4,7 +4,7 @@ import { serviceInstances, getServiceAdapter } from '../providers/adapter.js';
 import { usageService } from '../services/usage-service.js';
 import { readUsageCache, writeUsageCache, readProviderUsageCache, updateProviderUsageCache } from './usage-cache.js';
 import { PROVIDER_MAPPINGS } from '../utils/provider-utils.js';
-import { MODEL_PROVIDER } from '../utils/common.js';
+import { MODEL_PROVIDER, getRequestBody } from '../utils/common.js';
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
 
@@ -435,6 +435,86 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
         res.end(JSON.stringify({
             error: {
                 message: `Failed to get usage info for ${providerType}:${uuid}: ` + error.message
+            }
+        }));
+        return true;
+    }
+}
+
+export async function handlePostCodexRateLimitReset(req, res, currentConfig, providerPoolManager, providerType, uuid) {
+    try {
+        if (providerType !== MODEL_PROVIDER.CODEX_API) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: { message: 'Rate limit reset is only supported for Codex providers' }
+            }));
+            return true;
+        }
+
+        let body = {};
+        try {
+            body = await getRequestBody(req, { maxBytes: 1024 });
+        } catch (error) {
+            logger.warn('[Usage API] Failed to parse Codex reset request body, using generated redeem request id:', error.message);
+        }
+
+        const providers = loadProviderList(providerType, currentConfig, providerPoolManager);
+        const provider = providers.find(p => p.uuid === uuid);
+
+        if (!provider) {
+            throw new Error(`未找到指定的提供商实例: ${uuid}`);
+        }
+        if (provider.isDisabled) {
+            throw new Error('Provider is disabled');
+        }
+
+        const providerKey = providerType + (provider.uuid || '');
+        let adapter = serviceInstances[providerKey];
+        if (!adapter) {
+            const serviceConfig = {
+                ...CONFIG,
+                ...provider,
+                MODEL_PROVIDER: providerType
+            };
+            adapter = getServiceAdapter(serviceConfig);
+        }
+
+        const service = adapter?.codexApiService || adapter;
+        if (!service || typeof service.consumeRateLimitResetCredit !== 'function') {
+            throw new Error('Codex rate limit reset is not supported by this adapter');
+        }
+
+        const redeemRequestId = typeof body.redeemRequestId === 'string'
+            ? body.redeemRequestId
+            : (typeof body.redeem_request_id === 'string' ? body.redeem_request_id : null);
+        const result = await service.consumeRateLimitResetCredit(redeemRequestId);
+
+        let refreshedUsage = null;
+        if (result?.code === 'reset' || result?.code === 'already_redeemed') {
+            try {
+                refreshedUsage = await usageService.getFormattedUsage(providerType, provider.uuid);
+            } catch (refreshError) {
+                logger.warn(`[Usage API] Failed to refresh Codex usage after reset for ${providerType}:${uuid}:`, refreshError.message);
+            }
+        }
+
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+        });
+        res.end(JSON.stringify({
+            success: true,
+            result,
+            usage: refreshedUsage,
+            serverTime: new Date().toISOString()
+        }));
+        return true;
+    } catch (error) {
+        logger.error(`[UI API] Failed to reset Codex rate limit for ${providerType}:${uuid}:`, error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: {
+                message: `Failed to reset Codex rate limit for ${providerType}:${uuid}: ` + error.message
             }
         }));
         return true;

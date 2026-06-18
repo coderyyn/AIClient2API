@@ -949,6 +949,17 @@ function buildAdditionalCodexRateLimitItems(usageData) {
     return items;
 }
 
+function extractCodexRateLimitResetCredits(usageData) {
+    const credits = usageData?.rate_limit_reset_credits || usageData?.rateLimitResetCredits;
+    const availableCount = numberOrNull(credits?.available_count ?? credits?.availableCount);
+    if (availableCount === null) return null;
+
+    return {
+        availableCount,
+        canReset: availableCount > 0
+    };
+}
+
 /**
  * 格式化 Codex 用量
  */
@@ -1019,12 +1030,25 @@ export function formatCodexUsage(usageData) {
         extractCodexTokenUsage(usageData),
         extractCodexProfileTokenUsage(usageData)
     );
+    const rateLimitResetCredits = extractCodexRateLimitResetCredits(usageData);
     if (tokenUsage) {
         [
             buildCodexTokenUsageItem('daily_token_usage', 'Daily Tokens', tokenUsage.daily),
             buildCodexTokenUsageItem('weekly_token_usage', 'Weekly Tokens', tokenUsage.weekly),
             buildCodexTokenUsageItem('total_token_usage', 'Total Tokens', tokenUsage.total)
         ].filter(Boolean).forEach(item => items.push(item));
+    }
+    if (rateLimitResetCredits) {
+        items.push({
+            id: 'rate_limit_reset_credits',
+            label: 'Rate Limit Resets',
+            used: rateLimitResetCredits.availableCount,
+            limit: null,
+            percent: 0,
+            unit: 'count',
+            status: rateLimitResetCredits.canReset ? 'normal' : 'warning',
+            displayValue: `${rateLimitResetCredits.availableCount} available`
+        });
     }
 
     return {
@@ -1038,7 +1062,8 @@ export function formatCodexUsage(usageData) {
             tokenUsage,
             tokenUsageProfile,
             tokenUsageAvailable: Boolean(tokenUsage),
-            tokenUsageUnavailableReason: tokenUsage ? null : 'official_usage_token_fields_missing'
+            tokenUsageUnavailableReason: tokenUsage ? null : 'official_usage_token_fields_missing',
+            rateLimitResetCredits
         },
         user: { 
             email: usageData.account || null

@@ -331,6 +331,13 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await usageApi.handleGetSupportedProviders(req, res);
     }
 
+    const codexRateLimitResetMatch = pathParam.match(/^\/api\/usage\/(openai-codex-oauth)\/([^\/]+)\/rate-limit-reset$/);
+    if (method === 'POST' && codexRateLimitResetMatch) {
+        const providerType = decodeURIComponent(codexRateLimitResetMatch[1]);
+        const providerUuid = decodeURIComponent(codexRateLimitResetMatch[2]);
+        return await usageApi.handlePostCodexRateLimitReset(req, res, currentConfig, providerPoolManager, providerType, providerUuid);
+    }
+
     // Get usage limits for a specific provider type
     const usageProviderMatch = pathParam.match(/^\/api\/usage\/([^\/]+)$/);
     if (method === 'GET' && usageProviderMatch) {

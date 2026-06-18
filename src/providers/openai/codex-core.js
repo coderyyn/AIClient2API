@@ -993,6 +993,23 @@ export class CodexApiService {
         return response.data;
     }
 
+    async postCodexUsageJson(url, headers, data) {
+        const axiosRequestConfig = {
+            method: 'post',
+            url,
+            headers: {
+                ...headers,
+                'content-type': 'application/json'
+            },
+            data,
+            timeout: 30000
+        };
+        this._applySidecar(axiosRequestConfig);
+
+        const response = await axios.request(axiosRequestConfig);
+        return response.data;
+    }
+
     /**
      * 获取使用限制信息（返回 API 原始数据）
      * @returns {Promise<Object>} 原始响应数据
@@ -1033,6 +1050,33 @@ export class CodexApiService {
             }
 
             logger.error('[Codex] Failed to get usage limits:', error.message);
+            throw error;
+        }
+    }
+
+    async consumeRateLimitResetCredit(redeemRequestId = null) {
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        const requestId = redeemRequestId || crypto.randomUUID();
+
+        try {
+            const url = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume';
+            const headers = this.buildUsageHeaders();
+            return await this.postCodexUsageJson(url, headers, {
+                redeem_request_id: requestId
+            });
+        } catch (error) {
+            if (error.response?.status === 401) {
+                logger.info('[Codex] Received 401 during consumeRateLimitResetCredit. Triggering background refresh...');
+                this.triggerBackgroundRefresh();
+                error.credentialMarkedUnhealthy = true;
+                error.shouldSwitchCredential = true;
+                error.skipErrorCount = true;
+            }
+
+            logger.error('[Codex] Failed to consume rate limit reset credit:', error.message);
             throw error;
         }
     }
