@@ -31,4 +31,17 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('范围内服务商');
         expect(source).toContain('范围内模型');
     });
+
+    test('admin dashboard uses lightweight first paint and lazy key details', () => {
+        const source = loadPotluckSource();
+
+        expect(source).not.toContain('cdnjs.cloudflare.com/ajax/libs/font-awesome');
+        expect(source).toContain('const KEYS_PAGE_SIZE = 20');
+        expect(source).toContain('id="keysPagination"');
+        expect(source).toContain('function renderCurrentKeysPage()');
+        expect(source).toContain('window.requestAnimationFrame');
+        expect(source).toContain('key.rangeSummaries?.[currentUsageRange]');
+        expect(source).toContain('key.recentUsageHistory || key.usageHistory');
+        expect(source).toContain("apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}`)");
+    });
 });

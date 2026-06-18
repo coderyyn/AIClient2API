@@ -5,7 +5,7 @@
 
 import {
     createKey,
-    listKeys,
+    listKeySummaries,
     getKey,
     deleteKey,
     updateKeyLimit,
@@ -123,7 +123,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
 
         // GET /api/potluck/keys - 获取所有 Key 列表
         if (method === 'GET' && path === '/api/potluck/keys') {
-            const keys = await listKeys();
+            const keys = await listKeySummaries();
             const stats = await getStats();
             sendJson(res, 200, { 
                 success: true, 

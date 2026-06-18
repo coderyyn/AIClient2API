@@ -59,4 +59,40 @@ describe('api potluck key usage summary', () => {
             cacheHitRatio: 0.4
         });
     });
+
+    test('listKeySummaries omits full history while preserving card metrics and getKey keeps details', async () => {
+        const { createKey, incrementUsage, listKeySummaries, getKey } = await loadKeyManager();
+
+        const key = await createKey('Summary Key', 100);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 2,
+            promptTokens: 200,
+            completionTokens: 50,
+            totalTokens: 250,
+            cachedTokens: 80
+        });
+
+        const [summary] = await listKeySummaries();
+        const detail = await getKey(key.id);
+
+        expect(summary).toMatchObject({
+            id: key.id,
+            name: 'Summary Key',
+            todayUsage: 2,
+            totalUsage: 2,
+            todayTotalTokens: 250,
+            totalTokens: 250,
+            weeklyTotalTokens: 250,
+            recentUsageHistory: expect.any(Object),
+            rangeSummaries: expect.objectContaining({
+                total: expect.objectContaining({ summary: expect.objectContaining({ totalTokens: 250 }) }),
+                '7d': expect.objectContaining({ summary: expect.objectContaining({ totalTokens: 250 }) }),
+                today: expect.objectContaining({ summary: expect.objectContaining({ totalTokens: 250 }) })
+            })
+        });
+        expect(summary).not.toHaveProperty('usageHistory');
+        expect(Object.keys(summary.recentUsageHistory)).toHaveLength(1);
+        expect(detail.usageHistory).toBeDefined();
+        expect(Object.keys(detail.usageHistory)).toHaveLength(1);
+    });
 });
