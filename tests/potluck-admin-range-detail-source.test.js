@@ -41,7 +41,6 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function renderCurrentKeysPage()');
         expect(source).toContain('window.requestAnimationFrame');
         expect(source).toContain('key.rangeSummaries?.[currentUsageRange]');
-        expect(source).toContain('rangeSummary.topProviders || rangeSummary.providers || {}');
         expect(source).toContain('key.recentUsageHistory || key.usageHistory');
         expect(source).toContain("apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}`)");
     });

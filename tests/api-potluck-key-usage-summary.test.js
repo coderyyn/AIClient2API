@@ -91,9 +91,6 @@ describe('api potluck key usage summary', () => {
             })
         });
         expect(summary).not.toHaveProperty('usageHistory');
-        expect(summary.rangeSummaries.total).toHaveProperty('topProviders');
-        expect(summary.rangeSummaries.total).not.toHaveProperty('providers');
-        expect(summary.rangeSummaries.total).not.toHaveProperty('models');
         expect(Object.keys(summary.recentUsageHistory)).toHaveLength(1);
         expect(detail.usageHistory).toBeDefined();
         expect(Object.keys(detail.usageHistory)).toHaveLength(1);

@@ -1611,7 +1611,7 @@
                 const rangeSummary = key.rangeSummaries?.[currentUsageRange] || summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
                 const rangeMetrics = getKeyRangeMetrics(key, currentUsageRange);
                 const rangeLabel = getUsageRangeLabel(currentUsageRange);
-                const topProviders = Object.entries(rangeSummary.topProviders || rangeSummary.providers || {})
+                const topProviders = Object.entries(rangeSummary.providers)
                     .map(([name, usage]) => [name, usageTokens(usage)])
                     .sort((a, b) => b[1] - a[1])
                     .slice(0, 3);
