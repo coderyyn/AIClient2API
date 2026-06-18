@@ -7,6 +7,7 @@ import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
 
 const STATS_STORE_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
+const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
 const DEFAULT_CONFIG = {
     persistInterval: 5000
 };
@@ -389,6 +390,81 @@ function toNumber(value) {
     return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
+function readUsageCacheSnapshot() {
+    try {
+        if (!existsSync(USAGE_CACHE_FILE)) return null;
+        return JSON.parse(readFileSync(USAGE_CACHE_FILE, 'utf8'));
+    } catch (error) {
+        logger.warn('[Request Audit] Failed to read usage cache:', error.message);
+        return null;
+    }
+}
+
+function getPercentFromUsageItem(usage, id, label) {
+    const items = Array.isArray(usage?.items) ? usage.items : [];
+    const item = items.find(entry => entry?.id === id || entry?.key === id || entry?.name === id || entry?.label === label);
+    const percent = Number(item?.percent ?? item?.usedPercent ?? item?.used);
+    return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) : null;
+}
+
+function getPercentFromRateLimitWindow(usage, windowKey) {
+    const rateLimit = usage?.raw?.rate_limit || usage?.raw?.rateLimit || usage?.rate_limit || usage?.rateLimit;
+    const windowData = rateLimit?.[windowKey] || rateLimit?.[windowKey.replace('_', '')];
+    const percent = Number(windowData?.used_percent ?? windowData?.usedPercent ?? windowData?.percent ?? windowData?.used);
+    return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) : null;
+}
+
+function formatPercent(value) {
+    if (!Number.isFinite(Number(value))) return 'unavailable';
+    const rounded = Math.round(Number(value) * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatUsageWindow(label, usedPercent) {
+    if (usedPercent === null) {
+        return `${label}: unavailable`;
+    }
+    const remainingPercent = Math.max(0, 100 - usedPercent);
+    return `${label}: ${formatPercent(usedPercent)}% used/${formatPercent(remainingPercent)}% remaining`;
+}
+
+function getAccountUsageSnapshot(provider, providerUuid) {
+    if (!provider || !providerUuid) {
+        return {
+            cacheAgeMs: null,
+            fiveHourPercent: null,
+            weeklyPercent: null
+        };
+    }
+
+    const cache = readUsageCacheSnapshot();
+    if (!cache?.providers) {
+        return {
+            cacheAgeMs: null,
+            fiveHourPercent: null,
+            weeklyPercent: null
+        };
+    }
+
+    const providerCache = cache.providers[provider];
+    const instances = Array.isArray(providerCache?.instances) ? providerCache.instances : [];
+    const matched = instances.find(instance => {
+        const uuid = instance?.uuid || instance?.providerUuid || instance?.config?.uuid;
+        return uuid === providerUuid;
+    });
+    const usage = matched?.usage || null;
+    const cacheTimestampMs = Date.parse(cache.timestamp || '');
+    const cacheAgeMs = Number.isFinite(cacheTimestampMs) ? Math.max(0, Date.now() - cacheTimestampMs) : null;
+
+    return {
+        cacheAgeMs,
+        fiveHourPercent: getPercentFromUsageItem(usage, 'primary_window', 'Request Quota (5h)')
+            ?? getPercentFromRateLimitWindow(usage, 'primary_window'),
+        weeklyPercent: getPercentFromUsageItem(usage, 'secondary_window', 'Weekly Limit')
+            ?? getPercentFromRateLimitWindow(usage, 'secondary_window')
+    };
+}
+
 function normalizeUsageCandidate(candidate) {
     if (!candidate || typeof candidate !== 'object') {
         return null;
@@ -709,6 +785,7 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     }
 
     const globalRates = rateManager.getGlobalStats();
+    const usageSnapshot = getAccountUsageSnapshot(normalizedProvider, normalizedProviderUuid);
     
     // 更新持久化峰值
     const updatePeaks = (target) => {
@@ -739,7 +816,8 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
         updatePeaks(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
     }
 
-    logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
+    logger.info(`[Request Audit][${requestId}] Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | ${formatUsageWindow('5h', usageSnapshot.fiveHourPercent)} | ${formatUsageWindow('Weekly', usageSnapshot.weeklyPercent)} | UsageCacheAgeMs: ${usageSnapshot.cacheAgeMs ?? 'unavailable'} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)}`);
+    logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
     markDirty();
     await persistIfDirty();
     return true;

@@ -98,4 +98,70 @@ describe('model usage account statistics', () => {
             cacheHitRatio: 0.4
         });
     });
+
+    test('logs per-request account quota snapshot and token usage for Codex accounts', async () => {
+        fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
+        fs.writeFileSync(path.join(tempDir, 'configs', 'usage-cache.json'), JSON.stringify({
+            timestamp: new Date(Date.now() - 5000).toISOString(),
+            providers: {
+                'openai-codex-oauth': {
+                    providerType: 'openai-codex-oauth',
+                    instances: [{
+                        uuid: 'codex-account-a',
+                        name: 'US Account A',
+                        usage: {
+                            items: [
+                                { id: 'primary_window', label: 'Request Quota (5h)', percent: 73.5, unit: 'percent' },
+                                { id: 'secondary_window', label: 'Weekly Limit', percent: 37, unit: 'percent' }
+                            ]
+                        }
+                    }]
+                }
+            }
+        }), 'utf8');
+        const logSpy = jest.spyOn(console, 'log');
+        const statsManager = await loadStatsManager();
+
+        statsManager.recordUnaryUsage({
+            requestId: 'req-codex-audit',
+            model: 'gpt-5.5',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'US Account A',
+            fromProvider: 'openai',
+            nativeResponse: {
+                usage: {
+                    prompt_tokens: 1000,
+                    completion_tokens: 120,
+                    total_tokens: 1120,
+                    prompt_tokens_details: {
+                        cached_tokens: 400
+                    }
+                }
+            }
+        });
+
+        await statsManager.finalizeRequest({
+            requestId: 'req-codex-audit',
+            model: 'gpt-5.5',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'US Account A',
+            fromProvider: 'openai',
+            isStream: false
+        });
+
+        const logged = logSpy.mock.calls.map(([message]) => String(message)).join('\n');
+        expect(logged).toContain('[Request Audit][req-codex-audit]');
+        expect(logged).toContain('Provider: openai-codex-oauth');
+        expect(logged).toContain('Account: US Account A');
+        expect(logged).toContain('UUID: codex-account-a');
+        expect(logged).toContain('5h: 73.5% used/26.5% remaining');
+        expect(logged).toContain('Weekly: 37% used/63% remaining');
+        expect(logged).toContain('UsageCacheAgeMs:');
+        expect(logged).toContain('Prompt: 1000');
+        expect(logged).toContain('Completion: 120');
+        expect(logged).toContain('Total: 1120');
+        expect(logged).toContain('Cached: 400');
+    });
 });
