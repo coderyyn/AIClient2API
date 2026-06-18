@@ -444,10 +444,6 @@ function createInstanceUsageCard(instance, providerType) {
     const rateLimitResetCredits = summary.rateLimitResetCredits;
     const showCodexReset = providerType === 'openai-codex-oauth' && rateLimitResetCredits;
     const resetAvailableCount = getCodexResetAvailableCount(rateLimitResetCredits);
-    const canResetCodex = Boolean(showCodexReset && canUseCodexRateLimitReset(rateLimitResetCredits));
-    const resetButtonTitle = canResetCodex
-        ? `Use Codex rate-limit reset (${resetAvailableCount} available)`
-        : 'No Codex rate-limit resets available';
 
     // 使用后端返回的 planClass，如果缺失则兜底
     const planClass = summary.planClass || 'plan-default';
@@ -479,7 +475,6 @@ function createInstanceUsageCard(instance, providerType) {
                     <div class="instance-status-badges">
                         ${instance.configFilePath ? `<button class="btn-download-config" title="${t('usage.card.downloadConfig')}"><i class="fas fa-download"></i></button>` : ''}
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
-                        ${showCodexReset ? `<button type="button" class="btn-reset-codex-usage" title="${resetButtonTitle}" aria-label="${resetButtonTitle}" ${canResetCodex ? '' : 'disabled'}><i class="fas fa-rotate-left"></i></button>` : ''}
                         ${instance.isDisabled ? `<span class="badge badge-disabled">${t('usage.card.status.disabled')}</span>` : `<span class="badge ${instance.isHealthy ? 'badge-healthy' : 'badge-unhealthy'}">${t(instance.isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')}</span>`}
                     </div>
                 </div>
@@ -509,7 +504,7 @@ function createInstanceUsageCard(instance, providerType) {
         contentArea.appendChild(renderUsageDetails(instance.usage));
     }
 
-    card.querySelectorAll('.btn-reset-codex-usage, .btn-reset-codex-usage-inline').forEach(resetButton => {
+    card.querySelectorAll('.btn-reset-codex-usage-inline').forEach(resetButton => {
         resetButton.onclick = (e) => {
             e.stopPropagation();
             resetCodexRateLimit(providerType, instance.uuid, displayName, resetButton, resetAvailableCount);

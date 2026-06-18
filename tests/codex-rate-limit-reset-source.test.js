@@ -12,11 +12,11 @@ describe('Codex rate limit reset source contracts', () => {
         expect(usageApiSource).toContain('consumeRateLimitResetCredit');
     });
 
-    test('usage page shows Codex reset credits and calls the backend reset route', () => {
+    test('usage page shows Codex reset credits only in the reset credits row', () => {
         const source = readFileSync('static/app/usage-manager.js', 'utf8');
 
         expect(source).toContain('rateLimitResetCredits');
-        expect(source).toContain('btn-reset-codex-usage');
+        expect(source).not.toContain('class="btn-reset-codex-usage"');
         expect(source).toContain('btn-reset-codex-usage-inline');
         expect(source).toContain('confirmCodexRateLimitReset');
         expect(source).toContain('resetCodexRateLimit(');
@@ -30,6 +30,6 @@ describe('Codex rate limit reset source contracts', () => {
         expect(source).toContain('.usage-reset-credits');
         expect(source).toContain('.codex-reset-action-row');
         expect(source).toContain('.btn-reset-codex-usage-inline');
-        expect(source).toContain('.btn-reset-codex-usage');
+        expect(source).not.toContain('.btn-reset-codex-usage {');
     });
 });

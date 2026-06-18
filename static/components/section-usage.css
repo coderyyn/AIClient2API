@@ -278,8 +278,7 @@
 }
 
 .btn-download-config,
-.btn-refresh-usage,
-.btn-reset-codex-usage {
+.btn-refresh-usage {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -296,8 +295,7 @@
 }
 
 .btn-download-config:hover:not(:disabled),
-.btn-refresh-usage:hover:not(:disabled),
-.btn-reset-codex-usage:hover:not(:disabled) {
+.btn-refresh-usage:hover:not(:disabled) {
     background: var(--primary-color);
     color: white;
     border-color: var(--primary-color);
@@ -306,8 +304,7 @@
 }
 
 .btn-download-config:disabled,
-.btn-refresh-usage:disabled,
-.btn-reset-codex-usage:disabled {
+.btn-refresh-usage:disabled {
     opacity: 0.45;
     cursor: not-allowed;
     transform: none;
