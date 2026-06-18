@@ -279,6 +279,20 @@ function pickRecentUsageHistory(usageHistory = {}, days = 7) {
     );
 }
 
+function projectRangeSummaryForList(rangeSummary) {
+    const topProviders = Object.fromEntries(
+        Object.entries(rangeSummary.providers || {})
+            .sort(([, a], [, b]) => toNumber(b.totalTokens) - toNumber(a.totalTokens))
+            .slice(0, 3)
+    );
+
+    return {
+        dates: rangeSummary.dates,
+        summary: rangeSummary.summary,
+        topProviders
+    };
+}
+
 function enrichKeyUsage(keyData) {
     const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
@@ -487,10 +501,10 @@ export async function listKeySummaries() {
             ...summaryKey,
             recentUsageHistory: pickRecentUsageHistory(usageHistory, 7),
             rangeSummaries: {
-                total: summarizeUsageHistoryForRange(usageHistory, 'total'),
-                '30d': summarizeUsageHistoryForRange(usageHistory, '30d'),
-                '7d': summarizeUsageHistoryForRange(usageHistory, '7d'),
-                today: summarizeUsageHistoryForRange(usageHistory, 'today')
+                total: projectRangeSummaryForList(summarizeUsageHistoryForRange(usageHistory, 'total')),
+                '30d': projectRangeSummaryForList(summarizeUsageHistoryForRange(usageHistory, '30d')),
+                '7d': projectRangeSummaryForList(summarizeUsageHistoryForRange(usageHistory, '7d')),
+                today: projectRangeSummaryForList(summarizeUsageHistoryForRange(usageHistory, 'today'))
             }
         };
     });
