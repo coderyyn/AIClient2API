@@ -174,6 +174,48 @@ export async function refreshSingleInstanceUsage(providerType, uuid, displayName
     }
 }
 
+async function resetSingleInstanceUsage(providerType, uuid, displayName, buttonEl) {
+    const confirmed = window.confirm(t('usage.codex.resetConfirm', { name: displayName }));
+    if (!confirmed) {
+        return;
+    }
+
+    const originalDisabled = buttonEl?.disabled;
+    if (buttonEl) {
+        buttonEl.disabled = true;
+    }
+
+    try {
+        showToast(t('common.info'), t('usage.codex.resetting', { name: displayName }), 'info');
+
+        const response = await fetch(`/api/usage/${providerType}/${uuid}/reset`, {
+            method: 'POST',
+            headers: getAuthHeaders()
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data?.instance?.uuid) {
+            updateSingleInstanceCard(providerType, data.instance);
+        } else {
+            await refreshSingleInstanceUsage(providerType, uuid, displayName);
+        }
+
+        showToast(t('common.success'), t('usage.codex.resetSuccess'), 'success');
+    } catch (error) {
+        console.error('重置单个实例用量失败:', error);
+        showToast(t('common.error'), error.message || t('common.requestFailed'), 'error');
+    } finally {
+        if (buttonEl) {
+            buttonEl.disabled = originalDisabled || false;
+        }
+    }
+}
+
 /**
  * 更新单个实例卡片 (局部更新 DOM)
  */
@@ -441,7 +483,14 @@ function createInstanceUsageCard(instance, providerType) {
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
     const displayName = user.email || instance.name || instance.uuid;
-    const rateLimitResetCredits = summary.rateLimitResetCredits;
+    const providerDisplayName = getProviderDisplayName(providerType);
+    const rateLimitResetCredits = summary.rateLimitResetCredits
+        || (providerType === 'openai-codex-oauth' && summary.resetAvailableCount !== undefined
+            ? {
+                availableCount: summary.resetAvailableCount,
+                canReset: Number(summary.resetAvailableCount) > 0
+            }
+            : null);
     const showCodexReset = providerType === 'openai-codex-oauth' && rateLimitResetCredits;
     const resetAvailableCount = getCodexResetAvailableCount(rateLimitResetCredits);
 
@@ -471,7 +520,7 @@ function createInstanceUsageCard(instance, providerType) {
         <div class="usage-card-expanded-content">
             <div class="usage-instance-header">
                 <div class="instance-header-top">
-                    <div class="instance-provider-type"><i class="${getProviderIcon(providerType)}"></i><span>${getProviderDisplayName(providerType)}</span></div>
+                    <div class="instance-provider-type" title="${providerDisplayName}"><i class="${getProviderIcon(providerType)}"></i><span>${providerDisplayName}</span></div>
                     <div class="instance-status-badges">
                         ${instance.configFilePath ? `<button class="btn-download-config" title="${t('usage.card.downloadConfig')}"><i class="fas fa-download"></i></button>` : ''}
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
@@ -609,10 +658,20 @@ function renderUsageDetails(usage) {
 function getProviderDisplayName(type) {
     if (currentProviderConfigs) {
         const config = currentProviderConfigs.find(c => c.id === type);
-        if (config?.name) return config.name;
+        if (config?.name) return getCompactProviderDisplayName(type, config.name);
     }
     const names = { 'claude-kiro-oauth': 'Claude Kiro', 'gemini-cli-oauth': 'Gemini CLI', 'gemini-antigravity': 'Antigravity', 'openai-codex-oauth': 'Codex', 'grok-cli-oauth': 'Grok CLI', 'grok-web': 'Grok Web' };
-    return names[type] || type;
+    return getCompactProviderDisplayName(type, names[type] || type);
+}
+
+function getCompactProviderDisplayName(type, label) {
+    if (type === 'openai-codex-oauth') return 'Codex';
+    if (type === 'claude-kiro-oauth') return 'Kiro';
+    if (type === 'gemini-antigravity') return 'Antigravity';
+    if (type === 'gemini-cli-oauth') return 'Gemini CLI';
+    if (type === 'grok-cli-oauth') return 'Grok CLI';
+    if (type === 'grok-web') return 'Grok Web';
+    return label;
 }
 
 function getProviderIcon(type) {

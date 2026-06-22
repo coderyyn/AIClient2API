@@ -970,6 +970,8 @@ export function formatCodexUsage(usageData) {
     const rateLimit = usageData.rate_limit || usageData.rateLimit;
     const primary = rateLimit?.primary_window || rateLimit?.primaryWindow;
     const secondary = rateLimit?.secondary_window || rateLimit?.secondaryWindow;
+    const resetCredits = usageData.rate_limit_reset_credits || usageData.rateLimitResetCredits;
+    const resetAvailableCount = Number(resetCredits?.available_count ?? resetCredits?.availableCount ?? 0) || 0;
     
     const primaryUsedPercent = primary?.used_percent ?? primary?.usedPercent ?? 0;
     const secondaryUsedPercent = secondary?.used_percent ?? secondary?.usedPercent ?? 0;
@@ -1063,7 +1065,8 @@ export function formatCodexUsage(usageData) {
             tokenUsageProfile,
             tokenUsageAvailable: Boolean(tokenUsage),
             tokenUsageUnavailableReason: tokenUsage ? null : 'official_usage_token_fields_missing',
-            rateLimitResetCredits
+            rateLimitResetCredits,
+            resetAvailableCount
         },
         user: { 
             email: usageData.account || null

@@ -383,6 +383,23 @@ export class CodexApiService {
     }
 
     /**
+     * 构建 Codex 管理类接口请求头
+     */
+    buildManagementHeaders() {
+        return {
+            'authorization': `Bearer ${this.accessToken}`,
+            'chatgpt-account-id': this.accountId,
+            'oai-language': 'zh-CN',
+            'originator': 'Codex Desktop',
+            'accept': 'application/json',
+            'sec-fetch-site': 'none',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-dest': 'empty',
+            'priority': 'u=4, i'
+        };
+    }
+
+    /**
      * 准备请求体
      */
     async prepareRequestBody(model, requestBody, stream) {
@@ -1054,6 +1071,10 @@ export class CodexApiService {
         }
     }
 
+    /**
+     * 消耗一次 Codex 额度重置次数
+     * @returns {Promise<Object>} 重置结果
+     */
     async consumeRateLimitResetCredit(redeemRequestId = null) {
         if (!this.isInitialized) {
             await this.initialize();
@@ -1079,6 +1100,22 @@ export class CodexApiService {
             logger.error('[Codex] Failed to consume rate limit reset credit:', error.message);
             throw error;
         }
+    }
+
+    /**
+     * 兼容上游重置接口：消耗一次重置次数后返回最新用量。
+     * @returns {Promise<Object>} 重置结果与最新用量
+     */
+    async resetUsageQuota() {
+        const resetResult = await this.consumeRateLimitResetCredit();
+        const latestUsage = await this.getUsageLimits();
+
+        return {
+            success: true,
+            resetResult,
+            usage: latestUsage,
+            account: this.email
+        };
     }
 }
 
