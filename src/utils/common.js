@@ -375,16 +375,43 @@ function parseJsonObject(value) {
 }
 
 export function extractCodexCacheAffinityScope(requestBody = {}) {
-    const metadata = requestBody?.client_metadata || requestBody?.metadata || {};
-    const turnMetadata = parseJsonObject(metadata['x-codex-turn-metadata']);
-    const promptCacheKey = requestBody?.prompt_cache_key || metadata.prompt_cache_key || turnMetadata.prompt_cache_key;
-    const threadId = requestBody?.thread_id || metadata.thread_id || turnMetadata.thread_id;
-    const sessionId = requestBody?.session_id || metadata.session_id || turnMetadata.session_id;
+    const clientMetadata = requestBody?.client_metadata || {};
+    const requestMetadata = requestBody?.metadata || {};
+    const clientTurnMetadata = parseJsonObject(clientMetadata['x-codex-turn-metadata']);
+    const requestTurnMetadata = parseJsonObject(requestMetadata['x-codex-turn-metadata']);
+    const firstPresent = (...values) => values.find(value => value !== undefined && value !== null && value !== '');
+
+    const promptCacheKey = firstPresent(
+        requestBody?.prompt_cache_key,
+        clientMetadata.prompt_cache_key,
+        requestMetadata.prompt_cache_key,
+        clientTurnMetadata.prompt_cache_key,
+        requestTurnMetadata.prompt_cache_key
+    );
+    const threadId = firstPresent(
+        requestBody?.thread_id,
+        clientMetadata.thread_id,
+        requestMetadata.thread_id,
+        clientTurnMetadata.thread_id,
+        requestTurnMetadata.thread_id
+    );
+    const sessionId = firstPresent(
+        requestBody?.session_id,
+        clientMetadata.session_id,
+        requestMetadata.session_id,
+        clientTurnMetadata.session_id,
+        requestTurnMetadata.session_id
+    );
     const installationId =
-        requestBody?.installation_id ||
-        metadata.installation_id ||
-        metadata['x-codex-installation-id'] ||
-        turnMetadata.installation_id;
+        firstPresent(
+            requestBody?.installation_id,
+            clientMetadata.installation_id,
+            requestMetadata.installation_id,
+            clientMetadata['x-codex-installation-id'],
+            requestMetadata['x-codex-installation-id'],
+            clientTurnMetadata.installation_id,
+            requestTurnMetadata.installation_id
+        );
 
     const scope = {};
     if (promptCacheKey) scope.promptCacheKey = String(promptCacheKey);

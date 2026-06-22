@@ -1,5 +1,6 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import { resolveCodexAffinityKey } from '../src/services/service-manager.js';
+import { extractCodexCacheAffinityScope } from '../src/utils/common.js';
 
 jest.mock('../src/providers/adapter.js', () => ({
     getServiceAdapter: jest.fn(),
@@ -49,5 +50,21 @@ describe('Codex affinity scope', () => {
             CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: true,
             potluckApiKey: 'maki_secret_key'
         }, 'gemini-cli-oauth', 'gpt-image-2')).toBeNull();
+    });
+
+    test('merges Codex client metadata with request metadata', () => {
+        const scope = extractCodexCacheAffinityScope({
+            client_metadata: {
+                session_id: 'codex-cli-session-a'
+            },
+            metadata: {
+                prompt_cache_key: 'codex-cache-thread-a'
+            }
+        });
+
+        expect(scope).toEqual({
+            promptCacheKey: 'codex-cache-thread-a',
+            sessionId: 'codex-cli-session-a'
+        });
     });
 });
