@@ -12,6 +12,11 @@ async function loadKeyManager() {
     return await import('../src/plugins/api-potluck/key-manager.js');
 }
 
+async function loadPotluckPlugin() {
+    jest.resetModules();
+    return await import('../src/plugins/api-potluck/index.js');
+}
+
 beforeEach(() => {
     jest.useFakeTimers();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiclient2api-potluck-'));
@@ -46,8 +51,11 @@ describe('api potluck key usage summary', () => {
 
         expect(listedKey).toMatchObject({
             todayTotalTokens: 1120,
+            todayReasoningTokens: 0,
             totalTokens: 1120,
+            totalReasoningTokens: 0,
             weeklyTotalTokens: 1120,
+            weeklyReasoningTokens: 0,
             todayCacheHitRatio: 0.4,
             weeklyCacheHitRatio: 0.4,
             totalCacheHitRatio: 0.4
@@ -70,7 +78,8 @@ describe('api potluck key usage summary', () => {
             promptTokens: 2000,
             completionTokens: 300,
             totalTokens: 2300,
-            cachedTokens: 800
+            cachedTokens: 800,
+            reasoningTokens: 516
         }, 'req-image-1', {
             providerUuid: 'codex-account-a',
             providerName: 'Codex Account A',
@@ -81,6 +90,11 @@ describe('api potluck key usage summary', () => {
         const dayHistory = listedKey.usageHistory['2026-06-22'];
         const accountKey = 'openai-codex-oauth:codex-account-a';
 
+        expect(listedKey).toMatchObject({
+            todayReasoningTokens: 516,
+            totalReasoningTokens: 516,
+            weeklyReasoningTokens: 516
+        });
         expect(dayHistory.accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
             providerUuid: 'codex-account-a',
@@ -90,15 +104,55 @@ describe('api potluck key usage summary', () => {
             requestCount: 1,
             totalTokens: 2300,
             cachedTokens: 800,
+            reasoningTokens: 516,
             cacheHitRatio: 0.4
         });
         expect(dayHistory.accounts[accountKey].models['gpt-image-2']).toMatchObject({
             requestCount: 1,
-            totalTokens: 2300
+            totalTokens: 2300,
+            reasoningTokens: 516
         });
         expect(dayHistory.hours['10'].accounts[accountKey].models['gpt-image-2']).toMatchObject({
             requestCount: 1,
-            totalTokens: 2300
+            totalTokens: 2300,
+            reasoningTokens: 516
+        });
+    });
+
+    test('records reasoning tokens through Potluck response hooks', async () => {
+        const potluck = await loadPotluckPlugin();
+        const key = await potluck.createKey('Codex Client', 1000);
+        const requestId = 'req-codex-reasoning';
+
+        await potluck.default.hooks.onUnaryResponse({
+            requestId,
+            nativeResponse: {
+                usage: {
+                    prompt_tokens: 1000,
+                    completion_tokens: 120,
+                    total_tokens: 1120,
+                    completion_tokens_details: {
+                        reasoning_tokens: 516
+                    }
+                }
+            }
+        });
+        await potluck.default.hooks.onContentGenerated({
+            _monitorRequestId: requestId,
+            potluckApiKey: key.id,
+            toProvider: 'openai-codex-oauth',
+            model: 'gpt-5.5',
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+
+        const [listedKey] = await potluck.listKeys();
+        const [dateKey] = Object.keys(listedKey.usageHistory);
+        const accountKey = 'openai-codex-oauth:codex-account-a';
+
+        expect(listedKey.todayReasoningTokens).toBe(516);
+        expect(listedKey.usageHistory[dateKey].accounts[accountKey].models['gpt-5.5']).toMatchObject({
+            reasoningTokens: 516
         });
     });
 });

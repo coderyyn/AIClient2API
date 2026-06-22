@@ -42,6 +42,7 @@ function createEmptyUsage() {
         requestCount: 0,
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
         totalTokens: 0,
         cachedTokens: 0,
         maxQps: 0,
@@ -87,6 +88,7 @@ function normalizeUsageBlock(block) {
         requestCount: toNumber(block.requestCount),
         promptTokens: toNumber(block.promptTokens),
         completionTokens: toNumber(block.completionTokens),
+        reasoningTokens: toNumber(block.reasoningTokens),
         totalTokens: toNumber(block.totalTokens),
         cachedTokens: toNumber(block.cachedTokens),
         maxQps: toNumber(block.maxQps),
@@ -488,9 +490,10 @@ function normalizeUsageCandidate(candidate) {
             promptTokens: 0,
             completionTokens: 0,
             totalTokens: 0,
+            reasoningTokens: 0,
             cachedTokens: 0
         });
-        const hasUsage = usage.promptTokens > 0 || usage.completionTokens > 0 || usage.totalTokens > 0 || usage.cachedTokens > 0;
+        const hasUsage = usage.promptTokens > 0 || usage.completionTokens > 0 || usage.reasoningTokens > 0 || usage.totalTokens > 0 || usage.cachedTokens > 0;
         return hasUsage ? usage : null;
     }
 
@@ -532,7 +535,7 @@ function normalizeUsageCandidate(candidate) {
         usage?.cachedContentTokenCount
     );
 
-    const hasUsage = promptTokens > 0 || completionTokens > 0 || totalTokens > 0 || cachedTokens > 0;
+    const hasUsage = promptTokens > 0 || completionTokens > 0 || reasoningTokens > 0 || totalTokens > 0 || cachedTokens > 0;
     if (!hasUsage) {
         return null;
     }
@@ -540,6 +543,7 @@ function normalizeUsageCandidate(candidate) {
     return {
         promptTokens,
         completionTokens,
+        reasoningTokens,
         totalTokens: totalTokens || (promptTokens + completionTokens),
         cachedTokens
     };
@@ -553,6 +557,7 @@ function mergeUsage(baseUsage, nextUsage) {
     return {
         promptTokens: Math.max(baseUsage.promptTokens, nextUsage.promptTokens),
         completionTokens: Math.max(baseUsage.completionTokens, nextUsage.completionTokens),
+        reasoningTokens: Math.max(baseUsage.reasoningTokens || 0, nextUsage.reasoningTokens || 0),
         totalTokens: Math.max(baseUsage.totalTokens, nextUsage.totalTokens || (nextUsage.promptTokens + nextUsage.completionTokens)),
         cachedTokens: Math.max(baseUsage.cachedTokens, nextUsage.cachedTokens)
     };
@@ -565,6 +570,7 @@ function extractUsage(...candidates) {
     }, {
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
         totalTokens: 0,
         cachedTokens: 0
     });
@@ -586,6 +592,7 @@ function getPendingRequest(requestId, meta = {}) {
             usage: {
                 promptTokens: 0,
                 completionTokens: 0,
+                reasoningTokens: 0,
                 totalTokens: 0,
                 cachedTokens: 0
             },
@@ -609,6 +616,7 @@ function applyUsage(target, usage, timestamp) {
     target.requestCount += 1;
     target.promptTokens += usage.promptTokens;
     target.completionTokens += usage.completionTokens;
+    target.reasoningTokens += usage.reasoningTokens || 0;
     target.totalTokens += usage.totalTokens || (usage.promptTokens + usage.completionTokens);
     target.cachedTokens += usage.cachedTokens;
     target.lastUsedAt = timestamp;
@@ -618,6 +626,7 @@ function resetUsageBlockTokens(block) {
     if (!block || typeof block !== 'object') return;
     block.promptTokens = 0;
     block.completionTokens = 0;
+    block.reasoningTokens = 0;
     block.totalTokens = 0;
     block.cachedTokens = 0;
     block.maxQps = 0;
@@ -727,7 +736,7 @@ export function recordUnaryUsage({ requestId, model, provider, providerUuid, pro
     state.hasResponse = true;
     state.usage = mergeUsage(state.usage, extractUsage(nativeResponse, clientResponse));
     if (state.usage.totalTokens > prevTotalTokens || state.usage.cachedTokens > prevCachedTokens) {
-        logger.info(`${getTracePrefix(requestId)} <<< Unary Usage Captured: Provider: ${state.provider} | Model: ${state.model} | Prompt: ${state.usage.promptTokens} | Completion: ${state.usage.completionTokens} | Total: ${state.usage.totalTokens} | Cached: ${state.usage.cachedTokens}`);
+        logger.info(`${getTracePrefix(requestId)} <<< Unary Usage Captured: Provider: ${state.provider} | Model: ${state.model} | Prompt: ${state.usage.promptTokens} | Completion: ${state.usage.completionTokens} | Reasoning: ${state.usage.reasoningTokens || 0} | Total: ${state.usage.totalTokens} | Cached: ${state.usage.cachedTokens}`);
     }
 }
 
@@ -739,7 +748,7 @@ export function recordStreamChunkUsage({ requestId, model, provider, providerUui
     state.hasResponse = true;
     state.usage = mergeUsage(state.usage, extractUsage(nativeChunk, clientChunk));
     if (state.usage.totalTokens > prevTotalTokens || state.usage.cachedTokens > prevCachedTokens) {
-        logger.info(`${getTracePrefix(requestId)} <<< Stream Usage Captured: Provider: ${state.provider} | Model: ${state.model} | Prompt: ${state.usage.promptTokens} | Completion: ${state.usage.completionTokens} | Total: ${state.usage.totalTokens} | Cached: ${state.usage.cachedTokens}`);
+        logger.info(`${getTracePrefix(requestId)} <<< Stream Usage Captured: Provider: ${state.provider} | Model: ${state.model} | Prompt: ${state.usage.promptTokens} | Completion: ${state.usage.completionTokens} | Reasoning: ${state.usage.reasoningTokens || 0} | Total: ${state.usage.totalTokens} | Cached: ${state.usage.cachedTokens}`);
     }
 }
 
@@ -776,6 +785,7 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     const usage = {
         promptTokens: state.usage.promptTokens,
         completionTokens: state.usage.completionTokens,
+        reasoningTokens: state.usage.reasoningTokens || 0,
         totalTokens: state.usage.totalTokens || (state.usage.promptTokens + state.usage.completionTokens),
         cachedTokens: state.usage.cachedTokens
     };
@@ -830,8 +840,8 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
         updatePeaks(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
     }
 
-    logger.info(`[Request Audit][${requestId}] Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | ${formatUsageWindow('5h', usageSnapshot.fiveHourPercent)} | ${formatUsageWindow('Weekly', usageSnapshot.weeklyPercent)} | UsageCacheAgeMs: ${usageSnapshot.cacheAgeMs ?? 'unavailable'} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)}`);
-    logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
+    logger.info(`[Request Audit][${requestId}] Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | ${formatUsageWindow('5h', usageSnapshot.fiveHourPercent)} | ${formatUsageWindow('Weekly', usageSnapshot.weeklyPercent)} | UsageCacheAgeMs: ${usageSnapshot.cacheAgeMs ?? 'unavailable'} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Reasoning: ${usage.reasoningTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)}`);
+    logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Reasoning: ${usage.reasoningTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
     markDirty();
     await persistIfDirty();
     return true;

@@ -41,6 +41,9 @@ describe('model usage account statistics', () => {
                     prompt_tokens: 1000,
                     completion_tokens: 120,
                     total_tokens: 1120,
+                    completion_tokens_details: {
+                        reasoning_tokens: 516
+                    },
                     prompt_tokens_details: {
                         cached_tokens: 400
                     }
@@ -65,6 +68,7 @@ describe('model usage account statistics', () => {
         expect(stats.summary).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            reasoningTokens: 516,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
@@ -76,12 +80,14 @@ describe('model usage account statistics', () => {
         expect(stats.accounts[accountKey].summary).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            reasoningTokens: 516,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
         expect(stats.accounts[accountKey].models['gpt-5.5']).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            reasoningTokens: 516,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
@@ -134,6 +140,9 @@ describe('model usage account statistics', () => {
                     prompt_tokens: 1000,
                     completion_tokens: 120,
                     total_tokens: 1120,
+                    completion_tokens_details: {
+                        reasoning_tokens: 516
+                    },
                     prompt_tokens_details: {
                         cached_tokens: 400
                     }
@@ -160,9 +169,10 @@ describe('model usage account statistics', () => {
         expect(logged).toContain('Weekly: 37% used/63% remaining');
         expect(logged).toContain('UsageCacheAgeMs:');
         expect(logged).toContain('Prompt: 1000');
-        expect(logged).toContain('Completion: 120');
+        expect(logged).toContain('Completion: 636');
         expect(logged).toContain('Total: 1120');
         expect(logged).toContain('Cached: 400');
+        expect(logged).toContain('Reasoning: 516');
     });
 
     test('reuses usage cache snapshot for request audit logs within the short ttl window', async () => {

@@ -51,6 +51,7 @@ function normalizeUsageCandidate(candidate) {
         return candidate.reduce((usage, item) => mergeUsage(usage, normalizeUsageCandidate(item)), {
             promptTokens: 0,
             completionTokens: 0,
+            reasoningTokens: 0,
             totalTokens: 0,
             cachedTokens: 0
         });
@@ -98,6 +99,7 @@ function normalizeUsageCandidate(candidate) {
     return {
         promptTokens,
         completionTokens,
+        reasoningTokens,
         totalTokens: totalTokens || (promptTokens + completionTokens),
         cachedTokens
     };
@@ -108,6 +110,7 @@ function mergeUsage(baseUsage, nextUsage) {
     return {
         promptTokens: Math.max(baseUsage.promptTokens, nextUsage.promptTokens),
         completionTokens: Math.max(baseUsage.completionTokens, nextUsage.completionTokens),
+        reasoningTokens: Math.max(baseUsage.reasoningTokens || 0, nextUsage.reasoningTokens || 0),
         totalTokens: Math.max(baseUsage.totalTokens, nextUsage.totalTokens),
         cachedTokens: Math.max(baseUsage.cachedTokens || 0, nextUsage.cachedTokens || 0)
     };
@@ -117,6 +120,7 @@ function extractUsage(...candidates) {
     return candidates.reduce((usage, candidate) => mergeUsage(usage, normalizeUsageCandidate(candidate)), {
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
         totalTokens: 0,
         cachedTokens: 0
     });
@@ -136,7 +140,7 @@ function getPendingUsageForHookContext(hookContext = {}) {
         }
     }
 
-    return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    return { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalTokens: 0 };
 }
 
 /**
@@ -254,7 +258,7 @@ const apiPotluckPlugin = {
         async onUnaryResponse({ requestId, nativeResponse, clientResponse }) {
             if (!requestId) return;
             pendingUsage.set(requestId, mergeUsage(
-                pendingUsage.get(requestId) || { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+                pendingUsage.get(requestId) || { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalTokens: 0 },
                 extractUsage(nativeResponse, clientResponse)
             ));
         },
@@ -262,7 +266,7 @@ const apiPotluckPlugin = {
         async onStreamChunk({ requestId, nativeChunk, chunkToSend }) {
             if (!requestId) return;
             pendingUsage.set(requestId, mergeUsage(
-                pendingUsage.get(requestId) || { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+                pendingUsage.get(requestId) || { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalTokens: 0 },
                 extractUsage(nativeChunk, chunkToSend)
             ));
         },

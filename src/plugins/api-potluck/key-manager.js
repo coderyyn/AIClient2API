@@ -62,6 +62,7 @@ function createUsageBucket() {
         requestCount: 0,
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
         totalTokens: 0,
         cachedTokens: 0,
         maxQps: 0,
@@ -89,6 +90,7 @@ function normalizeUsageBucket(bucket) {
         requestCount: toNumber(bucket?.requestCount),
         promptTokens: toNumber(bucket?.promptTokens),
         completionTokens: toNumber(bucket?.completionTokens),
+        reasoningTokens: toNumber(bucket?.reasoningTokens),
         totalTokens: toNumber(bucket?.totalTokens),
         cachedTokens: toNumber(bucket?.cachedTokens),
         maxQps: toNumber(bucket?.maxQps),
@@ -192,10 +194,12 @@ function normalizeKeyData(keyData = {}) {
         totalUsage: toNumber(keyData.totalUsage),
         todayPromptTokens: toNumber(keyData.todayPromptTokens),
         todayCompletionTokens: toNumber(keyData.todayCompletionTokens),
+        todayReasoningTokens: toNumber(keyData.todayReasoningTokens),
         todayTotalTokens: toNumber(keyData.todayTotalTokens),
         todayCachedTokens: toNumber(keyData.todayCachedTokens),
         totalPromptTokens: toNumber(keyData.totalPromptTokens),
         totalCompletionTokens: toNumber(keyData.totalCompletionTokens),
+        totalReasoningTokens: toNumber(keyData.totalReasoningTokens),
         totalTokens: toNumber(keyData.totalTokens),
         totalCachedTokens: toNumber(keyData.totalCachedTokens),
         usageHistory: {}
@@ -222,6 +226,7 @@ function addUsage(target, usage = {}) {
     target.requestCount += rCount;
     target.promptTokens += toNumber(usage.promptTokens);
     target.completionTokens += toNumber(usage.completionTokens);
+    target.reasoningTokens += toNumber(usage.reasoningTokens);
     target.totalTokens += toNumber(usage.totalTokens);
     target.cachedTokens += toNumber(usage.cachedTokens);
     
@@ -285,6 +290,7 @@ function resetUsageBucketTokens(bucket) {
     if (!bucket || typeof bucket !== 'object') return;
     bucket.promptTokens = 0;
     bucket.completionTokens = 0;
+    bucket.reasoningTokens = 0;
     bucket.totalTokens = 0;
     bucket.cachedTokens = 0;
     bucket.maxQps = 0;
@@ -351,6 +357,7 @@ function enrichKeyUsage(keyData) {
         weeklyUsage: weeklySummary.requestCount,
         weeklyPromptTokens: weeklySummary.promptTokens,
         weeklyCompletionTokens: weeklySummary.completionTokens,
+        weeklyReasoningTokens: weeklySummary.reasoningTokens,
         weeklyTotalTokens: weeklySummary.totalTokens,
         weeklyCachedTokens: weeklySummary.cachedTokens,
         todayCacheHitRatio: keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0,
@@ -464,6 +471,7 @@ function checkAndResetDailyCount(keyData) {
         keyData.todayUsage = 0;
         keyData.todayPromptTokens = 0;
         keyData.todayCompletionTokens = 0;
+        keyData.todayReasoningTokens = 0;
         keyData.todayTotalTokens = 0;
         keyData.todayCachedTokens = 0;
         keyData.lastResetDate = today;
@@ -494,10 +502,12 @@ export async function createKey(name = '', dailyLimit = null) {
         totalUsage: 0,
         todayPromptTokens: 0,
         todayCompletionTokens: 0,
+        todayReasoningTokens: 0,
         todayTotalTokens: 0,
         todayCachedTokens: 0,
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
+        totalReasoningTokens: 0,
         totalTokens: 0,
         totalCachedTokens: 0,
         lastResetDate: today,
@@ -595,6 +605,7 @@ export async function resetKeyUsage(keyId) {
     keyStore.keys[keyId].todayUsage = 0;
     keyStore.keys[keyId].todayPromptTokens = 0;
     keyStore.keys[keyId].todayCompletionTokens = 0;
+    keyStore.keys[keyId].todayReasoningTokens = 0;
     keyStore.keys[keyId].todayTotalTokens = 0;
     keyStore.keys[keyId].todayCachedTokens = 0;
     keyStore.keys[keyId].lastResetDate = getTodayDateString();
@@ -614,10 +625,12 @@ export async function resetKeyTokenStats(keyId) {
 
     keyData.todayPromptTokens = 0;
     keyData.todayCompletionTokens = 0;
+    keyData.todayReasoningTokens = 0;
     keyData.todayTotalTokens = 0;
     keyData.todayCachedTokens = 0;
     keyData.totalPromptTokens = 0;
     keyData.totalCompletionTokens = 0;
+    keyData.totalReasoningTokens = 0;
     keyData.totalTokens = 0;
     keyData.totalCachedTokens = 0;
     resetUsageHistoryTokens(keyData.usageHistory);
@@ -641,10 +654,12 @@ export async function resetAllTokenStats() {
     for (const keyData of Object.values(keyStore.keys)) {
         keyData.todayPromptTokens = 0;
         keyData.todayCompletionTokens = 0;
+        keyData.todayReasoningTokens = 0;
         keyData.todayTotalTokens = 0;
         keyData.todayCachedTokens = 0;
         keyData.totalPromptTokens = 0;
         keyData.totalCompletionTokens = 0;
+        keyData.totalReasoningTokens = 0;
         keyData.totalTokens = 0;
         keyData.totalCachedTokens = 0;
         resetUsageHistoryTokens(keyData.usageHistory);
@@ -795,10 +810,12 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     keyData.totalUsage += rCount;
     keyData.todayPromptTokens += toNumber(usage.promptTokens);
     keyData.todayCompletionTokens += toNumber(usage.completionTokens);
+    keyData.todayReasoningTokens += toNumber(usage.reasoningTokens);
     keyData.todayTotalTokens += toNumber(usage.totalTokens);
     keyData.todayCachedTokens += toNumber(usage.cachedTokens);
     keyData.totalPromptTokens += toNumber(usage.promptTokens);
     keyData.totalCompletionTokens += toNumber(usage.completionTokens);
+    keyData.totalReasoningTokens += toNumber(usage.reasoningTokens);
     keyData.totalTokens += toNumber(usage.totalTokens);
     keyData.totalCachedTokens += toNumber(usage.cachedTokens);
     keyData.lastUsedAt = new Date().toISOString();
@@ -831,8 +848,8 @@ export async function getStats() {
     ensureLoaded();
     const keys = Object.values(keyStore.keys);
     let enabledKeys = 0, todayTotalUsage = 0, totalUsage = 0;
-    let todayPromptTokens = 0, todayCompletionTokens = 0, todayTotalTokens = 0, todayCachedTokens = 0;
-    let totalPromptTokens = 0, totalCompletionTokens = 0, totalTokens = 0, totalCachedTokens = 0;
+    let todayPromptTokens = 0, todayCompletionTokens = 0, todayReasoningTokens = 0, todayTotalTokens = 0, todayCachedTokens = 0;
+    let totalPromptTokens = 0, totalCompletionTokens = 0, totalReasoningTokens = 0, totalTokens = 0, totalCachedTokens = 0;
     const aggregatedHistory = {};
 
     for (const key of keys) {
@@ -842,10 +859,12 @@ export async function getStats() {
         totalUsage += key.totalUsage;
         todayPromptTokens += key.todayPromptTokens || 0;
         todayCompletionTokens += key.todayCompletionTokens || 0;
+        todayReasoningTokens += key.todayReasoningTokens || 0;
         todayTotalTokens += key.todayTotalTokens || 0;
         todayCachedTokens += key.todayCachedTokens || 0;
         totalPromptTokens += key.totalPromptTokens || 0;
         totalCompletionTokens += key.totalCompletionTokens || 0;
+        totalReasoningTokens += key.totalReasoningTokens || 0;
         totalTokens += key.totalTokens || 0;
         totalCachedTokens += key.totalCachedTokens || 0;
 
@@ -886,11 +905,13 @@ export async function getStats() {
         totalUsage,
         todayPromptTokens,
         todayCompletionTokens,
+        todayReasoningTokens,
         todayTotalTokens,
         todayCachedTokens,
         todayCacheHitRatio: todayPromptTokens > 0 ? todayCachedTokens / todayPromptTokens : 0,
         totalPromptTokens,
         totalCompletionTokens,
+        totalReasoningTokens,
         totalTokens,
         totalCachedTokens,
         totalCacheHitRatio: totalPromptTokens > 0 ? totalCachedTokens / totalPromptTokens : 0,
