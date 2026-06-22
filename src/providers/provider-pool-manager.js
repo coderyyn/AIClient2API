@@ -1211,6 +1211,14 @@ export class ProviderPoolManager {
             p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
         );
 
+        const excludedProviderUuids = new Set(options.excludeProviderUuids || []);
+        if (excludedProviderUuids.size > 0) {
+            availableAndHealthyProviders = availableAndHealthyProviders.filter(p => {
+                const uuid = p.uuid || p.config?.uuid;
+                return !excludedProviderUuids.has(uuid);
+            });
+        }
+
         // 如果指定了模型，则排除不支持该模型的提供商
         if (requestedModel) {
             const modelFilteredProviders = availableAndHealthyProviders.filter(p => {

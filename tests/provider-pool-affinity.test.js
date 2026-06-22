@@ -78,4 +78,22 @@ describe('provider pool sticky affinity', () => {
         expect(next.uuid).not.toBe(first.uuid);
         expect(next.isHealthy).toBe(true);
     });
+
+    test('excludes a failed provider during sticky retry selection', async () => {
+        const manager = createCodexPoolManager();
+        const first = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+            stickyProviderKey: 'potluck-key-alpha',
+            skipUsageCount: true
+        });
+
+        const retrySelection = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+            stickyProviderKey: 'potluck-key-alpha',
+            excludeProviderUuids: [first.uuid],
+            skipUsageCount: true
+        });
+
+        clearTimeout(manager.saveTimer);
+        expect(retrySelection.uuid).not.toBe(first.uuid);
+        expect(retrySelection.isHealthy).toBe(true);
+    });
 });
