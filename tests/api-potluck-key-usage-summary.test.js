@@ -59,4 +59,46 @@ describe('api potluck key usage summary', () => {
             cacheHitRatio: 0.4
         });
     });
+
+    test('records provider account and hour buckets for a distributed key request', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
+
+        const key = await createKey('Image Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-image-2', {
+            requestCount: 1,
+            promptTokens: 2000,
+            completionTokens: 300,
+            totalTokens: 2300,
+            cachedTokens: 800
+        }, 'req-image-1', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+
+        const [listedKey] = await listKeys();
+        const dayHistory = listedKey.usageHistory['2026-06-22'];
+        const accountKey = 'openai-codex-oauth:codex-account-a';
+
+        expect(dayHistory.accounts[accountKey]).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+        expect(dayHistory.accounts[accountKey].summary).toMatchObject({
+            requestCount: 1,
+            totalTokens: 2300,
+            cachedTokens: 800,
+            cacheHitRatio: 0.4
+        });
+        expect(dayHistory.accounts[accountKey].models['gpt-image-2']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 2300
+        });
+        expect(dayHistory.hours['10'].accounts[accountKey].models['gpt-image-2']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 2300
+        });
+    });
 });

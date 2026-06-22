@@ -6,7 +6,8 @@ import {
     getRequestBody,
     getRateLimitCooldownRecoveryTime,
     getProtocolPrefix,
-    MODEL_PROTOCOL_PREFIX
+    MODEL_PROTOCOL_PREFIX,
+    extractCodexCacheAffinityScope
 } from '../utils/common.js';
 import { getProviderPoolManager, getApiServiceWithFallback } from './service-manager.js';
 import logger from '../utils/logger.js';
@@ -34,6 +35,76 @@ function logImagePayloadSummary(scope, model, payload) {
     } catch (error) {
         logger.warn(`[${scope}] Failed to summarize payload for model=${model}: ${error.message}`);
     }
+}
+
+function getHeaderValue(headers = {}, name) {
+    const lowerName = name.toLowerCase();
+    for (const [key, value] of Object.entries(headers || {})) {
+        if (key.toLowerCase() === lowerName) return Array.isArray(value) ? value[0] : value;
+    }
+    return undefined;
+}
+
+function parseRetryAfterMs(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
+    const dateMs = Date.parse(String(value));
+    return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+}
+
+function classifyImageGenerationError(error) {
+    const status = error?.response?.status || error?.status || error?.statusCode || null;
+    if (Number(status) === 429) return 'upstream_429';
+    if (Number(status) === 401 || Number(status) === 403) return 'auth_failed';
+    if (Number(status) >= 500) return 'upstream_5xx';
+    if (error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED') return 'network_timeout';
+    return 'image_generation_failed';
+}
+
+export function buildImageGenerationErrorAudit({
+    requestId,
+    model,
+    providerType,
+    providerUuid,
+    providerName,
+    currentRetry = 0,
+    maxRetries = 0,
+    error,
+    cooldownApplied = false,
+    willRetry = false
+} = {}) {
+    const headers = error?.response?.headers || {};
+    const errorBody = error?.response?.data?.error || error?.response?.data || {};
+    const retryAfter = getHeaderValue(headers, 'retry-after') ?? errorBody.retryAfter ?? errorBody.retry_after ?? error?.retryAfter;
+    const upstreamRequestId =
+        getHeaderValue(headers, 'x-request-id') ||
+        getHeaderValue(headers, 'request-id') ||
+        errorBody.request_id ||
+        errorBody.requestId ||
+        null;
+
+    return {
+        event: 'image_generation_error',
+        ts: new Date().toISOString(),
+        reqId: requestId || null,
+        providerType: providerType || 'unknown',
+        accountUuid: providerUuid || null,
+        accountLabel: providerName || null,
+        model: model || 'unknown',
+        status: 'failed',
+        errorClass: classifyImageGenerationError(error),
+        httpStatus: error?.response?.status || error?.status || error?.statusCode || null,
+        errorCode: errorBody.code || error?.code || null,
+        errorType: errorBody.type || null,
+        message: errorBody.message || error?.message || 'unknown error',
+        retryAfterMs: parseRetryAfterMs(retryAfter),
+        upstreamRequestId,
+        currentRetry,
+        maxRetries,
+        cooldownApplied: Boolean(cooldownApplied),
+        willRetry: Boolean(willRetry)
+    };
 }
 
 function assignStringImageToolOption(options, source, field) {
@@ -190,6 +261,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             codexRequestBody = virtualOpenAIRequest;
         } else {
             const body = await getRequestBody(req, { maxBytes: CONFIG.REQUEST_BODY_MAX_BYTES });
+            CONFIG._codexCacheAffinityScope = extractCodexCacheAffinityScope(body);
             model = body.model || 'gpt-image-2';
             response_format = body.response_format || 'b64_json';
             size = body.size;
@@ -345,6 +417,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
 
         const shouldSwitchCredential = error.shouldSwitchCredential === true;
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
+        let cooldownApplied = false;
 
         if (providerPoolManager && slotUuid) {
             const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, CONFIG);
@@ -352,6 +425,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                 logger.info(`[Provider Pool] Applying 429 cooldown for ${slotProviderType} (${slotUuid})`);
                 providerPoolManager.markProviderUnhealthyWithRecoveryTime(slotProviderType, {uuid: slotUuid}, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
                 credentialMarkedUnhealthy = true;
+                cooldownApplied = true;
             } else if (!credentialMarkedUnhealthy && !error.skipErrorCount) {
                 if (error.response?.status !== 400) {
                     logger.info(`[Provider Pool] Marking ${slotProviderType} as unhealthy due to image generation error (status: ${error.response?.status || 'unknown'})`);
@@ -365,7 +439,21 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             credentialMarkedUnhealthy = true;
         }
 
-        if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
+        const willRetry = credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG;
+        logger.warn(`[Image Generation Audit] ${JSON.stringify(buildImageGenerationErrorAudit({
+            requestId: CONFIG._monitorRequestId,
+            model,
+            providerType: slotProviderType || CONFIG.MODEL_PROVIDER,
+            providerUuid: slotUuid || CONFIG.uuid,
+            providerName: slotCustomName || CONFIG.customName,
+            currentRetry,
+            maxRetries,
+            error,
+            cooldownApplied,
+            willRetry
+        }))}`);
+
+        if (willRetry) {
             const randomDelay = Math.floor(Math.random() * 10000);
             logger.info(`[Image Generation Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
@@ -533,6 +621,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
     try {
         const form = await parseMultipartForm(req);
         const { fields, files } = form;
+        currentConfig._codexCacheAffinityScope = extractCodexCacheAffinityScope(fields);
 
         const model = fields.model || 'gpt-image-2';
         const prompt = fields.prompt;

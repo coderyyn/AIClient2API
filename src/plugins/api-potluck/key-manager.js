@@ -105,13 +105,42 @@ function normalizeUsageMap(map = {}) {
     return normalized;
 }
 
+function normalizeAccountUsageMap(map = {}) {
+    const normalized = {};
+    for (const [accountKey, account] of Object.entries(map || {})) {
+        normalized[accountKey] = {
+            provider: account?.provider || accountKey.split(':')[0] || 'unknown',
+            providerUuid: account?.providerUuid || accountKey.split(':').slice(1).join(':') || null,
+            providerName: account?.providerName || null,
+            summary: normalizeUsageBucket(account?.summary),
+            models: normalizeUsageMap(account?.models)
+        };
+    }
+    return normalized;
+}
+
+function normalizeHourlyUsageMap(map = {}) {
+    const normalized = {};
+    for (const [hour, hourData] of Object.entries(map || {})) {
+        normalized[hour] = {
+            summary: normalizeUsageBucket(hourData?.summary),
+            providers: normalizeUsageMap(hourData?.providers),
+            models: normalizeUsageMap(hourData?.models),
+            accounts: normalizeAccountUsageMap(hourData?.accounts)
+        };
+    }
+    return normalized;
+}
+
 function normalizeUsageHistoryDay(day = {}) {
     return {
         summary: normalizeUsageBucket(day.summary || {
             requestCount: day.requestCount
         }),
         providers: normalizeUsageMap(day.providers),
-        models: normalizeUsageMap(day.models)
+        models: normalizeUsageMap(day.models),
+        accounts: normalizeAccountUsageMap(day.accounts),
+        hours: normalizeHourlyUsageMap(day.hours)
     };
 }
 
@@ -130,6 +159,27 @@ function addUsageHistoryRatios(usageHistory = {}) {
         }
         for (const usage of Object.values(day.models || {})) {
             addCacheHitRatio(usage);
+        }
+        for (const account of Object.values(day.accounts || {})) {
+            addCacheHitRatio(account.summary);
+            for (const usage of Object.values(account.models || {})) {
+                addCacheHitRatio(usage);
+            }
+        }
+        for (const hour of Object.values(day.hours || {})) {
+            addCacheHitRatio(hour.summary);
+            for (const usage of Object.values(hour.providers || {})) {
+                addCacheHitRatio(usage);
+            }
+            for (const usage of Object.values(hour.models || {})) {
+                addCacheHitRatio(usage);
+            }
+            for (const account of Object.values(hour.accounts || {})) {
+                addCacheHitRatio(account.summary);
+                for (const usage of Object.values(account.models || {})) {
+                    addCacheHitRatio(usage);
+                }
+            }
         }
     }
     return usageHistory;
@@ -185,6 +235,52 @@ function addUsage(target, usage = {}) {
     target.maxTps = Math.max(target.maxTps || 0, toNumber(usage.maxTps));
 }
 
+function getAccountUsageKey(provider, providerUuid) {
+    if (!provider || !providerUuid) return null;
+    return `${provider}:${providerUuid}`;
+}
+
+function ensureAccountUsage(map, provider, providerUuid, providerName) {
+    const accountKey = getAccountUsageKey(provider, providerUuid);
+    if (!accountKey) return null;
+
+    if (!map[accountKey]) {
+        map[accountKey] = {
+            provider,
+            providerUuid,
+            providerName: providerName || null,
+            summary: createUsageBucket(),
+            models: {}
+        };
+    } else if (providerName && !map[accountKey].providerName) {
+        map[accountKey].providerName = providerName;
+    }
+
+    return map[accountKey];
+}
+
+function getBeijingHourString(timestamp = new Date()) {
+    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Shanghai',
+        hour: '2-digit',
+        hour12: false
+    }).formatToParts(date);
+    return parts.find(part => part.type === 'hour')?.value || '00';
+}
+
+function ensureHourUsage(dayHistory, hour) {
+    if (!dayHistory.hours[hour]) {
+        dayHistory.hours[hour] = {
+            summary: createUsageBucket(),
+            providers: {},
+            models: {},
+            accounts: {}
+        };
+    }
+    return dayHistory.hours[hour];
+}
+
 function resetUsageBucketTokens(bucket) {
     if (!bucket || typeof bucket !== 'object') return;
     bucket.promptTokens = 0;
@@ -209,6 +305,29 @@ function resetUsageHistoryTokens(usageHistory) {
 
         for (const usage of Object.values(day.models || {})) {
             resetUsageBucketTokens(usage);
+        }
+
+        for (const account of Object.values(day.accounts || {})) {
+            resetUsageBucketTokens(account.summary);
+            for (const usage of Object.values(account.models || {})) {
+                resetUsageBucketTokens(usage);
+            }
+        }
+
+        for (const hour of Object.values(day.hours || {})) {
+            resetUsageBucketTokens(hour.summary);
+            for (const usage of Object.values(hour.providers || {})) {
+                resetUsageBucketTokens(usage);
+            }
+            for (const usage of Object.values(hour.models || {})) {
+                resetUsageBucketTokens(usage);
+            }
+            for (const account of Object.values(hour.accounts || {})) {
+                resetUsageBucketTokens(account.summary);
+                for (const usage of Object.values(account.models || {})) {
+                    resetUsageBucketTokens(usage);
+                }
+            }
         }
     }
 }
@@ -593,7 +712,7 @@ function cleanupRecordedRequests() {
  * @param {Object} usage - 用量数据
  * @param {string} [requestId] - 请求 ID，用于防止重复统计速率
  */
-export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown', usage = {}, requestId = null) {
+export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown', usage = {}, requestId = null, context = {}) {
     ensureLoaded();
     const keyData = keyStore.keys[apiKey];
     if (!keyData) return;
@@ -639,6 +758,36 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     if (!dayHistory.models[mName]) dayHistory.models[mName] = createUsageBucket();
     addUsage(dayHistory.models[mName], usage);
     updatePeaks(dayHistory.models[mName]);
+
+    const providerUuid = context.providerUuid || usage.providerUuid || null;
+    const providerName = context.providerName || usage.providerName || null;
+    const accountUsage = ensureAccountUsage(dayHistory.accounts, pName, providerUuid, providerName);
+    if (accountUsage) {
+        addUsage(accountUsage.summary, usage);
+        updatePeaks(accountUsage.summary);
+        if (!accountUsage.models[mName]) accountUsage.models[mName] = createUsageBucket();
+        addUsage(accountUsage.models[mName], usage);
+        updatePeaks(accountUsage.models[mName]);
+    }
+
+    const hour = getBeijingHourString(context.timestamp || usage.timestamp || new Date());
+    const hourUsage = ensureHourUsage(dayHistory, hour);
+    addUsage(hourUsage.summary, usage);
+    updatePeaks(hourUsage.summary);
+    if (!hourUsage.providers[pName]) hourUsage.providers[pName] = createUsageBucket();
+    addUsage(hourUsage.providers[pName], usage);
+    updatePeaks(hourUsage.providers[pName]);
+    if (!hourUsage.models[mName]) hourUsage.models[mName] = createUsageBucket();
+    addUsage(hourUsage.models[mName], usage);
+    updatePeaks(hourUsage.models[mName]);
+    const hourAccountUsage = ensureAccountUsage(hourUsage.accounts, pName, providerUuid, providerName);
+    if (hourAccountUsage) {
+        addUsage(hourAccountUsage.summary, usage);
+        updatePeaks(hourAccountUsage.summary);
+        if (!hourAccountUsage.models[mName]) hourAccountUsage.models[mName] = createUsageBucket();
+        addUsage(hourAccountUsage.models[mName], usage);
+        updatePeaks(hourAccountUsage.models[mName]);
+    }
 
     // 更新今日和累计总量 (统一处理默认调用次数)
     const rCount = usage.requestCount !== undefined ? toNumber(usage.requestCount) : 1;

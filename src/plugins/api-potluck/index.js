@@ -284,7 +284,12 @@ const apiPotluckPlugin = {
                         hookContext.toProvider, 
                         hookContext.model,
                         usage,
-                        trackedRequestIds[0] || null
+                        trackedRequestIds[0] || null,
+                        {
+                            providerUuid: hookContext.providerUuid,
+                            providerName: hookContext.providerName,
+                            timestamp: new Date().toISOString()
+                        }
                     );
 
                 } catch (e) {

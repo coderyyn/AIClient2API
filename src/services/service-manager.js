@@ -2,6 +2,7 @@ import { getServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import { ProviderPoolManager } from '../providers/provider-pool-manager.js';
 import deepmerge from 'deepmerge';
+import crypto from 'crypto';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
 import * as path from 'path';
@@ -27,15 +28,44 @@ function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
 }
 
+function hashAffinityScope(value) {
+    return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+}
+
+export function resolveCodexAffinityKey(config, providerType, requestedModel = null) {
+    if (
+        !isTruthyConfigFlag(config?.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED) ||
+        !config?.potluckApiKey ||
+        !isCodexProviderType(providerType)
+    ) {
+        return null;
+    }
+
+    const scope = config._codexCacheAffinityScope || {};
+    if (scope.promptCacheKey) {
+        return { key: `prompt-cache:${hashAffinityScope(scope.promptCacheKey)}`, source: 'prompt_cache_key' };
+    }
+    if (scope.threadId) {
+        return { key: `thread:${hashAffinityScope(scope.threadId)}`, source: 'thread_id' };
+    }
+    if (scope.sessionId) {
+        return { key: `session:${hashAffinityScope(scope.sessionId)}`, source: 'session_id' };
+    }
+    if (scope.installationId) {
+        return { key: `installation:${hashAffinityScope(scope.installationId)}:model:${requestedModel || ''}`, source: 'installation_id' };
+    }
+
+    return { key: `potluck:${hashAffinityScope(config.potluckApiKey)}:model:${requestedModel || ''}`, source: 'potluck_key' };
+}
+
 function withStickyProviderAffinity(config, providerType, options = {}) {
     const selectionOptions = { ...options };
-    if (
-        !selectionOptions.stickyProviderKey &&
-        isTruthyConfigFlag(config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED) &&
-        config.potluckApiKey &&
-        isCodexProviderType(providerType)
-    ) {
-        selectionOptions.stickyProviderKey = config.potluckApiKey;
+    if (!selectionOptions.stickyProviderKey) {
+        const affinity = resolveCodexAffinityKey(config, providerType, options.requestedModel);
+        if (affinity) {
+            selectionOptions.stickyProviderKey = affinity.key;
+            selectionOptions.stickyProviderSource = affinity.source;
+        }
     }
     return selectionOptions;
 }
@@ -439,7 +469,7 @@ export async function getApiService(config, requestedModel = null, options = {})
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
         // 如果有号池管理器，并且当前模型提供者类型有对应的号池（或属于号池类型提供商），则从号池中选择一个提供者配置
         // selectProvider 现在是异步的，使用链式锁确保并发安全
-        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, skipUsageCount: true });
+        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, requestedModel: actualModelName, skipUsageCount: true });
         const selectedProviderConfig = await providerPoolManager.selectProvider(config.MODEL_PROVIDER, actualModelName, selectionOptions);
         if (selectedProviderConfig) {
             // 合并选中的提供者配置到当前请求的 config 中
@@ -491,7 +521,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         const useAcquire = options.acquireSlot === true;
         let selectedResult;
         
-        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, options);
+        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, requestedModel: actualModelName });
 
         if (useAcquire) {
              // 我们需要一个支持 Fallback 的 acquireSlot

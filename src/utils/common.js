@@ -364,6 +364,36 @@ export function getRateLimitCooldownRecoveryTime(error, config = {}, now = Date.
     return new Date(now + cappedCooldownMs + jitter);
 }
 
+function parseJsonObject(value) {
+    if (!value || typeof value !== 'string') return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+export function extractCodexCacheAffinityScope(requestBody = {}) {
+    const metadata = requestBody?.client_metadata || requestBody?.metadata || {};
+    const turnMetadata = parseJsonObject(metadata['x-codex-turn-metadata']);
+    const promptCacheKey = requestBody?.prompt_cache_key || metadata.prompt_cache_key || turnMetadata.prompt_cache_key;
+    const threadId = requestBody?.thread_id || metadata.thread_id || turnMetadata.thread_id;
+    const sessionId = requestBody?.session_id || metadata.session_id || turnMetadata.session_id;
+    const installationId =
+        requestBody?.installation_id ||
+        metadata.installation_id ||
+        metadata['x-codex-installation-id'] ||
+        turnMetadata.installation_id;
+
+    const scope = {};
+    if (promptCacheKey) scope.promptCacheKey = String(promptCacheKey);
+    if (threadId) scope.threadId = String(threadId);
+    if (sessionId) scope.sessionId = String(sessionId);
+    if (installationId) scope.installationId = String(installationId);
+    return Object.keys(scope).length > 0 ? scope : null;
+}
+
 // ==================== API 常量 ====================
 
 export const API_ACTIONS = {
@@ -1589,6 +1619,8 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     if (!originalRequestBody) {
         throw new Error("Request body is missing for content generation.");
     }
+
+    CONFIG._codexCacheAffinityScope = extractCodexCacheAffinityScope(originalRequestBody);
 
     const clientProviderMap = {
         [ENDPOINT_TYPE.OPENAI_CHAT]: MODEL_PROTOCOL_PREFIX.OPENAI,
