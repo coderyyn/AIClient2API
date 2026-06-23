@@ -4,6 +4,9 @@ describe('request audit ui source', () => {
   test('static report references summary api and context usage rows', () => {
     const html = readFileSync('static/request-audit.html', 'utf8');
     expect(html).toContain('/api/request-audit/summary');
+    expect(html).toContain('/api/potluck/keys');
+    expect(html).toContain('keySelect');
+    expect(html).toContain('选择 Potluck Key');
     expect(html).toContain('context-stack');
     expect(html).toContain('按密钥和时间窗复盘请求缓存率');
     expect(html).toContain('缓存命中率 =');

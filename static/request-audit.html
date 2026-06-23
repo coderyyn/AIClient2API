@@ -155,7 +155,7 @@
       font-weight: 700;
     }
 
-    input {
+    input, select {
       width: 100%;
       min-height: 44px;
       border: 1px solid var(--line-strong);
@@ -168,7 +168,7 @@
       transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
     }
 
-    input:focus {
+    input:focus, select:focus {
       border-color: var(--primary);
       box-shadow: 0 0 0 4px rgba(15, 118, 110, .14);
     }
@@ -519,8 +519,11 @@
 
     <section class="panel" aria-label="请求审计查询">
       <div class="toolbar">
-        <label>密钥哈希 keyHash
-          <input id="keyHash" autocomplete="off" spellcheck="false" placeholder="sha256:xxxxxxxxxxxxxxxx">
+        <label>选择 Potluck Key
+          <select id="keySelect">
+            <option value="">加载 key 列表中...</option>
+          </select>
+          <input id="keyHash" autocomplete="off" spellcheck="false" placeholder="或手动输入 sha256:xxxxxxxxxxxxxxxx">
         </label>
         <label>开始时间 since
           <input id="since" autocomplete="off" placeholder="2026-06-23T17:05:00+08:00">
@@ -539,7 +542,7 @@
           <div><strong>口径说明：</strong>缓存命中率 = <code>cachedTokens / promptTokens</code>。OpenAI usage 字段来自上游返回；上下文分类是根据请求结构估算并按真实 prompt tokens 校准，用来接近 Cursor 的分类视图，不代表 Codex/Cursor 内部精确标签。</div>
         </div>
 
-        <p id="statusLine" class="status-line">输入 keyHash 和时间窗后点击查询。</p>
+        <p id="statusLine" class="status-line">选择 key 或输入 keyHash，再设置时间窗后点击查询。</p>
 
         <div class="metrics" aria-label="汇总指标">
           <div class="metric"><span>请求数</span><strong id="requestCount">0</strong><small>窗口内已记录审计事件</small></div>
@@ -653,6 +656,13 @@
       return date.toLocaleString('zh-CN', { hour12: false });
     };
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+    const keyOptionLabel = key => {
+      const name = key.name || '未命名 key';
+      const masked = key.maskedKey || key.id || '';
+      const usage = fmt(key.todayUsage || 0);
+      const cache = fmtPct(key.todayCacheHitRatio || 0);
+      return `${name} · ${masked} · 今日 ${usage} 次 · 缓存 ${cache}`;
+    };
 
     function buildParams() {
       const params = new URLSearchParams();
@@ -661,6 +671,44 @@
         if (value) params.set(id, value);
       }
       return params;
+    }
+
+    function renderKeySelect(keys = []) {
+      const select = document.getElementById('keySelect');
+      const current = document.getElementById('keyHash').value.trim();
+      select.innerHTML = '';
+
+      const manual = document.createElement('option');
+      manual.value = '';
+      manual.textContent = '手动输入 keyHash';
+      select.appendChild(manual);
+
+      for (const key of keys) {
+        const keyHash = key.audit?.keyHash;
+        if (!keyHash) continue;
+        const option = document.createElement('option');
+        option.value = keyHash;
+        option.textContent = keyOptionLabel(key);
+        select.appendChild(option);
+      }
+
+      if (current) {
+        select.value = [...select.options].some(option => option.value === current) ? current : '';
+      }
+    }
+
+    async function loadKeyOptions() {
+      const select = document.getElementById('keySelect');
+      try {
+        const result = await fetchJson('/api/potluck/keys');
+        renderKeySelect(result.data?.keys || []);
+        if (select.options.length <= 1) {
+          setStatus('没有可选择的 potluck key，可手动输入 keyHash。');
+        }
+      } catch (error) {
+        select.innerHTML = '<option value="">key 列表加载失败，手动输入 keyHash</option>';
+        setStatus(`key 列表加载失败：${error.message}。仍可手动输入 keyHash。`, true);
+      }
     }
 
     function setStatus(message, isError = false) {
@@ -872,6 +920,10 @@
     }
 
     document.getElementById('load').addEventListener('click', loadAudit);
+    document.getElementById('keySelect').addEventListener('change', event => {
+      document.getElementById('keyHash').value = event.target.value;
+    });
+    loadKeyOptions();
   </script>
 </body>
 </html>
