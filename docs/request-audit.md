@@ -18,7 +18,12 @@
 /api/request-audit/requests?keyHash=sha256:<hash>&since=2026-06-23T17:05:00+08:00&until=2026-06-23T17:25:00+08:00
 ```
 
-The static report page is available at `request-audit.html`.
+The static report page is available at `request-audit.html`. It is a Chinese-first audit dashboard with:
+
+- summary metrics for request count, prompt tokens, cached tokens, cache hit ratio, completion tokens, and total tokens
+- approximate context section proportions similar to Cursor-style token category views
+- per-request rows that can expand into a single-request token breakdown
+- clear privacy copy that reminds operators raw prompts, full keys, tokens, cookies, and raw images are not persisted
 
 ## Accuracy Boundary
 
@@ -27,3 +32,5 @@ OpenAI-compatible usage fields are exact when returned by upstream. Context cate
 ## Privacy Boundary
 
 Do not store raw prompts, raw images, full API keys, bearer tokens, OAuth tokens, cookies, browser auth state, or full emails. Audit files live under `configs/request-audit/` with a 24 hour default retention.
+
+`ai-monitor` is useful for short-lived protocol conversion debugging because it logs before/after request and response payloads through the normal logger. It currently uses `log-sanitizer`, so image/base64 payloads and oversized strings are summarized instead of being treated as a full raw prompt archive. If raw prompts are ever needed for a specific incident, implement that as a separate explicit danger-mode switch with short retention, isolated access, and a cleanup workflow rather than enabling it by default in `request-audit`.
