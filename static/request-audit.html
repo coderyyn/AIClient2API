@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Request Audit</title>
+  <style>
+    :root { --bg:#101418; --panel:#1b2229; --panel2:#222b33; --text:#edf2f7; --muted:#9aa8b5; --line:#33414d; --cyan:#20b6d6; --green:#82d67a; --yellow:#e8bf18; --red:#ff4f58; --blue:#2d7dd2; --gray:#9a9a9a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: radial-gradient(circle at 15% 10%, #263540 0, transparent 32%), var(--bg); }
+    main { width: min(1120px, calc(100vw - 32px)); margin: 28px auto; }
+    .hero { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 34px; letter-spacing: -0.04em; }
+    .muted { color: var(--muted); }
+    .panel { background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015)), var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 22px; box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 12px; margin-bottom: 18px; }
+    label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+    input { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #0e1318; color: var(--text); padding: 11px 12px; }
+    button { border: 0; border-radius: 12px; background: var(--cyan); color: #071015; font-weight: 700; padding: 11px 18px; cursor: pointer; align-self: end; }
+    .metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
+    .metric { background: var(--panel2); border-radius: 16px; padding: 14px; }
+    .metric strong { display: block; font-size: 20px; margin-top: 4px; }
+    .context-card { margin-bottom: 18px; }
+    .context-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 12px; }
+    .context-stack { display: flex; height: 14px; background: #454b50; border-radius: 999px; overflow: hidden; margin-bottom: 18px; }
+    .segment { min-width: 3px; }
+    .rows { display: grid; gap: 8px; }
+    .row { display: grid; grid-template-columns: 18px 1fr auto auto; gap: 12px; align-items: center; color: #d6dde3; }
+    .dot { width: 14px; height: 14px; border-radius: 4px; }
+    .instructions { background: var(--gray); }
+    .tools { background: #b777dc; }
+    .conversation { background: var(--cyan); }
+    .attachments { background: var(--blue); }
+    .metadata { background: var(--yellow); }
+    .cached_input { background: var(--green); }
+    .output { background: #f88f45; }
+    .reasoning { background: var(--red); }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px; text-align: left; font-size: 13px; }
+    th { color: var(--muted); background: rgba(255,255,255,.04); }
+    code { color: #bae6fd; }
+    @media (max-width: 860px) { .filters, .metrics { grid-template-columns: 1fr; } .hero { display: block; } .row { grid-template-columns: 18px 1fr auto; } .row .pct { display:none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="hero">
+      <div>
+        <h1>Request Audit</h1>
+        <p class="muted">按 keyHash 和时间窗查看逐请求 usage 与近似上下文占比。</p>
+      </div>
+      <p class="muted"><code>/api/request-audit/summary</code></p>
+    </div>
+
+    <section class="panel">
+      <div class="filters">
+        <label>Key Hash <input id="keyHash" placeholder="sha256:..."></label>
+        <label>Since <input id="since" placeholder="2026-06-23T17:05:00+08:00"></label>
+        <label>Until <input id="until" placeholder="2026-06-23T17:25:00+08:00"></label>
+        <button id="load">Load</button>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><span class="muted">Requests</span><strong id="requestCount">0</strong></div>
+        <div class="metric"><span class="muted">Prompt</span><strong id="promptTokens">0</strong></div>
+        <div class="metric"><span class="muted">Cached</span><strong id="cachedTokens">0</strong></div>
+        <div class="metric"><span class="muted">Cache Rate</span><strong id="cacheHitRatio">0%</strong></div>
+        <div class="metric"><span class="muted">Total</span><strong id="totalTokens">0</strong></div>
+      </div>
+
+      <div class="context-card">
+        <div class="context-head">
+          <h2>Context Usage</h2>
+          <span class="muted">estimated breakdown, calibrated by prompt tokens</span>
+        </div>
+        <div id="contextStack" class="context-stack"></div>
+        <div id="contextRows" class="rows"></div>
+      </div>
+
+      <h2>Requests</h2>
+      <table>
+        <thead><tr><th>Time</th><th>Request</th><th>Model</th><th>Prompt</th><th>Cached</th><th>Cache</th><th>Total</th></tr></thead>
+        <tbody id="requestRows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const SECTION_ORDER = ['instructions', 'tools', 'conversation', 'attachments', 'metadata', 'cached_input', 'output', 'reasoning'];
+    const SECTION_LABELS = { instructions: 'System / Instructions', tools: 'Tool definitions', conversation: 'Conversation', attachments: 'Attachments / Images', metadata: 'Request metadata', cached_input: 'Cached input', output: 'Output', reasoning: 'Reasoning' };
+    const fmt = n => Number(n || 0).toLocaleString();
+    const pct = n => `${(Number(n || 0) * 100).toFixed(2)}%`;
+    function params() {
+      const p = new URLSearchParams();
+      for (const id of ['keyHash', 'since', 'until']) {
+        const value = document.getElementById(id).value.trim();
+        if (value) p.set(id, value);
+      }
+      return p;
+    }
+    function renderSummary(data) {
+      const s = data.summary || {};
+      for (const id of ['requestCount', 'promptTokens', 'cachedTokens', 'totalTokens']) document.getElementById(id).textContent = fmt(s[id]);
+      document.getElementById('cacheHitRatio').textContent = pct(s.cacheHitRatio);
+      const sections = data.contextSections || {};
+      const stack = document.getElementById('contextStack');
+      const rows = document.getElementById('contextRows');
+      stack.innerHTML = '';
+      rows.innerHTML = '';
+      for (const id of SECTION_ORDER) {
+        const item = sections[id] || { tokens: 0, percentOfPrompt: 0 };
+        const seg = document.createElement('div');
+        seg.className = `segment ${id}`;
+        seg.style.width = `${Math.max(0, item.percentOfPrompt || 0) * 100}%`;
+        stack.appendChild(seg);
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `<span class="dot ${id}"></span><span>${SECTION_LABELS[id]}</span><strong>${fmt(item.tokens)}</strong><span class="pct muted">${pct(item.percentOfPrompt)}</span>`;
+        rows.appendChild(row);
+      }
+    }
+    function renderRequests(requests) {
+      const body = document.getElementById('requestRows');
+      body.innerHTML = '';
+      for (const event of requests || []) {
+        const u = event.usage || {};
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${event.timestamp || ''}</td><td><code>${event.requestId || ''}</code></td><td>${event.request?.model || ''}</td><td>${fmt(u.promptTokens)}</td><td>${fmt(u.cachedTokens)}</td><td>${pct(u.cacheHitRatio)}</td><td>${fmt(u.totalTokens)}</td>`;
+        body.appendChild(tr);
+      }
+    }
+    async function load() {
+      const p = params();
+      const summary = await fetch(`/api/request-audit/summary?${p}`).then(r => r.json());
+      const requests = await fetch(`/api/request-audit/requests?${p}`).then(r => r.json());
+      renderSummary(summary.data || {});
+      renderRequests(requests.data?.requests || []);
+    }
+    document.getElementById('load').addEventListener('click', load);
+  </script>
+</body>
+</html>

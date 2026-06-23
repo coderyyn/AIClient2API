@@ -11,6 +11,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
+import { hashSecret } from '../request-audit/audit-event.js';
 
 // 配置文件路径
 const KEYS_STORE_FILE = path.join(process.cwd(), 'configs', 'api-potluck-keys.json');
@@ -351,9 +352,16 @@ function getRecentHistorySummary(usageHistory = {}, days = 7) {
 function enrichKeyUsage(keyData) {
     const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
+    const keyHash = hashSecret(keyData.id);
     const enriched = {
         ...keyData,
         usageHistory,
+        audit: {
+            keyHash,
+            summaryPath: `/api/request-audit/summary?keyHash=${encodeURIComponent(keyHash || '')}`,
+            requestsPath: `/api/request-audit/requests?keyHash=${encodeURIComponent(keyHash || '')}`,
+            defaultWindow: 'last20m'
+        },
         weeklyUsage: weeklySummary.requestCount,
         weeklyPromptTokens: weeklySummary.promptTokens,
         weeklyCompletionTokens: weeklySummary.completionTokens,
@@ -392,6 +400,9 @@ function ensureLoaded() {
     // 启动定期持久化
     if (!persistTimer) {
         persistTimer = setInterval(persistIfDirty, currentPersistInterval);
+        if (persistTimer.unref) {
+            persistTimer.unref();
+        }
         // 进程退出时保存
         process.on('beforeExit', () => persistIfDirty());
         process.on('SIGINT', () => { persistIfDirty(); process.exit(0); });
