@@ -84,4 +84,21 @@ describe('codex prewarm service', () => {
 
         expect(secondPrewarm).not.toHaveBeenCalled();
     });
+
+    test('builds Codex prewarm request without max_output_tokens unsupported by codex oauth', async () => {
+        const { buildPrewarmRequest } = await loadPrewarmService();
+        const requestBody = buildPrewarmRequest({ date: '2026-06-16', time: '06:30' }, 1);
+
+        expect(requestBody).not.toHaveProperty('max_output_tokens');
+        expect(requestBody).toMatchObject({
+            input: [{ role: 'user', content: 'ok' }],
+            instructions: 'Reply with ok.',
+            metadata: {
+                session_id: 'aiclient2api-codex-prewarm-2026-06-16-06:30',
+                prewarm_attempt: 1
+            },
+            reasoning: { effort: 'minimal' },
+            store: false
+        });
+    });
 });

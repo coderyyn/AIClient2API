@@ -100,7 +100,7 @@ function normalizeState(state) {
     };
 }
 
-function buildPrewarmRequest(slot, attempt) {
+export function buildPrewarmRequest(slot, attempt) {
     return {
         input: [
             {
@@ -109,7 +109,6 @@ function buildPrewarmRequest(slot, attempt) {
             }
         ],
         instructions: 'Reply with ok.',
-        max_output_tokens: 1,
         metadata: {
             session_id: `aiclient2api-codex-prewarm-${slot.date}-${slot.time}`,
             prewarm_attempt: attempt
