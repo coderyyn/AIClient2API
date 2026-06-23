@@ -114,7 +114,7 @@ export function buildPrewarmRequest(slot, attempt) {
             prewarm_attempt: attempt
         },
         reasoning: {
-            effort: 'minimal'
+            effort: 'low'
         },
         store: false
     };

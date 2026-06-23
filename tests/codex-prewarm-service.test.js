@@ -97,7 +97,7 @@ describe('codex prewarm service', () => {
                 session_id: 'aiclient2api-codex-prewarm-2026-06-16-06:30',
                 prewarm_attempt: 1
             },
-            reasoning: { effort: 'minimal' },
+            reasoning: { effort: 'low' },
             store: false
         });
     });
