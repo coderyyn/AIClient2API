@@ -179,6 +179,32 @@ async function persistRawCaptureConfig(config = {}, options = {}) {
     });
 }
 
+async function ensureRawCaptureAuth(req, res, config = {}) {
+    if (config._requestAuditSkipAuth) return true;
+    const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : new URL(req.url || '/', 'http://localhost').searchParams.get('token');
+    let isAuth = false;
+    if (token) {
+        try {
+            const tokenStorePath = config._requestAuditTokenStorePath || 'configs/token-store.json';
+            const tokenStore = existsSync(tokenStorePath) ? JSON.parse(readFileSync(tokenStorePath, 'utf8')) : { tokens: {} };
+            const tokenInfo = tokenStore.tokens?.[token];
+            isAuth = Boolean(tokenInfo && (!tokenInfo.expiryTime || Date.now() <= tokenInfo.expiryTime));
+        } catch {
+            isAuth = false;
+        }
+    }
+    if (isAuth) return true;
+    sendJson(res, 401, {
+        success: false,
+        error: {
+            message: 'Unauthorized access, please login first',
+            code: 'UNAUTHORIZED'
+        }
+    });
+    return false;
+}
+
 function parseQuery(requestUrl) {
     return {
         keyHash: requestUrl.searchParams.get('keyHash') || undefined,
@@ -196,6 +222,7 @@ function parseQuery(requestUrl) {
 export async function handleRequestAuditRoutes(method, path, req, res, config = {}) {
     if (!path.startsWith('/api/request-audit')) return false;
     if (path === '/api/request-audit/raw-capture') {
+        if (!await ensureRawCaptureAuth(req, res, config)) return true;
         if (!rawCaptureController) {
             sendJson(res, 503, { success: false, error: { message: 'Raw capture controller is not ready' } });
             return true;

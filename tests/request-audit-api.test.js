@@ -1,5 +1,4 @@
 import { buildAuditSummary, handleRequestAuditRoutes, setRawCaptureController } from '../src/plugins/request-audit/api-routes.js';
-import { Readable } from 'stream';
 
 describe('request audit api aggregation', () => {
   test('summarizes usage models accounts and context sections', () => {
@@ -80,7 +79,7 @@ describe('request audit api aggregation', () => {
     };
     setRawCaptureController(controller);
 
-    const payload = await callRoute('/api/request-audit/raw-capture', {});
+    const payload = await callRoute('/api/request-audit/raw-capture', { _requestAuditSkipAuth: true });
 
     expect(payload.success).toBe(true);
     expect(payload.data).toMatchObject({
@@ -99,6 +98,7 @@ describe('request audit api aggregation', () => {
     };
     const config = {
       _requestAuditSkipConfigPersist: true,
+      _requestAuditSkipAuth: true,
       REQUEST_AUDIT_RAW_CAPTURE_ENABLED: false,
       REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES: []
     };
@@ -125,13 +125,22 @@ describe('request audit api aggregation', () => {
   test('raw capture update rejects invalid key hash', async () => {
     setRawCaptureController({ getStatus: jest.fn(), updateOptions: jest.fn() });
 
-    const payload = await callRoute('/api/request-audit/raw-capture', { _requestAuditSkipConfigPersist: true }, 'POST', {
+    const payload = await callRoute('/api/request-audit/raw-capture', { _requestAuditSkipConfigPersist: true, _requestAuditSkipAuth: true }, 'POST', {
       enabled: true,
       keyHashes: ['maki_secret_key']
     }, 400);
 
     expect(payload.success).toBe(false);
     expect(payload.error.message).toContain('key hash');
+  });
+
+  test('raw capture endpoint requires admin auth by default', async () => {
+    setRawCaptureController({ getStatus: jest.fn(), updateOptions: jest.fn() });
+
+    const payload = await callRoute('/api/request-audit/raw-capture', {}, 'GET', null, 401);
+
+    expect(payload.success).toBe(false);
+    expect(payload.error.code).toBe('UNAUTHORIZED');
   });
 });
 
@@ -146,9 +155,21 @@ async function callRoute(path, config, method = 'GET', requestBody = null, expec
       responseBody = value;
     }
   };
-  const req = requestBody === null ? new Readable({ read() { this.push(null); } }) : Readable.from([JSON.stringify(requestBody)]);
-  req.url = path;
-  req.headers = {};
+  const req = {
+    url: path,
+    headers: {},
+    on(event, callback) {
+      if (event === 'data' && requestBody !== null) {
+        process.nextTick(() => callback(Buffer.from(JSON.stringify(requestBody))));
+      }
+      if (event === 'end') {
+        process.nextTick(callback);
+      }
+      return this;
+    },
+    resume() {},
+    destroy() {}
+  };
 
   await handleRequestAuditRoutes(method, path, req, res, config);
   expect(statusCode).toBe(expectedStatus);
