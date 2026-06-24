@@ -1,4 +1,4 @@
-import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
+import { buildAuditSummary, handleRequestAuditRoutes } from '../src/plugins/request-audit/api-routes.js';
 
 describe('request audit api aggregation', () => {
   test('summarizes usage models accounts and context sections', () => {
@@ -30,4 +30,55 @@ describe('request audit api aggregation', () => {
     expect(summary.accounts.A.promptTokens).toBe(1000);
     expect(summary.contextSections.conversation.tokens).toBe(1250);
   });
+
+  test('summary includes analysis freshness and diagnostic counts', async () => {
+    const payload = await callRoute('/api/request-audit/summary', {
+      _requestAuditStore: {
+        query: jest.fn(async () => [{ requestId: 'req-1', usage: { promptTokens: 1000, cachedTokens: 10 } }])
+      },
+      _requestAuditAnalysisStore: {
+        readFreshness: jest.fn(async () => ({ status: 'fresh', generatedAt: '2026-06-24T06:10:00.000Z', staleSeconds: 60 })),
+        readDiagnostics: jest.fn(async () => ({
+          'req-1': { requestId: 'req-1', primaryReason: 'prefix_changed' }
+        }))
+      }
+    });
+
+    expect(payload.success).toBe(true);
+    expect(payload.data.analysisFreshness.status).toBe('fresh');
+    expect(payload.data.diagnosticsSummary.prefix_changed).toBe(1);
+  });
+
+  test('requests attach materialized diagnosis when available', async () => {
+    const payload = await callRoute('/api/request-audit/requests', {
+      _requestAuditStore: {
+        query: jest.fn(async () => [{ requestId: 'req-1', usage: { promptTokens: 1000, cachedTokens: 10 } }])
+      },
+      _requestAuditAnalysisStore: {
+        readFreshness: jest.fn(async () => ({ status: 'fresh', generatedAt: '2026-06-24T06:10:00.000Z', staleSeconds: 60 })),
+        readDiagnostics: jest.fn(async () => ({
+          'req-1': { requestId: 'req-1', primaryReason: 'tools_changed' }
+        }))
+      }
+    });
+
+    expect(payload.data.requests[0].diagnosis.primaryReason).toBe('tools_changed');
+  });
 });
+
+async function callRoute(path, config) {
+  let statusCode = null;
+  let body = '';
+  const res = {
+    writeHead(code) {
+      statusCode = code;
+    },
+    end(value) {
+      body = value;
+    }
+  };
+
+  await handleRequestAuditRoutes('GET', path, { url: path }, res, config);
+  expect(statusCode).toBe(200);
+  return JSON.parse(body);
+}
