@@ -668,12 +668,18 @@
       const token = localStorage.getItem('authToken');
       return token ? { Authorization: `Bearer ${token}` } : {};
     };
+    const keyRelatedNames = key => {
+      const names = Array.isArray(key.audit?.relatedNames) ? key.audit.relatedNames.filter(Boolean) : [];
+      if (names.length === 0) return '关联：暂无';
+      const shown = names.slice(0, 2).join('、');
+      return names.length > 2 ? `关联：${shown} 等 ${names.length} 个` : `关联：${shown}`;
+    };
     const keyOptionLabel = key => {
       const name = key.name || '未命名 key';
       const masked = key.maskedKey || key.id || '';
       const usage = fmt(key.todayUsage || 0);
       const cache = fmtPct(key.todayCacheHitRatio || 0);
-      return `${name} · ${masked} · 今日 ${usage} 次 · 缓存 ${cache}`;
+      return `${name} · ${masked} · ${keyRelatedNames(key)} · 今日 ${usage} 次 · 缓存 ${cache}`;
     };
 
     async function hashPotluckKeyLocally(value) {

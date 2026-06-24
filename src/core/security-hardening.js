@@ -109,6 +109,12 @@ function isSensitiveReadPath(targetPath) {
     return SENSITIVE_READ_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
+function isAllowedDirectoryPath(logicalDir, physicalDir, resolvedTarget, physicalParent) {
+    if (!isInsidePath(logicalDir, resolvedTarget)) return false;
+    if (resolvedTarget === logicalDir) return true;
+    return isInsidePath(physicalDir, physicalParent);
+}
+
 // Helper to verify if path is allowed (configs/, logs/ or plugin's own folder)
 function isPathAllowed(targetPath, stack) {
     const resolvedTarget = path.resolve(normalizeFsPath(targetPath));
@@ -117,7 +123,7 @@ function isPathAllowed(targetPath, stack) {
     // 1. Allow the global configs directory
     const configsDir = path.resolve(process.cwd(), 'configs');
     const physicalConfigsDir = origExistsSync(configsDir) ? origRealpathSync(configsDir) : configsDir;
-    if (isInsidePath(configsDir, resolvedTarget) && isInsidePath(physicalConfigsDir, physicalParent)) {
+    if (isAllowedDirectoryPath(configsDir, physicalConfigsDir, resolvedTarget, physicalParent)) {
         return true;
     }
 
@@ -125,7 +131,7 @@ function isPathAllowed(targetPath, stack) {
     // logger in the host process, and log rotation performs fs.statSync/writeStream.
     const logsDir = path.resolve(process.cwd(), 'logs');
     const physicalLogsDir = origExistsSync(logsDir) ? origRealpathSync(logsDir) : logsDir;
-    if (isInsidePath(logsDir, resolvedTarget) && isInsidePath(physicalLogsDir, physicalParent)) {
+    if (isAllowedDirectoryPath(logsDir, physicalLogsDir, resolvedTarget, physicalParent)) {
         return true;
     }
     

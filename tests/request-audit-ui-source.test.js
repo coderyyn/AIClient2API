@@ -12,6 +12,8 @@ describe('request audit ui source', () => {
     expect(html).toContain('crypto.subtle.digest');
     expect(html).toContain("localStorage.getItem('authToken')");
     expect(html).toContain('Authorization');
+    expect(html).toContain('keyRelatedNames');
+    expect(html).toContain('关联：');
     expect(html).toContain('context-stack');
     expect(html).toContain('按密钥和时间窗复盘请求缓存率');
     expect(html).toContain('缓存命中率 =');

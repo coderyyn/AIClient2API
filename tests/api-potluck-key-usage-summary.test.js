@@ -119,6 +119,42 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('listKeys exposes sanitized related account names for audit key selectors', async () => {
+        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
+
+        const key = await createKey('Audit Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 1,
+            promptTokens: 2000,
+            completionTokens: 300,
+            totalTokens: 2300,
+            cachedTokens: 800
+        }, 'req-audit-related-1', {
+            providerUuid: 'codex-account-email',
+            providerName: 'user@example.com',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 3,
+            promptTokens: 6000,
+            completionTokens: 300,
+            totalTokens: 6300,
+            cachedTokens: 1200
+        }, 'req-audit-related-2', {
+            providerUuid: 'codex-account-name',
+            providerName: 'Codex Account A',
+            timestamp: '2026-06-22T02:20:30.000Z'
+        });
+
+        const [listedKey] = await listKeys();
+
+        expect(listedKey.audit.relatedNames).toEqual([
+            'Codex Account A',
+            expect.stringMatching(/^redacted-email:/)
+        ]);
+        expect(JSON.stringify(listedKey.audit.relatedNames)).not.toContain('user@example.com');
+    });
+
     test('records reasoning tokens through Potluck response hooks', async () => {
         const potluck = await loadPotluckPlugin();
         const key = await potluck.createKey('Codex Client', 1000);

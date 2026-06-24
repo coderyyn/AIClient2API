@@ -11,7 +11,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
-import { hashSecret } from '../request-audit/audit-event.js';
+import { hashSecret, sanitizeProviderName } from '../request-audit/audit-event.js';
 
 // 配置文件路径
 const KEYS_STORE_FILE = path.join(process.cwd(), 'configs', 'api-potluck-keys.json');
@@ -349,6 +349,49 @@ function getRecentHistorySummary(usageHistory = {}, days = 7) {
     return summary;
 }
 
+function collectRelatedAccountNames(usageHistory = {}, limit = 2) {
+    const accounts = new Map();
+    const collectAccount = (account, dateKey = '') => {
+        if (!account || typeof account !== 'object') return;
+        const displayName = sanitizeProviderName(account.providerName) || account.providerUuid || account.provider;
+        if (!displayName) return;
+
+        const accountKey = `${account.provider || ''}:${account.providerUuid || displayName}`;
+        const current = accounts.get(accountKey) || {
+            name: displayName,
+            requestCount: 0,
+            totalTokens: 0,
+            latestDate: ''
+        };
+        current.name = current.name || displayName;
+        current.requestCount += toNumber(account.summary?.requestCount);
+        current.totalTokens += toNumber(account.summary?.totalTokens);
+        current.latestDate = current.latestDate > dateKey ? current.latestDate : dateKey;
+        accounts.set(accountKey, current);
+    };
+
+    for (const [dateKey, day] of Object.entries(usageHistory || {})) {
+        for (const account of Object.values(day?.accounts || {})) {
+            collectAccount(account, dateKey);
+        }
+        for (const [hourKey, hour] of Object.entries(day?.hours || {})) {
+            for (const account of Object.values(hour?.accounts || {})) {
+                collectAccount(account, `${dateKey}T${hourKey}`);
+            }
+        }
+    }
+
+    return [...accounts.values()]
+        .sort((a, b) => (
+            b.requestCount - a.requestCount ||
+            b.totalTokens - a.totalTokens ||
+            b.latestDate.localeCompare(a.latestDate) ||
+            a.name.localeCompare(b.name)
+        ))
+        .slice(0, limit)
+        .map(account => account.name);
+}
+
 function enrichKeyUsage(keyData) {
     const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
@@ -360,7 +403,8 @@ function enrichKeyUsage(keyData) {
             keyHash,
             summaryPath: `/api/request-audit/summary?keyHash=${encodeURIComponent(keyHash || '')}`,
             requestsPath: `/api/request-audit/requests?keyHash=${encodeURIComponent(keyHash || '')}`,
-            defaultWindow: 'last20m'
+            defaultWindow: 'last20m',
+            relatedNames: collectRelatedAccountNames(usageHistory)
         },
         weeklyUsage: weeklySummary.requestCount,
         weeklyPromptTokens: weeklySummary.promptTokens,
