@@ -664,6 +664,10 @@
       return date.toLocaleString('zh-CN', { hour12: false });
     };
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+    const getAdminAuthHeaders = () => {
+      const token = localStorage.getItem('authToken');
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    };
     const keyOptionLabel = key => {
       const name = key.name || '未命名 key';
       const masked = key.maskedKey || key.id || '';
@@ -725,7 +729,7 @@
     async function loadKeyOptions() {
       const select = document.getElementById('keySelect');
       try {
-        const result = await fetchJson('/api/potluck/keys');
+        const result = await fetchJson('/api/potluck/keys', { auth: true });
         renderKeySelect(result.data?.keys || []);
         if (select.options.length <= 1) {
           setStatus('没有可选择的 potluck key，可手动输入完整 key。完整 key 只会在本地计算 hash。');
@@ -914,8 +918,15 @@
       });
     }
 
-    async function fetchJson(url) {
-      const response = await fetch(url);
+    async function fetchJson(url, options = {}) {
+      const { auth = false, ...fetchOptions } = options;
+      const response = await fetch(url, {
+        ...fetchOptions,
+        headers: {
+          ...(auth ? getAdminAuthHeaders() : {}),
+          ...(fetchOptions.headers || {})
+        }
+      });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.success === false) {
         throw new Error(data.error?.message || `请求失败：HTTP ${response.status}`);
