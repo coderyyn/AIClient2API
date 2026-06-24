@@ -136,4 +136,31 @@ describe('request audit plugin', () => {
     expect(eventJson).not.toContain('secret-large');
     expect(auditStore.append.mock.calls[0][0].fingerprint.warnings).toEqual(expect.arrayContaining(['payload_truncated_for_fingerprint']));
   });
+
+  test('captures raw request only when scoped raw capture is enabled for key hash', async () => {
+    const auditStore = { append: jest.fn(), cleanup: jest.fn() };
+    const rawCaptureStore = { capture: jest.fn(), cleanup: jest.fn() };
+    await plugin.init({
+      REQUEST_AUDIT_ENABLED: true,
+      REQUEST_AUDIT_RAW_CAPTURE_ENABLED: true,
+      REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES: ['sha256:1f223db5f9b186a5'],
+      _requestAuditStore: auditStore,
+      _requestAuditRawCaptureStore: rawCaptureStore
+    });
+
+    await plugin.hooks.onUnaryResponse({
+      requestId: 'req-raw',
+      nativeResponse: { usage: { prompt_tokens: 1000, total_tokens: 1000 } }
+    });
+    await plugin.hooks.onContentGenerated({
+      _monitorRequestId: 'req-raw',
+      potluckApiKey: 'maki_secret_key',
+      originalRequestBody: { input: 'raw capture scope test' },
+      model: 'gpt-5.5'
+    });
+
+    await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(rawCaptureStore.capture).toHaveBeenCalledTimes(1));
+    expect(rawCaptureStore.capture.mock.calls[0][0].originalRequestBody.input).toBe('raw capture scope test');
+  });
 });

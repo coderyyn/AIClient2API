@@ -2,6 +2,7 @@ import logger from '../../utils/logger.js';
 import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
 import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore } from './api-routes.js';
 import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
+import { RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
 
 const pendingUsage = new Map();
 const auditQueue = [];
@@ -13,6 +14,8 @@ let cleanupTimer = null;
 let cleanupInFlight = false;
 let deepContextBreakdown = false;
 let analyzerRunner = null;
+let rawCaptureStore = null;
+let rawCaptureOptions = { enabled: false, keyHashes: [] };
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_AUDIT_QUEUE_EVENTS = 1000;
@@ -101,6 +104,13 @@ async function flushAuditQueue() {
             try {
                 const event = buildRequestAuditEvent(context);
                 await store.append(event);
+                if (shouldCaptureRawRequest(rawCaptureOptions, event) && rawCaptureStore) {
+                    await rawCaptureStore.capture({
+                        ...event,
+                        originalRequestBody: context.originalRequestBody,
+                        processedRequestBody: context.processedRequestBody
+                    });
+                }
             } catch (error) {
                 logger.warn('[Request Audit] Failed to write audit event:', error.message);
             }
@@ -154,6 +164,15 @@ const requestAuditPlugin = {
         setAuditStore(store);
         const materializedStore = config._requestAuditAnalysisStore || getAnalysisStore(config);
         setAnalysisStore(materializedStore);
+        rawCaptureStore = config._requestAuditRawCaptureStore || new RequestAuditRawCaptureStore({
+            dir: config.REQUEST_AUDIT_RAW_CAPTURE_DIR,
+            ttlMinutes: config.REQUEST_AUDIT_RAW_CAPTURE_TTL_MINUTES || 60,
+            maxBytes: config.REQUEST_AUDIT_RAW_CAPTURE_MAX_BYTES || 1024 * 1024
+        });
+        rawCaptureOptions = {
+            enabled: config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED === true || config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED === 'true',
+            keyHashes: config.REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES || []
+        };
         lastCleanupAt = 0;
         startCleanupTimer();
         if (config.REQUEST_AUDIT_ANALYZER_ENABLED !== false && config.REQUEST_AUDIT_ANALYZER_ENABLED !== 'false') {
@@ -181,6 +200,8 @@ const requestAuditPlugin = {
             analyzerRunner.stop();
             analyzerRunner = null;
         }
+        rawCaptureStore = null;
+        rawCaptureOptions = { enabled: false, keyHashes: [] };
         logger.info('[Request Audit] Destroyed');
     },
 
