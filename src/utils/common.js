@@ -427,7 +427,7 @@ export const API_ACTIONS = {
     GENERATE_CONTENT: 'generateContent',
     STREAM_GENERATE_CONTENT: 'streamGenerateContent',
 };
-export const DEFAULT_REQUEST_BODY_MAX_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_REQUEST_BODY_MAX_BYTES = 100 * 1024 * 1024;
 
 import {
     usesManagedModelList,

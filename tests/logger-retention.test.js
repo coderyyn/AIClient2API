@@ -40,6 +40,15 @@ afterEach(() => {
 });
 
 describe('log retention configuration', () => {
+    test('defaults request body limit to 100 MiB', async () => {
+        delete process.env.REQUEST_BODY_MAX_BYTES;
+        delete process.env.REQUEST_BODY_MAX_MB;
+
+        const config = await initializeConfig([], 'configs/missing-test-config.json');
+
+        expect(config.REQUEST_BODY_MAX_BYTES).toBe(100 * 1024 * 1024);
+    });
+
     test('defaults log retention to 7 days', async () => {
         delete process.env.LOG_RETENTION_DAYS;
 
