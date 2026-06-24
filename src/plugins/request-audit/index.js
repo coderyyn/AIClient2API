@@ -1,6 +1,6 @@
 import logger from '../../utils/logger.js';
 import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
-import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore } from './api-routes.js';
+import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore, setRawCaptureController } from './api-routes.js';
 import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
 import { RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
 
@@ -126,7 +126,10 @@ function scheduleAuditCleanup() {
 
     lastCleanupAt = now;
     cleanupInFlight = true;
-    store.cleanup()
+    Promise.all([
+        store.cleanup(),
+        rawCaptureStore?.cleanup?.()
+    ])
         .catch(error => {
             logger.warn('[Request Audit] Failed to cleanup audit store:', error.message);
         })
@@ -135,10 +138,42 @@ function scheduleAuditCleanup() {
         });
 }
 
+function createRawCaptureController() {
+    return {
+        async getStatus() {
+            return {
+                enabled: rawCaptureOptions.enabled === true || rawCaptureOptions.enabled === 'true',
+                keyHashes: Array.isArray(rawCaptureOptions.keyHashes) ? rawCaptureOptions.keyHashes : [],
+                ttlMinutes: rawCaptureStore?.ttlMinutes || 60,
+                maxBytes: rawCaptureStore?.maxBytes || 1024 * 1024,
+                dir: rawCaptureStore?.dir || null,
+                fileCount: await rawCaptureStore?.countFiles?.() || 0
+            };
+        },
+        updateOptions(options = {}) {
+            rawCaptureOptions = {
+                enabled: options.enabled === true || options.enabled === 'true',
+                keyHashes: Array.isArray(options.keyHashes) ? options.keyHashes : []
+            };
+            rawCaptureStore?.updateOptions?.({
+                ttlMinutes: options.ttlMinutes,
+                maxBytes: options.maxBytes
+            });
+        }
+    };
+}
+
 function startCleanupTimer() {
     if (cleanupTimer) clearInterval(cleanupTimer);
     cleanupTimer = setInterval(scheduleAuditCleanup, CLEANUP_INTERVAL_MS);
     cleanupTimer.unref?.();
+}
+
+function cleanupRawCaptureOnInit() {
+    Promise.resolve(rawCaptureStore?.cleanup?.())
+        .catch(error => {
+            logger.warn('[Request Audit] Failed to cleanup raw capture store:', error.message);
+        });
 }
 
 const requestAuditPlugin = {
@@ -173,8 +208,10 @@ const requestAuditPlugin = {
             enabled: config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED === true || config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED === 'true',
             keyHashes: config.REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES || []
         };
+        setRawCaptureController(createRawCaptureController());
         lastCleanupAt = 0;
         startCleanupTimer();
+        cleanupRawCaptureOnInit();
         if (config.REQUEST_AUDIT_ANALYZER_ENABLED !== false && config.REQUEST_AUDIT_ANALYZER_ENABLED !== 'false') {
             analyzerRunner = createRequestAuditAnalyzerRunner({
                 auditStore: store,
@@ -202,6 +239,7 @@ const requestAuditPlugin = {
         }
         rawCaptureStore = null;
         rawCaptureOptions = { enabled: false, keyHashes: [] };
+        setRawCaptureController(null);
         logger.info('[Request Audit] Destroyed');
     },
 

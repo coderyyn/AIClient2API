@@ -33,6 +33,12 @@ describe('request audit ui source', () => {
     expect(html).toContain('account_changed');
     expect(html).toContain('analysisFreshness');
     expect(html).toContain('诊断结果仅供排查');
+    expect(html).toContain('原始请求采集');
+    expect(html).toContain('/api/request-audit/raw-capture');
+    expect(html).toContain('rawCaptureKeySelect');
+    expect(html).toContain('保存采集设置');
+    expect(html).toContain('会保存原始 prompt');
+    expect(html).toContain('REQUEST_AUDIT_RAW_CAPTURE');
     for (const id of ['instructions', 'tools', 'conversation', 'attachments', 'cached_input', 'output', 'reasoning']) {
       expect(html).toContain(id);
     }

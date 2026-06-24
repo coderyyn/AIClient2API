@@ -163,4 +163,18 @@ describe('request audit plugin', () => {
     await waitFor(() => expect(rawCaptureStore.capture).toHaveBeenCalledTimes(1));
     expect(rawCaptureStore.capture.mock.calls[0][0].originalRequestBody.input).toBe('raw capture scope test');
   });
+
+  test('init cleans expired raw capture files without forcing audit cleanup', async () => {
+    const auditStore = { append: jest.fn(), cleanup: jest.fn(async () => {}) };
+    const rawCaptureStore = { capture: jest.fn(), cleanup: jest.fn(async () => {}) };
+    await plugin.init({
+      REQUEST_AUDIT_ENABLED: true,
+      _requestAuditStore: auditStore,
+      _requestAuditRawCaptureStore: rawCaptureStore
+    });
+
+    await waitFor(() => expect(rawCaptureStore.cleanup).toHaveBeenCalledTimes(1));
+    expect(auditStore.cleanup).not.toHaveBeenCalled();
+    expect(rawCaptureStore.cleanup).toHaveBeenCalledTimes(1);
+  });
 });

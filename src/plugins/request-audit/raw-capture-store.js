@@ -45,6 +45,11 @@ export class RequestAuditRawCaptureStore {
         this.maxBytes = Number(maxBytes) || 1024 * 1024;
     }
 
+    updateOptions({ ttlMinutes, maxBytes } = {}) {
+        if (Number(ttlMinutes) > 0) this.ttlMinutes = Number(ttlMinutes);
+        if (Number(maxBytes) > 0) this.maxBytes = Number(maxBytes);
+    }
+
     getFilePath(event = {}) {
         const filePath = path.resolve(this.dir, dateKey(event.timestamp), `${safeRequestId(event.requestId)}.json.gz`);
         if (!filePath.startsWith(this.dir)) {
@@ -102,5 +107,23 @@ export class RequestAuditRawCaptureStore {
             }
         };
         await removeExpired(this.dir);
+    }
+
+    async countFiles() {
+        if (!fs.existsSync(this.dir)) return 0;
+        let count = 0;
+        const walk = async dir => {
+            const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    await walk(fullPath);
+                } else if (entry.isFile() && entry.name.endsWith('.json.gz')) {
+                    count += 1;
+                }
+            }
+        };
+        await walk(this.dir);
+        return count;
     }
 }

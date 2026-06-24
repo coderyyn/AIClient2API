@@ -363,6 +363,30 @@
       margin-bottom: 18px;
     }
 
+    .raw-capture-panel {
+      margin-bottom: 18px;
+      border-color: rgba(194, 65, 50, .34);
+      background:
+        linear-gradient(135deg, rgba(255, 250, 241, .96), rgba(255, 240, 224, .78)),
+        var(--surface-strong);
+    }
+
+    .raw-capture-grid {
+      display: grid;
+      grid-template-columns: minmax(240px, 1.4fr) minmax(130px, .6fr) minmax(150px, .7fr) auto;
+      gap: 12px;
+      align-items: end;
+      margin-top: 12px;
+    }
+
+    .danger-note {
+      margin: 10px 0 0;
+      color: #8a2017;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.55;
+    }
+
     .diagnostic-list {
       display: flex;
       flex-wrap: wrap;
@@ -567,6 +591,7 @@
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
       .diagnostics-panel { grid-template-columns: 1fr; }
+      .raw-capture-grid { grid-template-columns: 1fr 1fr; }
     }
 
     @media (max-width: 720px) {
@@ -583,6 +608,7 @@
       .context-row .pct { display: none; }
       .detail-panel { grid-template-columns: 1fr; }
       .detail-grid { grid-template-columns: 1fr 1fr; }
+      .raw-capture-grid { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 480px) {
@@ -665,6 +691,32 @@
               <span class="diagnostic-chip">暂无诊断</span>
             </div>
           </div>
+        </section>
+
+        <section class="card raw-capture-panel" aria-label="原始请求采集">
+          <div class="card-head">
+            <div>
+              <h2>原始请求采集</h2>
+              <p class="muted mini">REQUEST_AUDIT_RAW_CAPTURE：只对白名单 key 临时保存原始 prompt，用于判断公共前缀、截断和结构变化。</p>
+            </div>
+            <span id="rawCaptureStatus" class="pill warn">未读取</span>
+          </div>
+          <div class="raw-capture-grid">
+            <label>采集 Key
+              <select id="rawCaptureKeySelect">
+                <option value="">加载 key 列表中...</option>
+              </select>
+            </label>
+            <label>保留分钟
+              <input id="rawCaptureTtl" type="number" min="1" max="1440" step="1" value="30" inputmode="numeric">
+            </label>
+            <label>单请求上限 MB
+              <input id="rawCaptureMaxMb" type="number" min="1" max="10" step="1" value="2" inputmode="numeric">
+            </label>
+            <button id="saveRawCapture" type="button">保存采集设置</button>
+          </div>
+          <p id="rawCaptureInfo" class="muted mini">默认关闭。开启后会保存原始 prompt 和转换后的请求体；建议只开 10-30 分钟，分析完立即关闭。</p>
+          <p class="danger-note">风险提示：会保存原始 prompt。文件默认写入 configs/request-audit-raw，并由 TTL 定时清理；不要长期打开。</p>
         </section>
 
         <div class="grid">
@@ -769,6 +821,8 @@
       attachment_or_multimodal_variance: '附件/图片变化',
       unknown_or_upstream_cache_ttl: '未知或上游缓存过期'
     };
+    let potluckKeys = [];
+    let rawCaptureState = null;
 
     const fmt = value => Number(value || 0).toLocaleString('zh-CN');
     const fmtPct = value => `${(Number(value || 0) * 100).toFixed(2)}%`;
@@ -874,18 +928,98 @@
       if (current) {
         select.value = [...select.options].some(option => option.value === current) ? current : '';
       }
+      renderRawCaptureKeySelect(keys, rawCaptureState?.enabled ? rawCaptureState.keyHashes : []);
+    }
+
+    function renderRawCaptureKeySelect(keys = [], selectedHashes = []) {
+      const select = document.getElementById('rawCaptureKeySelect');
+      const current = selectedHashes[0] || select.value;
+      select.innerHTML = '';
+
+      const disabled = document.createElement('option');
+      disabled.value = '';
+      disabled.textContent = '关闭原始请求采集';
+      select.appendChild(disabled);
+
+      for (const key of keys) {
+        const keyHash = key.audit?.keyHash;
+        if (!keyHash) continue;
+        const option = document.createElement('option');
+        option.value = keyHash;
+        option.textContent = keyOptionLabel(key);
+        select.appendChild(option);
+      }
+
+      if (current) {
+        select.value = [...select.options].some(option => option.value === current) ? current : '';
+      }
+    }
+
+    function renderRawCaptureStatus(status = {}) {
+      rawCaptureState = status;
+      const pill = document.getElementById('rawCaptureStatus');
+      const info = document.getElementById('rawCaptureInfo');
+      const keyHashes = status.keyHashes || [];
+      document.getElementById('rawCaptureTtl').value = status.ttlMinutes || 30;
+      document.getElementById('rawCaptureMaxMb').value = Math.max(1, Math.round(Number(status.maxBytes || 2097152) / 1024 / 1024));
+      renderRawCaptureKeySelect(potluckKeys, status.enabled ? keyHashes : []);
+      pill.className = `pill ${status.enabled ? 'bad' : 'good'}`;
+      pill.textContent = status.enabled ? '采集中' : '已关闭';
+      info.textContent = status.enabled
+        ? `正在采集 ${keyHashes.join(', ')}；TTL ${status.ttlMinutes} 分钟；当前文件 ${fmt(status.fileCount)} 个；目录 ${status.dir || 'configs/request-audit-raw'}。`
+        : `已关闭。当前历史文件 ${fmt(status.fileCount)} 个；过期文件会按 TTL 定时清理。`;
+    }
+
+    async function loadRawCaptureStatus() {
+      try {
+        const result = await fetchJson('/api/request-audit/raw-capture', { auth: true });
+        renderRawCaptureStatus(result.data || {});
+      } catch (error) {
+        document.getElementById('rawCaptureStatus').className = 'pill warn';
+        document.getElementById('rawCaptureStatus').textContent = '读取失败';
+        document.getElementById('rawCaptureInfo').textContent = `读取原始请求采集状态失败：${error.message}`;
+      }
+    }
+
+    async function saveRawCaptureSettings() {
+      const button = document.getElementById('saveRawCapture');
+      const keyHash = document.getElementById('rawCaptureKeySelect').value.trim();
+      const ttlMinutes = Math.min(Math.max(Number(document.getElementById('rawCaptureTtl').value) || 30, 1), 1440);
+      const maxMb = Math.min(Math.max(Number(document.getElementById('rawCaptureMaxMb').value) || 2, 1), 10);
+      button.disabled = true;
+      try {
+        const result = await fetchJson('/api/request-audit/raw-capture', {
+          auth: true,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: Boolean(keyHash),
+            keyHashes: keyHash ? [keyHash] : [],
+            ttlMinutes,
+            maxBytes: maxMb * 1024 * 1024
+          })
+        });
+        renderRawCaptureStatus(result.data || {});
+        setStatus(keyHash ? '已开启原始请求采集。请短时排查，完成后在这里关闭。' : '已关闭原始请求采集。');
+      } catch (error) {
+        setStatus(`保存原始请求采集设置失败：${error.message}`, true);
+      } finally {
+        button.disabled = false;
+      }
     }
 
     async function loadKeyOptions() {
       const select = document.getElementById('keySelect');
       try {
         const result = await fetchJson('/api/potluck/keys', { auth: true });
-        renderKeySelect(result.data?.keys || []);
+        potluckKeys = result.data?.keys || [];
+        renderKeySelect(potluckKeys);
         if (select.options.length <= 1) {
           setStatus('没有可选择的 potluck key，可手动输入完整 key。完整 key 只会在本地计算 hash。');
         }
       } catch (error) {
         select.innerHTML = '<option value="">key 列表加载失败，手动输入完整 key</option>';
+        renderRawCaptureKeySelect([]);
         setStatus(`key 列表加载失败：${error.message}。通常是未登录管理端；仍可手动输入完整 key，本地计算 hash 后查询。`, true);
       }
     }
@@ -1133,6 +1267,7 @@
     }
 
     document.getElementById('load').addEventListener('click', loadAudit);
+    document.getElementById('saveRawCapture').addEventListener('click', saveRawCaptureSettings);
     document.querySelectorAll('.preset-btn').forEach(button => {
       button.addEventListener('click', () => {
         if (button.dataset.rangeToday) {
@@ -1155,6 +1290,7 @@
     });
     setDefaultTimeRange(20);
     loadKeyOptions();
+    loadRawCaptureStatus();
   </script>
 </body>
 </html>

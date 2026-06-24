@@ -1,4 +1,5 @@
-import { buildAuditSummary, handleRequestAuditRoutes } from '../src/plugins/request-audit/api-routes.js';
+import { buildAuditSummary, handleRequestAuditRoutes, setRawCaptureController } from '../src/plugins/request-audit/api-routes.js';
+import { Readable } from 'stream';
 
 describe('request audit api aggregation', () => {
   test('summarizes usage models accounts and context sections', () => {
@@ -64,21 +65,92 @@ describe('request audit api aggregation', () => {
 
     expect(payload.data.requests[0].diagnosis.primaryReason).toBe('tools_changed');
   });
+
+  test('raw capture status exposes scoped capture settings and file count', async () => {
+    const controller = {
+      getStatus: jest.fn(() => ({
+        enabled: true,
+        keyHashes: ['sha256:abcdef1234567890'],
+        ttlMinutes: 30,
+        maxBytes: 2097152,
+        dir: 'configs/request-audit-raw',
+        fileCount: 2
+      })),
+      updateOptions: jest.fn()
+    };
+    setRawCaptureController(controller);
+
+    const payload = await callRoute('/api/request-audit/raw-capture', {});
+
+    expect(payload.success).toBe(true);
+    expect(payload.data).toMatchObject({
+      enabled: true,
+      keyHashes: ['sha256:abcdef1234567890'],
+      ttlMinutes: 30,
+      maxBytes: 2097152,
+      fileCount: 2
+    });
+  });
+
+  test('raw capture update validates key hashes and updates runtime config', async () => {
+    const controller = {
+      getStatus: jest.fn(() => ({ enabled: false, keyHashes: [], ttlMinutes: 60, maxBytes: 1048576 })),
+      updateOptions: jest.fn()
+    };
+    const config = {
+      _requestAuditSkipConfigPersist: true,
+      REQUEST_AUDIT_RAW_CAPTURE_ENABLED: false,
+      REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES: []
+    };
+    setRawCaptureController(controller);
+
+    const payload = await callRoute('/api/request-audit/raw-capture', config, 'POST', {
+      enabled: true,
+      keyHashes: ['sha256:abcdef1234567890'],
+      ttlMinutes: 45,
+      maxBytes: 2097152
+    });
+
+    expect(payload.success).toBe(true);
+    expect(config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED).toBe(true);
+    expect(config.REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES).toEqual(['sha256:abcdef1234567890']);
+    expect(controller.updateOptions).toHaveBeenCalledWith({
+      enabled: true,
+      keyHashes: ['sha256:abcdef1234567890'],
+      ttlMinutes: 45,
+      maxBytes: 2097152
+    });
+  });
+
+  test('raw capture update rejects invalid key hash', async () => {
+    setRawCaptureController({ getStatus: jest.fn(), updateOptions: jest.fn() });
+
+    const payload = await callRoute('/api/request-audit/raw-capture', { _requestAuditSkipConfigPersist: true }, 'POST', {
+      enabled: true,
+      keyHashes: ['maki_secret_key']
+    }, 400);
+
+    expect(payload.success).toBe(false);
+    expect(payload.error.message).toContain('key hash');
+  });
 });
 
-async function callRoute(path, config) {
+async function callRoute(path, config, method = 'GET', requestBody = null, expectedStatus = 200) {
   let statusCode = null;
-  let body = '';
+  let responseBody = '';
   const res = {
     writeHead(code) {
       statusCode = code;
     },
     end(value) {
-      body = value;
+      responseBody = value;
     }
   };
+  const req = requestBody === null ? new Readable({ read() { this.push(null); } }) : Readable.from([JSON.stringify(requestBody)]);
+  req.url = path;
+  req.headers = {};
 
-  await handleRequestAuditRoutes('GET', path, { url: path }, res, config);
-  expect(statusCode).toBe(200);
-  return JSON.parse(body);
+  await handleRequestAuditRoutes(method, path, req, res, config);
+  expect(statusCode).toBe(expectedStatus);
+  return JSON.parse(responseBody);
 }

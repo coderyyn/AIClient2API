@@ -1,8 +1,12 @@
 import { RequestAuditStore } from './audit-store.js';
 import { RequestAuditAnalysisStore } from './analysis-store.js';
+import { existsSync, readFileSync } from 'fs';
+import { getRequestBody } from '../../utils/common.js';
+import { atomicWriteFile, withFileLock } from '../../utils/file-lock.js';
 
 let auditStore = null;
 let analysisStore = null;
+let rawCaptureController = null;
 
 function toNumber(value) {
     const number = Number(value);
@@ -46,6 +50,10 @@ export function setAuditStore(store) {
 
 export function setAnalysisStore(store) {
     analysisStore = store;
+}
+
+export function setRawCaptureController(controller) {
+    rawCaptureController = controller;
 }
 
 export function getAuditStore(config = {}) {
@@ -122,6 +130,55 @@ function requestIds(events = []) {
     return events.map(event => event.requestId).filter(Boolean);
 }
 
+function normalizeKeyHashes(value) {
+    if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean);
+    if (typeof value === 'string') return value.split(',').map(item => item.trim()).filter(Boolean);
+    return [];
+}
+
+function normalizeRawCaptureUpdate(body = {}) {
+    const keyHashes = normalizeKeyHashes(body.keyHashes);
+    for (const keyHash of keyHashes) {
+        if (!/^sha256:[a-f0-9]{16}$/i.test(keyHash)) {
+            const error = new Error('Invalid raw capture key hash. Expected sha256:xxxxxxxxxxxxxxxx key hash.');
+            error.statusCode = 400;
+            throw error;
+        }
+    }
+    const ttlMinutes = Math.min(Math.max(Number(body.ttlMinutes) || 30, 1), 24 * 60);
+    const maxBytes = Math.min(Math.max(Number(body.maxBytes) || 2 * 1024 * 1024, 1024), 10 * 1024 * 1024);
+    return {
+        enabled: body.enabled === true || body.enabled === 'true',
+        keyHashes: keyHashes.map(keyHash => `sha256:${keyHash.slice(7).toLowerCase()}`),
+        ttlMinutes,
+        maxBytes
+    };
+}
+
+async function persistRawCaptureConfig(config = {}, options = {}) {
+    config.REQUEST_AUDIT_RAW_CAPTURE_ENABLED = options.enabled;
+    config.REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES = options.keyHashes;
+    config.REQUEST_AUDIT_RAW_CAPTURE_TTL_MINUTES = options.ttlMinutes;
+    config.REQUEST_AUDIT_RAW_CAPTURE_MAX_BYTES = options.maxBytes;
+
+    if (config._requestAuditSkipConfigPersist) return;
+
+    const configPath = config._requestAuditConfigPath || 'configs/config.json';
+    await withFileLock(configPath, async () => {
+        let fileConfig = {};
+        if (existsSync(configPath)) {
+            fileConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+        }
+        Object.assign(fileConfig, {
+            REQUEST_AUDIT_RAW_CAPTURE_ENABLED: options.enabled,
+            REQUEST_AUDIT_RAW_CAPTURE_KEY_HASHES: options.keyHashes,
+            REQUEST_AUDIT_RAW_CAPTURE_TTL_MINUTES: options.ttlMinutes,
+            REQUEST_AUDIT_RAW_CAPTURE_MAX_BYTES: options.maxBytes
+        });
+        await atomicWriteFile(configPath, JSON.stringify(fileConfig, null, 2), { encoding: 'utf8', mode: 0o600 });
+    });
+}
+
 function parseQuery(requestUrl) {
     return {
         keyHash: requestUrl.searchParams.get('keyHash') || undefined,
@@ -138,6 +195,32 @@ function parseQuery(requestUrl) {
 
 export async function handleRequestAuditRoutes(method, path, req, res, config = {}) {
     if (!path.startsWith('/api/request-audit')) return false;
+    if (path === '/api/request-audit/raw-capture') {
+        if (!rawCaptureController) {
+            sendJson(res, 503, { success: false, error: { message: 'Raw capture controller is not ready' } });
+            return true;
+        }
+        if (method === 'GET') {
+            const status = await rawCaptureController.getStatus();
+            sendJson(res, 200, { success: true, data: status });
+            return true;
+        }
+        if (method === 'POST') {
+            try {
+                const body = await getRequestBody(req, { maxBytes: 16 * 1024 });
+                const options = normalizeRawCaptureUpdate(body);
+                await persistRawCaptureConfig(config, options);
+                rawCaptureController.updateOptions(options);
+                sendJson(res, 200, { success: true, data: await rawCaptureController.getStatus() });
+            } catch (error) {
+                sendJson(res, error.statusCode || 500, { success: false, error: { message: error.message } });
+            }
+            return true;
+        }
+        sendJson(res, 405, { success: false, error: { message: 'Method not allowed' } });
+        return true;
+    }
+
     if (method !== 'GET') {
         sendJson(res, 405, { success: false, error: { message: 'Method not allowed' } });
         return true;
