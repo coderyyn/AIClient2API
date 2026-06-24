@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { buildContextBreakdown } from './context-breakdown.js';
+import { buildRequestFingerprint } from './fingerprint.js';
 
 function toNumber(value) {
     const number = Number(value);
@@ -128,6 +129,22 @@ export function buildRequestAuditEvent(context = {}) {
     const date = new Date(timestamp);
     const beijing = getBeijingParts(date);
     const usage = normalizeUsage(context.usage);
+    let fingerprint = null;
+    try {
+        fingerprint = buildRequestFingerprint({
+            originalRequestBody: context.originalRequestBody,
+            processedRequestBody: context.processedRequestBody
+        });
+    } catch (error) {
+        fingerprint = {
+            version: 1,
+            payloadHash: null,
+            shapeHash: null,
+            sections: {},
+            prefixHashes: [],
+            warnings: [`fingerprint_failed:${error.message}`]
+        };
+    }
 
     return {
         schemaVersion: 1,
@@ -160,6 +177,7 @@ export function buildRequestAuditEvent(context = {}) {
             cooldownApplied: Boolean(context.cooldownApplied)
         },
         usage,
+        fingerprint,
         contextBreakdown: context.deepContextBreakdown === true
             ? buildContextBreakdown({
                 originalRequestBody: context.originalRequestBody,

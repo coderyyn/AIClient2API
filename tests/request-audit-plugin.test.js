@@ -54,6 +54,8 @@ describe('request audit plugin', () => {
       completionTokens: 20,
       totalTokens: 1020
     });
+    expect(auditStore.append.mock.calls[0][0].fingerprint.payloadHash).toMatch(/^sha256:/);
+    expect(JSON.stringify(auditStore.append.mock.calls[0][0])).not.toContain('hello');
   });
 
   test('does not block content generation when audit persistence is slow', async () => {
@@ -93,5 +95,45 @@ describe('request audit plugin', () => {
     await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1));
     expect(auditStore.cleanup).not.toHaveBeenCalled();
     resolveAppend();
+  });
+
+  test('does not block content generation when fingerprint input is large', async () => {
+    const auditStore = {
+      append: jest.fn(),
+      cleanup: jest.fn()
+    };
+    await plugin.init({ REQUEST_AUDIT_ENABLED: true, _requestAuditStore: auditStore });
+
+    await plugin.hooks.onUnaryResponse({
+      requestId: 'req-large',
+      nativeResponse: {
+        usage: {
+          prompt_tokens: 120000,
+          completion_tokens: 20,
+          total_tokens: 120020
+        }
+      }
+    });
+
+    const result = await Promise.race([
+      plugin.hooks.onContentGenerated({
+        _monitorRequestId: 'req-large',
+        potluckApiKey: 'maki_secret_key',
+        originalRequestBody: {
+          model: 'gpt-5.5',
+          messages: [{ role: 'user', content: `secret-large-${'x'.repeat(500000)}` }],
+          tools: [{ type: 'function', function: { name: 'large_tool', parameters: { description: 'y'.repeat(500000) } } }]
+        },
+        model: 'gpt-5.5',
+        toProvider: 'openai-codex-oauth'
+      }).then(() => 'returned'),
+      new Promise(resolve => setTimeout(() => resolve('blocked'), 100))
+    ]);
+
+    expect(result).toBe('returned');
+    await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1), 1500);
+    const eventJson = JSON.stringify(auditStore.append.mock.calls[0][0]);
+    expect(eventJson).not.toContain('secret-large');
+    expect(auditStore.append.mock.calls[0][0].fingerprint.warnings).toEqual(expect.arrayContaining(['payload_truncated_for_fingerprint']));
   });
 });

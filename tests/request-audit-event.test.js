@@ -26,6 +26,8 @@ describe('request audit event', () => {
     expect(serialized).not.toContain('user@example.com');
     expect(event.contextBreakdown.estimationMethod).toBe('usage-only-fast');
     expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['conversation', 'cached_input']));
+    expect(event.fingerprint.payloadHash).toMatch(/^sha256:/);
+    expect(event.fingerprint.sections.conversation.charLength).toBeGreaterThan(0);
   });
 
   test('uses deep context breakdown only when explicitly requested', () => {
