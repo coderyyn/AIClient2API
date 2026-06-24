@@ -12,6 +12,12 @@ let cleanupTimer = null;
 let cleanupInFlight = false;
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_AUDIT_QUEUE_EVENTS = 1000;
+const AUDIT_FLUSH_BATCH_SIZE = 5;
+
+function nextTick() {
+    return new Promise(resolve => setImmediate(resolve));
+}
 
 function mergeUsage(base, next) {
     const normalized = normalizeUsage(next);
@@ -61,9 +67,13 @@ function cleanupPendingUsage() {
     }
 }
 
-function enqueueAuditEvent(event) {
+function enqueueAuditContext(context) {
     if (!store) return;
-    auditQueue.push(event);
+    if (auditQueue.length >= MAX_AUDIT_QUEUE_EVENTS) {
+        logger.warn('[Request Audit] Dropping audit event because queue is full');
+        return;
+    }
+    auditQueue.push(context);
     scheduleAuditFlush();
 }
 
@@ -80,14 +90,19 @@ function scheduleAuditFlush() {
 
 async function flushAuditQueue() {
     while (auditQueue.length > 0) {
-        const event = auditQueue.shift();
-        if (!event) continue;
+        const batchSize = Math.min(auditQueue.length, AUDIT_FLUSH_BATCH_SIZE);
+        for (let i = 0; i < batchSize; i += 1) {
+            const context = auditQueue.shift();
+            if (!context) continue;
 
-        try {
-            await store.append(event);
-        } catch (error) {
-            logger.warn('[Request Audit] Failed to write audit event:', error.message);
+            try {
+                const event = buildRequestAuditEvent(context);
+                await store.append(event);
+            } catch (error) {
+                logger.warn('[Request Audit] Failed to write audit event:', error.message);
+            }
         }
+        if (auditQueue.length > 0) await nextTick();
     }
 }
 
@@ -167,13 +182,12 @@ const requestAuditPlugin = {
             try {
                 cleanupPendingUsage();
                 const usage = pendingUsage.get(requestId)?.usage || {};
-                const event = buildRequestAuditEvent({
+                enqueueAuditContext({
                     ...context,
                     requestId,
                     usage,
                     timestamp: new Date().toISOString()
                 });
-                enqueueAuditEvent(event);
             } catch (error) {
                 logger.warn('[Request Audit] Failed to enqueue audit event:', error.message);
             } finally {
