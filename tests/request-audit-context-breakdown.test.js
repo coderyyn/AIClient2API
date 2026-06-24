@@ -47,4 +47,35 @@ describe('request audit context breakdown', () => {
       'cached_input'
     ]));
   });
+
+  test('summarizes large request bodies without retaining raw prompt text', () => {
+    const largePrompt = `BEGIN-LARGE-PROMPT-${'x'.repeat(300_000)}-END-LARGE-PROMPT`;
+    const largeSchema = {
+      type: 'function',
+      function: {
+        name: 'large_tool',
+        parameters: {
+          type: 'object',
+          description: 'y'.repeat(300_000)
+        }
+      }
+    };
+
+    const result = buildContextBreakdown({
+      originalRequestBody: {
+        model: 'gpt-5.5',
+        messages: [{ role: 'user', content: largePrompt }],
+        tools: [largeSchema]
+      },
+      usage: { promptTokens: 120_000, cachedTokens: 12_000 }
+    });
+
+    expect(result.sections.map(s => s.id)).toEqual(expect.arrayContaining([
+      'conversation',
+      'tools',
+      'cached_input'
+    ]));
+    expect(JSON.stringify(result)).not.toContain('BEGIN-LARGE-PROMPT');
+    expect(result.sections.find(s => s.id === 'conversation').calibratedTokens).toBeGreaterThan(0);
+  });
 });

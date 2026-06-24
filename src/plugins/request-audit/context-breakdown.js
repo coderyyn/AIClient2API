@@ -1,4 +1,4 @@
-import { countTextTokens, processContent } from '../../utils/token-utils.js';
+import { countTextTokens } from '../../utils/token-utils.js';
 
 const SECTION_LABELS = {
     instructions: 'System / Instructions',
@@ -11,23 +11,69 @@ const SECTION_LABELS = {
     reasoning: 'Reasoning'
 };
 
+const MAX_TOKENIZER_CHARS = 20_000;
+const MAX_JSON_ESTIMATE_CHARS = 200_000;
+const MAX_ARRAY_ITEMS = 200;
+const MAX_OBJECT_KEYS = 100;
+
 function toNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : 0;
 }
 
+function estimateTextTokenCount(text) {
+    const value = String(text || '');
+    if (value.length > MAX_TOKENIZER_CHARS) {
+        return Math.ceil(value.length / 4);
+    }
+    return countTextTokens(value);
+}
+
+function estimateJsonChars(value, budget = MAX_JSON_ESTIMATE_CHARS, depth = 0) {
+    if (budget <= 0) return 0;
+    if (value === null || value === undefined) return 4;
+    if (typeof value === 'string') return Math.min(value.length + 2, budget);
+    if (typeof value === 'number' || typeof value === 'boolean') return Math.min(String(value).length, budget);
+    if (depth >= 6) return Math.min(16, budget);
+
+    let total = Array.isArray(value) ? 2 : 2;
+    if (Array.isArray(value)) {
+        for (const item of value.slice(0, MAX_ARRAY_ITEMS)) {
+            const remaining = budget - total;
+            if (remaining <= 0) break;
+            total += 1 + estimateJsonChars(item, remaining, depth + 1);
+        }
+        return Math.min(total, budget);
+    }
+
+    if (typeof value === 'object') {
+        for (const key of Object.keys(value).slice(0, MAX_OBJECT_KEYS)) {
+            const remaining = budget - total;
+            if (remaining <= 0) break;
+            total += key.length + 3 + estimateJsonChars(value[key], remaining, depth + 1);
+        }
+        return Math.min(total, budget);
+    }
+
+    return Math.min(String(value).length, budget);
+}
+
 function textTokens(value) {
     if (value === undefined || value === null) return 0;
-    if (typeof value === 'string') return countTextTokens(value);
-    return countTextTokens(processContent(value));
+    if (typeof value === 'string') return estimateTextTokenCount(value);
+    return jsonTokens(value);
 }
 
 function jsonTokens(value) {
     if (value === undefined || value === null) return 0;
+    const estimatedChars = estimateJsonChars(value);
+    if (estimatedChars > MAX_TOKENIZER_CHARS) {
+        return Math.ceil(estimatedChars / 4);
+    }
     try {
         return countTextTokens(JSON.stringify(value));
     } catch (_error) {
-        return 0;
+        return Math.ceil(estimatedChars / 4);
     }
 }
 
