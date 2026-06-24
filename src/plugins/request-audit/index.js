@@ -8,6 +8,8 @@ let enabled = true;
 let store = null;
 let flushPromise = null;
 let lastCleanupAt = 0;
+let cleanupTimer = null;
+let cleanupInFlight = false;
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -83,15 +85,32 @@ async function flushAuditQueue() {
 
         try {
             await store.append(event);
-            const now = Date.now();
-            if (now - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
-                lastCleanupAt = now;
-                await store.cleanup();
-            }
         } catch (error) {
             logger.warn('[Request Audit] Failed to write audit event:', error.message);
         }
     }
+}
+
+function scheduleAuditCleanup() {
+    if (!store || cleanupInFlight) return;
+    const now = Date.now();
+    if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+
+    lastCleanupAt = now;
+    cleanupInFlight = true;
+    store.cleanup()
+        .catch(error => {
+            logger.warn('[Request Audit] Failed to cleanup audit store:', error.message);
+        })
+        .finally(() => {
+            cleanupInFlight = false;
+        });
+}
+
+function startCleanupTimer() {
+    if (cleanupTimer) clearInterval(cleanupTimer);
+    cleanupTimer = setInterval(scheduleAuditCleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref?.();
 }
 
 const requestAuditPlugin = {
@@ -115,12 +134,17 @@ const requestAuditPlugin = {
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
         lastCleanupAt = 0;
+        startCleanupTimer();
         logger.info(`[Request Audit] Initialized enabled=${enabled}`);
     },
 
     async destroy() {
         pendingUsage.clear();
         auditQueue.length = 0;
+        if (cleanupTimer) {
+            clearInterval(cleanupTimer);
+            cleanupTimer = null;
+        }
         logger.info('[Request Audit] Destroyed');
     },
 

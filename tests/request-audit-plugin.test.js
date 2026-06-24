@@ -93,6 +93,5 @@ describe('request audit plugin', () => {
     await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1));
     expect(auditStore.cleanup).not.toHaveBeenCalled();
     resolveAppend();
-    await waitFor(() => expect(auditStore.cleanup).toHaveBeenCalledTimes(1));
   });
 });
