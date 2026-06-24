@@ -3,8 +3,13 @@ import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
 import { getAuditStore, handleRequestAuditRoutes, setAuditStore } from './api-routes.js';
 
 const pendingUsage = new Map();
+const auditQueue = [];
 let enabled = true;
 let store = null;
+let flushPromise = null;
+let lastCleanupAt = 0;
+
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 function mergeUsage(base, next) {
     const normalized = normalizeUsage(next);
@@ -54,6 +59,41 @@ function cleanupPendingUsage() {
     }
 }
 
+function enqueueAuditEvent(event) {
+    if (!store) return;
+    auditQueue.push(event);
+    scheduleAuditFlush();
+}
+
+function scheduleAuditFlush() {
+    if (!flushPromise) {
+        flushPromise = flushAuditQueue().finally(() => {
+            flushPromise = null;
+            if (auditQueue.length > 0) {
+                scheduleAuditFlush();
+            }
+        });
+    }
+}
+
+async function flushAuditQueue() {
+    while (auditQueue.length > 0) {
+        const event = auditQueue.shift();
+        if (!event) continue;
+
+        try {
+            await store.append(event);
+            const now = Date.now();
+            if (now - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
+                lastCleanupAt = now;
+                await store.cleanup();
+            }
+        } catch (error) {
+            logger.warn('[Request Audit] Failed to write audit event:', error.message);
+        }
+    }
+}
+
 const requestAuditPlugin = {
     name: 'request-audit',
     version: '1.0.0',
@@ -74,11 +114,13 @@ const requestAuditPlugin = {
         enabled = config.REQUEST_AUDIT_ENABLED !== false && config.REQUEST_AUDIT_ENABLED !== 'false';
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
+        lastCleanupAt = 0;
         logger.info(`[Request Audit] Initialized enabled=${enabled}`);
     },
 
     async destroy() {
         pendingUsage.clear();
+        auditQueue.length = 0;
         logger.info('[Request Audit] Destroyed');
     },
 
@@ -107,10 +149,9 @@ const requestAuditPlugin = {
                     usage,
                     timestamp: new Date().toISOString()
                 });
-                await store.append(event);
-                await store.cleanup();
+                enqueueAuditEvent(event);
             } catch (error) {
-                logger.warn('[Request Audit] Failed to write audit event:', error.message);
+                logger.warn('[Request Audit] Failed to enqueue audit event:', error.message);
             } finally {
                 pendingUsage.delete(requestId);
             }
