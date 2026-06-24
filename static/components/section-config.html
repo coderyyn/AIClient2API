@@ -326,6 +326,39 @@
                 </div>
             </div>
 
+            <!-- 用量缓存自动刷新 -->
+            <div class="config-group-section">
+                <h3><i class="fas fa-sync-alt"></i> 用量缓存自动刷新</h3>
+                <div class="config-row">
+                    <div class="form-group">
+                        <span class="toggle-label">启用自动刷新</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="usageCacheAutoRefreshEnabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <span class="toggle-label">启动时立即刷新</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="usageCacheAutoRefreshStartupRun">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="usageCacheAutoRefreshInterval">刷新间隔</label>
+                    <div class="input-with-quick-select">
+                        <input type="number" id="usageCacheAutoRefreshInterval" class="form-control" min="60000" max="3600000" step="60000" value="600000" placeholder="毫秒">
+                        <div class="quick-select-btns">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-value="300000">5分钟</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-value="600000">10分钟</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-value="1800000">30分钟</button>
+                        </div>
+                    </div>
+                    <small class="form-text">后台定时刷新 usage-cache.json，默认10分钟；不改变额度门禁和过期缓存选路策略。</small>
+                </div>
+            </div>
+
             <!-- 定时健康检查 -->
             <div class="config-group-section">
                 <h3 data-i18n="config.healthCheck.title"><i class="fas fa-heartbeat"></i> 定时健康检查</h3>

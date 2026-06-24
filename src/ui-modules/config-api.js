@@ -156,6 +156,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
         LOG_RETENTION_DAYS: currentConfig.LOG_RETENTION_DAYS,
         SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+        USAGE_CACHE_AUTO_REFRESH: currentConfig.USAGE_CACHE_AUTO_REFRESH,
         // 脱敏：只返回是否设置了 API Key，不返回原文
         REQUIRED_API_KEY: currentConfig.REQUIRED_API_KEY ? '******' : '',
         systemPrompt,
@@ -384,6 +385,32 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             }
         }
 
+        // Usage cache auto refresh settings
+        if (newConfig.USAGE_CACHE_AUTO_REFRESH !== undefined) {
+            const incoming = newConfig.USAGE_CACHE_AUTO_REFRESH;
+            const prevConfig = currentConfig.USAGE_CACHE_AUTO_REFRESH || {};
+            const wasEnabled = prevConfig.enabled !== false;
+            const nowEnabled = incoming?.enabled !== false;
+            const val = Number(incoming?.interval);
+            const newInterval = isNaN(val) ? 600000 : Math.max(60000, Math.min(3600000, val));
+            const oldInterval = globalThis._activeUsageCacheAutoRefreshInterval;
+
+            currentConfig.USAGE_CACHE_AUTO_REFRESH = {
+                enabled: nowEnabled,
+                startupRun: incoming?.startupRun !== false,
+                interval: newInterval
+            };
+
+            if (wasEnabled && !nowEnabled && globalThis.stopUsageCacheAutoRefreshTimer) {
+                globalThis.stopUsageCacheAutoRefreshTimer();
+                globalThis._activeUsageCacheAutoRefreshInterval = undefined;
+            } else if (!wasEnabled && nowEnabled && globalThis.reloadUsageCacheAutoRefreshTimer) {
+                globalThis._activeUsageCacheAutoRefreshInterval = globalThis.reloadUsageCacheAutoRefreshTimer(newInterval);
+            } else if (nowEnabled && newInterval !== oldInterval && globalThis.reloadUsageCacheAutoRefreshTimer) {
+                globalThis._activeUsageCacheAutoRefreshInterval = globalThis.reloadUsageCacheAutoRefreshTimer(newInterval);
+            }
+        }
+
         // Handle system prompt update
         if (newConfig.systemPrompt !== undefined) {
             const promptPath = currentConfig.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
@@ -462,7 +489,8 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 TLS_SIDECAR_ENABLED_PROVIDERS: currentConfig.TLS_SIDECAR_ENABLED_PROVIDERS,
                 TLS_SIDECAR_PORT: currentConfig.TLS_SIDECAR_PORT,
                 TLS_SIDECAR_PROXY_URL: currentConfig.TLS_SIDECAR_PROXY_URL,
-                SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK
+                SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+                USAGE_CACHE_AUTO_REFRESH: currentConfig.USAGE_CACHE_AUTO_REFRESH
             };
 
             await atomicWriteFile(configPath, JSON.stringify(configToSave, null, 2), { encoding: 'utf-8', mode: 0o600 });

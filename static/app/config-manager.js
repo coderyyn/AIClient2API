@@ -644,6 +644,28 @@ async function loadConfiguration() {
             });
         });
 
+        // 用量缓存自动刷新配置
+        const usageCacheAutoRefreshEnabledEl = document.getElementById('usageCacheAutoRefreshEnabled');
+        const usageCacheAutoRefreshStartupRunEl = document.getElementById('usageCacheAutoRefreshStartupRun');
+        const usageCacheAutoRefreshIntervalEl = document.getElementById('usageCacheAutoRefreshInterval');
+        const usageCacheAutoRefresh = data.USAGE_CACHE_AUTO_REFRESH || {};
+        if (usageCacheAutoRefreshEnabledEl) usageCacheAutoRefreshEnabledEl.checked = usageCacheAutoRefresh.enabled !== false;
+        if (usageCacheAutoRefreshStartupRunEl) usageCacheAutoRefreshStartupRunEl.checked = usageCacheAutoRefresh.startupRun !== false;
+        if (usageCacheAutoRefreshIntervalEl) usageCacheAutoRefreshIntervalEl.value = usageCacheAutoRefresh.interval || 600000;
+
+        const usageCacheIntervalQuickBtns = document.querySelectorAll('#usageCacheAutoRefreshInterval + .quick-select-btns button');
+        usageCacheIntervalQuickBtns.forEach(btn => {
+            if (btn.dataset.listenerAttached) return;
+            btn.dataset.listenerAttached = 'true';
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const value = parseInt(btn.getAttribute('data-value'));
+                if (usageCacheAutoRefreshIntervalEl) {
+                    usageCacheAutoRefreshIntervalEl.value = value;
+                }
+            });
+        });
+
         isCurrentPasswordDefault = data.isDefaultPassword === true;
         updateConfigHandoffSummary();
         
@@ -792,6 +814,15 @@ async function saveConfiguration(options = {}) {
         startupRun: document.getElementById('scheduledHealthCheckStartupRun')?.checked !== false,
         interval: validatedInterval,
         providerTypes: scheduledHealthCheckProviderTypes
+    };
+
+    const rawUsageCacheInterval = parseInt(document.getElementById('usageCacheAutoRefreshInterval')?.value);
+    const validatedUsageCacheInterval = isNaN(rawUsageCacheInterval) ? 600000 : Math.max(60000, Math.min(3600000, rawUsageCacheInterval));
+
+    config.USAGE_CACHE_AUTO_REFRESH = {
+        enabled: document.getElementById('usageCacheAutoRefreshEnabled')?.checked !== false,
+        startupRun: document.getElementById('usageCacheAutoRefreshStartupRun')?.checked !== false,
+        interval: validatedUsageCacheInterval
     };
 
     try {

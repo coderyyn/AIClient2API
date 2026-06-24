@@ -157,6 +157,11 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
             interval: 600000,
             startupRun: false
         },
+        USAGE_CACHE_AUTO_REFRESH: {
+            enabled: true,
+            interval: 600000,
+            startupRun: true
+        },
         providerFallbackChain: {}, // 跨类型 Fallback 链配置
         LOG_ENABLED: true,
         LOG_OUTPUT_MODE: "all",

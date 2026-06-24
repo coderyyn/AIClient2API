@@ -10,6 +10,7 @@ import { discoverPlugins, getPluginManager } from '../core/plugin-manager.js';
 import { getTLSSidecar } from '../utils/tls-sidecar.js';
 import { HEALTH_CHECK } from '../utils/constants.js';
 import { startCodexPrewarmService } from './codex-prewarm-service.js';
+import { startUsageCacheAutoRefreshService } from './usage-cache-auto-refresh-service.js';
 
 /**
  * @license
@@ -128,6 +129,7 @@ const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
 // 存储服务器实例，用于优雅关闭
 let serverInstance = null;
 let codexPrewarmService = null;
+let usageCacheAutoRefreshService = null;
 
 /**
  * 发送消息给主进程
@@ -197,6 +199,11 @@ async function gracefulShutdown() {
     if (codexPrewarmService) {
         codexPrewarmService.stop();
         codexPrewarmService = null;
+    }
+
+    if (usageCacheAutoRefreshService) {
+        usageCacheAutoRefreshService.stop();
+        usageCacheAutoRefreshService = null;
     }
 
     // 停止 TLS sidecar
@@ -301,6 +308,7 @@ async function startServer() {
     // Initialize API services
     const services = await initApiService(CONFIG, true);
     codexPrewarmService = startCodexPrewarmService(CONFIG, getProviderPoolManager());
+    usageCacheAutoRefreshService = startUsageCacheAutoRefreshService(CONFIG, getProviderPoolManager());
     
     // Initialize UI management features
     initializeUIManagement(CONFIG);

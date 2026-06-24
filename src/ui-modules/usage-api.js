@@ -33,7 +33,7 @@ const supportedProviders = [
  * @param {Object} providerPoolManager - 提供商池管理器
  * @returns {Promise<Object>} 所有提供商的用量信息
  */
-async function getAllProvidersUsage(currentConfig, providerPoolManager) {
+export async function getAllProvidersUsage(currentConfig, providerPoolManager) {
     const results = {
         timestamp: new Date().toISOString(),
         providers: {}
