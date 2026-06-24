@@ -138,6 +138,60 @@
       overflow: hidden;
     }
 
+    .view-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.7), rgba(247,240,228,.72)),
+        var(--surface);
+    }
+
+    .view-tab {
+      display: grid;
+      gap: 4px;
+      min-height: 64px;
+      padding: 12px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      box-shadow: none;
+      align-self: stretch;
+    }
+
+    .view-tab strong {
+      color: var(--text);
+      font-size: 15px;
+      letter-spacing: -.02em;
+    }
+
+    .view-tab span {
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 600;
+    }
+
+    .view-tab:hover {
+      background: rgba(255, 255, 255, .72);
+      color: var(--primary-strong);
+      transform: translateY(-1px);
+    }
+
+    .view-tab[aria-selected="true"] {
+      border-color: rgba(15, 118, 110, .34);
+      background:
+        linear-gradient(135deg, rgba(217, 244, 238, .78), rgba(255, 250, 241, .96));
+      color: var(--primary-strong);
+      box-shadow: 0 12px 30px rgba(15, 118, 110, .12);
+    }
+
+    .view-tab[aria-selected="true"] strong { color: var(--primary-strong); }
+    .view-panel[hidden] { display: none; }
+
     .toolbar {
       display: grid;
       grid-template-columns: minmax(220px, 1.6fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(120px, .6fr) auto;
@@ -364,12 +418,37 @@
     }
 
     .raw-capture-panel {
-      margin-bottom: 18px;
       border-color: rgba(194, 65, 50, .34);
       background:
         linear-gradient(135deg, rgba(255, 250, 241, .96), rgba(255, 240, 224, .78)),
         var(--surface-strong);
     }
+
+    .capture-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(280px, .82fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .capture-guide {
+      display: grid;
+      gap: 12px;
+    }
+
+    .guide-item {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, .68);
+    }
+
+    .guide-item h3 {
+      margin-bottom: 6px;
+      color: var(--primary-strong);
+    }
+
+    .guide-item p { margin-bottom: 0; }
 
     .raw-capture-grid {
       display: grid;
@@ -591,6 +670,7 @@
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
       .diagnostics-panel { grid-template-columns: 1fr; }
+      .capture-shell { grid-template-columns: 1fr; }
       .raw-capture-grid { grid-template-columns: 1fr 1fr; }
     }
 
@@ -598,6 +678,8 @@
       main { width: min(100vw - 20px, 1240px); padding-top: 18px; }
       .hero { grid-template-columns: 1fr; }
       .api-chip { align-items: flex-start; border-radius: var(--radius-md); }
+      .view-tabs { grid-template-columns: 1fr; padding: 10px; }
+      .view-tab { min-height: 56px; }
       .toolbar { grid-template-columns: 1fr; padding: 14px; }
       .toolbar button { grid-column: auto; }
       .time-presets { grid-column: auto; }
@@ -628,8 +710,20 @@
       <div class="api-chip"><code>/api/request-audit/summary</code></div>
     </header>
 
-    <section class="panel" aria-label="请求审计查询">
-      <div class="toolbar">
+    <section class="panel" aria-label="请求审计工作台">
+      <nav class="view-tabs" role="tablist" aria-label="请求审计功能">
+        <button id="auditTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="auditPanel" data-view="audit">
+          <strong>缓存审计</strong>
+          <span>按 key 和时间窗查看请求、缓存命中率、上下文分类和诊断。</span>
+        </button>
+        <button id="captureTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="capturePanel" data-view="capture">
+          <strong>原始采集</strong>
+          <span>短时开启 raw capture，用于验证公共前缀、截断和结构变化。</span>
+        </button>
+      </nav>
+
+      <section id="auditPanel" class="view-panel" role="tabpanel" aria-labelledby="auditTab">
+        <div class="toolbar">
         <label>选择 Potluck Key
           <select id="keySelect">
             <option value="">加载 key 列表中...</option>
@@ -691,32 +785,6 @@
               <span class="diagnostic-chip">暂无诊断</span>
             </div>
           </div>
-        </section>
-
-        <section class="card raw-capture-panel" aria-label="原始请求采集">
-          <div class="card-head">
-            <div>
-              <h2>原始请求采集</h2>
-              <p class="muted mini">REQUEST_AUDIT_RAW_CAPTURE：只对白名单 key 临时保存原始 prompt，用于判断公共前缀、截断和结构变化。</p>
-            </div>
-            <span id="rawCaptureStatus" class="pill warn">未读取</span>
-          </div>
-          <div class="raw-capture-grid">
-            <label>采集 Key
-              <select id="rawCaptureKeySelect">
-                <option value="">加载 key 列表中...</option>
-              </select>
-            </label>
-            <label>保留分钟
-              <input id="rawCaptureTtl" type="number" min="1" max="1440" step="1" value="30" inputmode="numeric">
-            </label>
-            <label>单请求上限 MB
-              <input id="rawCaptureMaxMb" type="number" min="1" max="10" step="1" value="2" inputmode="numeric">
-            </label>
-            <button id="saveRawCapture" type="button">保存采集设置</button>
-          </div>
-          <p id="rawCaptureInfo" class="muted mini">默认关闭。开启后会保存原始 prompt 和转换后的请求体；建议只开 10-30 分钟，分析完立即关闭。</p>
-          <p class="danger-note">风险提示：会保存原始 prompt。文件默认写入 configs/request-audit-raw，并由 TTL 定时清理；不要长期打开。</p>
         </section>
 
         <div class="grid">
@@ -786,6 +854,54 @@
           </div>
         </section>
       </div>
+      </section>
+
+      <section id="capturePanel" class="view-panel" role="tabpanel" aria-labelledby="captureTab" hidden>
+        <div class="content">
+          <div class="capture-shell">
+            <section class="card raw-capture-panel" aria-label="原始请求采集">
+              <div class="card-head">
+                <div>
+                  <h2>原始请求采集</h2>
+                  <p class="muted mini">REQUEST_AUDIT_RAW_CAPTURE：只对白名单 key 临时保存原始 prompt，用于判断公共前缀、截断和结构变化。</p>
+                </div>
+                <span id="rawCaptureStatus" class="pill warn">未读取</span>
+              </div>
+              <div class="raw-capture-grid">
+                <label>采集 Key
+                  <select id="rawCaptureKeySelect">
+                    <option value="">加载 key 列表中...</option>
+                  </select>
+                </label>
+                <label>保留分钟
+                  <input id="rawCaptureTtl" type="number" min="1" max="1440" step="1" value="30" inputmode="numeric">
+                </label>
+                <label>单请求上限 MB
+                  <input id="rawCaptureMaxMb" type="number" min="1" max="10" step="1" value="2" inputmode="numeric">
+                </label>
+                <button id="saveRawCapture" type="button">保存采集设置</button>
+              </div>
+              <p id="rawCaptureInfo" class="muted mini">默认关闭。开启后会保存原始 prompt 和转换后的请求体；建议只开 10-30 分钟，分析完立即关闭。</p>
+              <p class="danger-note">风险提示：会保存原始 prompt。文件默认写入 configs/request-audit-raw，并由 TTL 定时清理；不要长期打开。</p>
+            </section>
+
+            <aside class="capture-guide" aria-label="原始采集使用说明">
+              <div class="guide-item">
+                <h3>什么时候开启</h3>
+                <p class="muted mini">只在需要解释“多次请求缓存率为什么低”时短时开启，例如怀疑公共前缀变短、工具定义变化、附件导致截断，或账号/模型切换影响缓存。</p>
+              </div>
+              <div class="guide-item">
+                <h3>在哪里查看</h3>
+                <p class="muted mini">采集文件写入 <code>configs/request-audit-raw</code>。页面保留审计汇总，原始 prompt 不在默认表格中展示，避免误泄露。</p>
+              </div>
+              <div class="guide-item">
+                <h3>怎么收尾</h3>
+                <p class="muted mini">分析完成后选择“关闭原始请求采集”并保存。TTL 会定时清理过期文件，但不应把它当作长期日志归档。</p>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
     </section>
   </main>
 
@@ -1245,6 +1361,20 @@
       return data;
     }
 
+    function showView(view) {
+      const nextView = view === 'capture' ? 'capture' : 'audit';
+      document.querySelectorAll('[data-view]').forEach(button => {
+        const active = button.dataset.view === nextView;
+        button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+      });
+      document.getElementById('auditPanel').hidden = nextView !== 'audit';
+      document.getElementById('capturePanel').hidden = nextView !== 'capture';
+      if (location.hash !== `#${nextView}`) {
+        history.replaceState(null, '', `#${nextView}`);
+      }
+    }
+
     async function loadAudit() {
       const button = document.getElementById('load');
       button.disabled = true;
@@ -1266,6 +1396,11 @@
       }
     }
 
+    document.querySelectorAll('[data-view]').forEach(button => {
+      button.addEventListener('click', () => showView(button.dataset.view));
+    });
+    window.addEventListener('hashchange', () => showView(location.hash.replace('#', '')));
+    showView(location.hash.replace('#', ''));
     document.getElementById('load').addEventListener('click', loadAudit);
     document.getElementById('saveRawCapture').addEventListener('click', saveRawCaptureSettings);
     document.querySelectorAll('.preset-btn').forEach(button => {
