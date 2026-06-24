@@ -24,5 +24,25 @@ describe('request audit event', () => {
     expect(serialized).not.toContain('maki_4734b4e5fe29dc2af36d8296a46f3462');
     expect(serialized).not.toContain('secret prompt text');
     expect(serialized).not.toContain('user@example.com');
+    expect(event.contextBreakdown.estimationMethod).toBe('usage-only-fast');
+    expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['conversation', 'cached_input']));
+  });
+
+  test('uses deep context breakdown only when explicitly requested', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-deep',
+      model: 'gpt-5.5',
+      deepContextBreakdown: true,
+      originalRequestBody: {
+        model: 'gpt-5.5',
+        instructions: 'system text',
+        tools: [{ type: 'function', function: { name: 'lookup' } }],
+        input: [{ role: 'user', content: 'hello' }]
+      },
+      usage: { promptTokens: 1000, cachedTokens: 100, totalTokens: 1100 }
+    });
+
+    expect(event.contextBreakdown.estimationMethod).toContain('calibrated');
+    expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['instructions', 'tools', 'conversation']));
   });
 });

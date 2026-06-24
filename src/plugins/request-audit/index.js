@@ -10,6 +10,7 @@ let flushPromise = null;
 let lastCleanupAt = 0;
 let cleanupTimer = null;
 let cleanupInFlight = false;
+let deepContextBreakdown = false;
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_AUDIT_QUEUE_EVENTS = 1000;
@@ -146,11 +147,12 @@ const requestAuditPlugin = {
 
     async init(config = {}) {
         enabled = config.REQUEST_AUDIT_ENABLED !== false && config.REQUEST_AUDIT_ENABLED !== 'false';
+        deepContextBreakdown = config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === true || config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === 'true';
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
         lastCleanupAt = 0;
         startCleanupTimer();
-        logger.info(`[Request Audit] Initialized enabled=${enabled}`);
+        logger.info(`[Request Audit] Initialized enabled=${enabled} deepContextBreakdown=${deepContextBreakdown}`);
     },
 
     async destroy() {
@@ -186,6 +188,7 @@ const requestAuditPlugin = {
                     ...context,
                     requestId,
                     usage,
+                    deepContextBreakdown,
                     timestamp: new Date().toISOString()
                 });
             } catch (error) {

@@ -78,6 +78,51 @@ function getBeijingParts(date) {
     };
 }
 
+function buildUsageOnlyContextBreakdown(usage = {}) {
+    const promptTokens = toNumber(usage.promptTokens);
+    const cachedTokens = toNumber(usage.cachedTokens);
+    const completionTokens = toNumber(usage.completionTokens);
+    const reasoningTokens = toNumber(usage.reasoningTokens);
+    const conversationTokens = Math.max(0, promptTokens - cachedTokens);
+    const sections = [];
+
+    if (conversationTokens > 0) {
+        sections.push({
+            id: 'conversation',
+            label: 'Conversation',
+            calibratedTokens: conversationTokens,
+            percentOfPrompt: promptTokens > 0 ? conversationTokens / promptTokens : 0
+        });
+    }
+    if (cachedTokens > 0) {
+        sections.push({
+            id: 'cached_input',
+            label: 'Cached input',
+            tokens: cachedTokens,
+            percentOfPrompt: promptTokens > 0 ? cachedTokens / promptTokens : 0
+        });
+    }
+    if (completionTokens > 0) {
+        sections.push({
+            id: 'output',
+            label: 'Output',
+            tokens: completionTokens
+        });
+    }
+    if (reasoningTokens > 0) {
+        sections.push({
+            id: 'reasoning',
+            label: 'Reasoning',
+            tokens: reasoningTokens
+        });
+    }
+
+    return {
+        estimationMethod: 'usage-only-fast',
+        sections
+    };
+}
+
 export function buildRequestAuditEvent(context = {}) {
     const timestamp = context.timestamp || new Date().toISOString();
     const date = new Date(timestamp);
@@ -115,10 +160,12 @@ export function buildRequestAuditEvent(context = {}) {
             cooldownApplied: Boolean(context.cooldownApplied)
         },
         usage,
-        contextBreakdown: buildContextBreakdown({
-            originalRequestBody: context.originalRequestBody,
-            processedRequestBody: context.processedRequestBody,
-            usage
-        })
+        contextBreakdown: context.deepContextBreakdown === true
+            ? buildContextBreakdown({
+                originalRequestBody: context.originalRequestBody,
+                processedRequestBody: context.processedRequestBody,
+                usage
+            })
+            : buildUsageOnlyContextBreakdown(usage)
     };
 }
