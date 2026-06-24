@@ -3,8 +3,10 @@ FROM golang:1.22-alpine AS sidecar-builder
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
+ARG GOPROXY=https://proxy.golang.org,direct
 ENV HTTP_PROXY=$HTTP_PROXY
 ENV HTTPS_PROXY=$HTTPS_PROXY
+ENV GOPROXY=$GOPROXY
 
 RUN apk add --no-cache git
 
