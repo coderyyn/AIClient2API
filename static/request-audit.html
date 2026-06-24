@@ -155,6 +155,13 @@
       font-weight: 700;
     }
 
+    .field-help {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.45;
+    }
+
     input, select {
       width: 100%;
       min-height: 44px;
@@ -523,7 +530,8 @@
           <select id="keySelect">
             <option value="">加载 key 列表中...</option>
           </select>
-          <input id="keyHash" autocomplete="off" spellcheck="false" placeholder="或手动输入 sha256:xxxxxxxxxxxxxxxx">
+          <input id="keyInput" autocomplete="off" spellcheck="false" placeholder="或手动输入完整 key，例如 maki_...">
+          <span id="keyHelp" class="field-help">key 列表需要管理端登录；手动输入完整 key 时仅在浏览器本地计算 hash，查询 API 不接收完整 key。</span>
         </label>
         <label>开始时间 since
           <input id="since" autocomplete="off" placeholder="2026-06-23T17:05:00+08:00">
@@ -542,7 +550,7 @@
           <div><strong>口径说明：</strong>缓存命中率 = <code>cachedTokens / promptTokens</code>。OpenAI usage 字段来自上游返回；上下文分类是根据请求结构估算并按真实 prompt tokens 校准，用来接近 Cursor 的分类视图，不代表 Codex/Cursor 内部精确标签。</div>
         </div>
 
-        <p id="statusLine" class="status-line">选择 key 或输入 keyHash，再设置时间窗后点击查询。</p>
+        <p id="statusLine" class="status-line">选择 key 或输入完整 key，再设置时间窗后点击查询。</p>
 
         <div class="metrics" aria-label="汇总指标">
           <div class="metric"><span>请求数</span><strong id="requestCount">0</strong><small>窗口内已记录审计事件</small></div>
@@ -614,7 +622,7 @@
                 </tr>
               </thead>
               <tbody id="requestRows">
-                <tr><td colspan="10"><div class="empty">暂无数据。请输入 keyHash 和时间窗后查询。</div></td></tr>
+                <tr><td colspan="10"><div class="empty">暂无数据。请选择 key 或输入完整 key 和时间窗后查询。</div></td></tr>
               </tbody>
             </table>
           </div>
@@ -664,9 +672,26 @@
       return `${name} · ${masked} · 今日 ${usage} 次 · 缓存 ${cache}`;
     };
 
-    function buildParams() {
+    async function hashPotluckKeyLocally(value) {
+      const key = value.trim();
+      if (!key) return '';
+      if (/^sha256:[a-f0-9]{16}$/i.test(key)) return `sha256:${key.slice(7).toLowerCase()}`;
+      if (!window.crypto?.subtle || typeof TextEncoder === 'undefined') {
+        throw new Error('当前浏览器不支持本地计算 hash。请登录管理端使用下拉 key，或粘贴 sha256:xxxxxxxxxxxxxxxx。');
+      }
+      const bytes = new TextEncoder().encode(key);
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const hex = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      return `sha256:${hex.slice(0, 16)}`;
+    }
+
+    async function buildParams() {
       const params = new URLSearchParams();
-      for (const id of ['keyHash', 'since', 'until', 'limit']) {
+      const selectedKeyHash = document.getElementById('keySelect').value.trim();
+      const manualKey = document.getElementById('keyInput').value.trim();
+      const keyHash = selectedKeyHash || await hashPotluckKeyLocally(manualKey);
+      if (keyHash) params.set('keyHash', keyHash);
+      for (const id of ['since', 'until', 'limit']) {
         const value = document.getElementById(id).value.trim();
         if (value) params.set(id, value);
       }
@@ -675,12 +700,12 @@
 
     function renderKeySelect(keys = []) {
       const select = document.getElementById('keySelect');
-      const current = document.getElementById('keyHash').value.trim();
+      const current = select.value;
       select.innerHTML = '';
 
       const manual = document.createElement('option');
       manual.value = '';
-      manual.textContent = '手动输入 keyHash';
+      manual.textContent = '手动输入完整 key';
       select.appendChild(manual);
 
       for (const key of keys) {
@@ -703,11 +728,11 @@
         const result = await fetchJson('/api/potluck/keys');
         renderKeySelect(result.data?.keys || []);
         if (select.options.length <= 1) {
-          setStatus('没有可选择的 potluck key，可手动输入 keyHash。');
+          setStatus('没有可选择的 potluck key，可手动输入完整 key。完整 key 只会在本地计算 hash。');
         }
       } catch (error) {
-        select.innerHTML = '<option value="">key 列表加载失败，手动输入 keyHash</option>';
-        setStatus(`key 列表加载失败：${error.message}。仍可手动输入 keyHash。`, true);
+        select.innerHTML = '<option value="">key 列表加载失败，手动输入完整 key</option>';
+        setStatus(`key 列表加载失败：${error.message}。通常是未登录管理端；仍可手动输入完整 key，本地计算 hash 后查询。`, true);
       }
     }
 
@@ -900,10 +925,10 @@
 
     async function loadAudit() {
       const button = document.getElementById('load');
-      const params = buildParams();
       button.disabled = true;
       setStatus('正在查询审计数据...');
       try {
+        const params = await buildParams();
         const [summaryResponse, requestsResponse] = await Promise.all([
           fetchJson(`/api/request-audit/summary?${params}`),
           fetchJson(`/api/request-audit/requests?${params}`)
@@ -921,7 +946,12 @@
 
     document.getElementById('load').addEventListener('click', loadAudit);
     document.getElementById('keySelect').addEventListener('change', event => {
-      document.getElementById('keyHash').value = event.target.value;
+      if (event.target.value) {
+        document.getElementById('keyInput').value = '';
+        setStatus('已选择 key。完整 key 不会显示在输入框中，查询时使用该 key 的 hash。');
+      } else {
+        setStatus('可手动输入完整 key；页面会先本地计算 hash，再查询审计。');
+      }
     });
     loadKeyOptions();
   </script>

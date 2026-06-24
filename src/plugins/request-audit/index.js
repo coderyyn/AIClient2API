@@ -57,7 +57,7 @@ function cleanupPendingUsage() {
 const requestAuditPlugin = {
     name: 'request-audit',
     version: '1.0.0',
-    description: 'Privacy-safe per-request audit logs and approximate context usage breakdown<br>API: <code>/api/request-audit</code><br>Page: <a href="request-audit.html" target="_blank">request-audit.html</a>',
+    description: '请求审计：安全记录每次请求的审计明细、OpenAI usage 和近似上下文 token 分类；默认不保存原始 prompt、图片原文、完整 key、token 或 cookie。<br>API: <code>/api/request-audit</code><br>页面：<a href="request-audit.html" target="_blank">request-audit.html</a>',
     type: 'middleware',
     _builtin: true,
     _priority: 8990,

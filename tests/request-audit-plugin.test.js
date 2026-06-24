@@ -1,6 +1,12 @@
 import plugin from '../src/plugins/request-audit/index.js';
 
 describe('request audit plugin', () => {
+  test('exposes Chinese plugin description in plugin manager', () => {
+    expect(plugin.description).toContain('请求审计');
+    expect(plugin.description).toContain('不保存原始 prompt');
+    expect(plugin.description).toContain('request-audit.html');
+  });
+
   test('writes finalized event with merged usage', async () => {
     const auditStore = { append: jest.fn(), cleanup: jest.fn() };
     await plugin.init({ REQUEST_AUDIT_ENABLED: true, _requestAuditStore: auditStore });
