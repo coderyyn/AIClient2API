@@ -19,6 +19,13 @@ describe('request audit ui source', () => {
     expect(html).toContain('缓存命中率 =');
     expect(html).toContain('逐请求明细');
     expect(html).toContain('单次请求 token 分类');
+    expect(html).toContain('type="datetime-local"');
+    expect(html).toContain('默认最近 20 分钟');
+    expect(html).toContain('data-range-minutes="20"');
+    expect(html).toContain('data-range-minutes="60"');
+    expect(html).toContain('data-range-today="true"');
+    expect(html).toContain('value="200"');
+    expect(html).toContain('localDatetimeToIso');
     for (const id of ['instructions', 'tools', 'conversation', 'attachments', 'cached_input', 'output', 'reasoning']) {
       expect(html).toContain(id);
     }

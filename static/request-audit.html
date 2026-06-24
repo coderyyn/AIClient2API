@@ -162,6 +162,21 @@
       line-height: 1.45;
     }
 
+    .time-presets {
+      grid-column: 2 / span 3;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: -4px;
+    }
+
+    .preset-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
     input, select {
       width: 100%;
       min-height: 44px;
@@ -197,6 +212,23 @@
     button:hover { background: var(--primary-strong); transform: translateY(-1px); }
     button:focus-visible { outline: 3px solid rgba(15, 118, 110, .32); outline-offset: 2px; }
     button:disabled { cursor: not-allowed; opacity: .58; transform: none; box-shadow: none; }
+
+    .preset-btn {
+      min-height: 34px;
+      padding: 7px 11px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, .7);
+      color: var(--primary-strong);
+      box-shadow: none;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .preset-btn:hover {
+      background: var(--primary-soft);
+      color: var(--primary-strong);
+      transform: translateY(-1px);
+    }
 
     .content { padding: 20px; }
 
@@ -488,6 +520,7 @@
     @media (max-width: 1080px) {
       .toolbar { grid-template-columns: 1fr 1fr; }
       .toolbar button { grid-column: span 2; }
+      .time-presets { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
     }
@@ -498,6 +531,7 @@
       .api-chip { align-items: flex-start; border-radius: var(--radius-md); }
       .toolbar { grid-template-columns: 1fr; padding: 14px; }
       .toolbar button { grid-column: auto; }
+      .time-presets { grid-column: auto; }
       .content { padding: 14px; }
       .metrics { grid-template-columns: 1fr 1fr; }
       .ratio-wrap { grid-template-columns: 1fr; }
@@ -534,15 +568,22 @@
           <span id="keyHelp" class="field-help">key 列表需要管理端登录；手动输入完整 key 时仅在浏览器本地计算 hash，查询 API 不接收完整 key。</span>
         </label>
         <label>开始时间 since
-          <input id="since" autocomplete="off" placeholder="2026-06-23T17:05:00+08:00">
+          <input id="since" type="datetime-local" autocomplete="off" aria-describedby="timeHelp">
         </label>
         <label>结束时间 until
-          <input id="until" autocomplete="off" placeholder="2026-06-23T17:25:00+08:00">
+          <input id="until" type="datetime-local" autocomplete="off" aria-describedby="timeHelp">
         </label>
         <label>最多请求 limit
-          <input id="limit" inputmode="numeric" placeholder="200">
+          <input id="limit" type="number" min="1" max="2000" step="1" value="200" inputmode="numeric">
+          <span class="field-help">默认 200，最高 2000；列表越大查询越慢。</span>
         </label>
         <button id="load" type="button">查询审计</button>
+        <div class="time-presets" id="timeHelp" aria-label="时间范围快捷选择">
+          <span class="preset-label">默认最近 20 分钟</span>
+          <button class="preset-btn" type="button" data-range-minutes="20">最近 20 分钟</button>
+          <button class="preset-btn" type="button" data-range-minutes="60">最近 1 小时</button>
+          <button class="preset-btn" type="button" data-range-today="true">今天</button>
+        </div>
       </div>
 
       <div class="content">
@@ -657,6 +698,7 @@
     const fmt = value => Number(value || 0).toLocaleString('zh-CN');
     const fmtPct = value => `${(Number(value || 0) * 100).toFixed(2)}%`;
     const clamp01 = value => Math.max(0, Math.min(1, Number(value || 0)));
+    const pad2 = value => String(value).padStart(2, '0');
     const shortTime = value => {
       if (!value) return '';
       const date = new Date(value);
@@ -667,6 +709,28 @@
     const getAdminAuthHeaders = () => {
       const token = localStorage.getItem('authToken');
       return token ? { Authorization: `Bearer ${token}` } : {};
+    };
+    const toDatetimeLocalValue = date => {
+      const d = new Date(date);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    };
+    const localDatetimeToIso = value => {
+      if (!value) return '';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toISOString();
+    };
+    const setDefaultTimeRange = (minutes = 20) => {
+      const until = new Date();
+      const since = new Date(until.getTime() - minutes * 60 * 1000);
+      document.getElementById('since').value = toDatetimeLocalValue(since);
+      document.getElementById('until').value = toDatetimeLocalValue(until);
+    };
+    const setTodayTimeRange = () => {
+      const now = new Date();
+      const since = new Date(now);
+      since.setHours(0, 0, 0, 0);
+      document.getElementById('since').value = toDatetimeLocalValue(since);
+      document.getElementById('until').value = toDatetimeLocalValue(now);
     };
     const keyRelatedNames = key => {
       const names = Array.isArray(key.audit?.relatedNames) ? key.audit.relatedNames.filter(Boolean) : [];
@@ -701,9 +765,14 @@
       const manualKey = document.getElementById('keyInput').value.trim();
       const keyHash = selectedKeyHash || await hashPotluckKeyLocally(manualKey);
       if (keyHash) params.set('keyHash', keyHash);
-      for (const id of ['since', 'until', 'limit']) {
+      for (const id of ['since', 'until']) {
         const value = document.getElementById(id).value.trim();
-        if (value) params.set(id, value);
+        if (value) params.set(id, localDatetimeToIso(value));
+      }
+      const limit = document.getElementById('limit').value.trim() || '200';
+      if (limit) {
+        const normalizedLimit = Math.min(Math.max(Number(limit) || 200, 1), 2000);
+        params.set('limit', String(normalizedLimit));
       }
       return params;
     }
@@ -962,6 +1031,18 @@
     }
 
     document.getElementById('load').addEventListener('click', loadAudit);
+    document.querySelectorAll('.preset-btn').forEach(button => {
+      button.addEventListener('click', () => {
+        if (button.dataset.rangeToday) {
+          setTodayTimeRange();
+          setStatus('已设置时间范围：今天 00:00 到现在。');
+          return;
+        }
+        const minutes = Number(button.dataset.rangeMinutes || 20);
+        setDefaultTimeRange(minutes);
+        setStatus(`已设置时间范围：最近 ${minutes === 60 ? '1 小时' : `${minutes} 分钟`}。`);
+      });
+    });
     document.getElementById('keySelect').addEventListener('change', event => {
       if (event.target.value) {
         document.getElementById('keyInput').value = '';
@@ -970,6 +1051,7 @@
         setStatus('可手动输入完整 key；页面会先本地计算 hash，再查询审计。');
       }
     });
+    setDefaultTimeRange(20);
     loadKeyOptions();
   </script>
 </body>
