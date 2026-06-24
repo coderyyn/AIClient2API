@@ -356,6 +356,49 @@
       font: 12px var(--mono);
     }
 
+    .diagnostics-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr);
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .diagnostic-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .diagnostic-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--surface-muted);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .diagnostic-chip strong { font-family: var(--mono); }
+
+    .reason-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .reason-item {
+      padding: 9px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-muted);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
     .context-stack {
       display: flex;
       min-height: 18px;
@@ -523,6 +566,7 @@
       .time-presets { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
+      .diagnostics-panel { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 720px) {
@@ -590,6 +634,9 @@
         <div class="notice">
           <div><strong>口径说明：</strong>缓存命中率 = <code>cachedTokens / promptTokens</code>。OpenAI usage 字段来自上游返回；上下文分类是根据请求结构估算并按真实 prompt tokens 校准，用来接近 Cursor 的分类视图，不代表 Codex/Cursor 内部精确标签。</div>
         </div>
+        <div class="notice">
+          <div><strong>诊断结果仅供排查：</strong>分析结果可能延迟 1-5 分钟，以准确和低负载为优先；不会默认展示或保存原始 prompt。</div>
+        </div>
 
         <p id="statusLine" class="status-line">选择 key 或输入完整 key，再设置时间窗后点击查询。</p>
 
@@ -601,6 +648,24 @@
           <div class="metric"><span>输出 Tokens</span><strong id="completionTokens">0</strong><small>含 reasoning</small></div>
           <div class="metric"><span>Total Tokens</span><strong id="totalTokens">0</strong><small>上游 total usage</small></div>
         </div>
+
+        <section class="diagnostics-panel" aria-label="缓存诊断">
+          <div class="card">
+            <div class="card-head">
+              <h2>分析延迟</h2>
+            </div>
+            <p id="analysisFreshness" class="muted">尚未查询。</p>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2>可能原因</h2>
+              <span class="muted mini">prefix_changed / tools_changed / account_changed</span>
+            </div>
+            <div id="diagnosticsSummary" class="diagnostic-list">
+              <span class="diagnostic-chip">暂无诊断</span>
+            </div>
+          </div>
+        </section>
 
         <div class="grid">
           <section class="card" aria-label="缓存命中率">
@@ -693,6 +758,16 @@
       cached_input: '上游返回的 cached tokens，是真实 usage 字段',
       output: 'completion tokens，来自上游 usage',
       reasoning: 'reasoning tokens，来自上游 usage'
+    };
+    const DIAGNOSTIC_LABELS = {
+      prefix_changed: '前缀变化',
+      tools_changed: '工具定义变化',
+      instructions_changed: '系统指令变化',
+      account_changed: '账号变化',
+      model_changed: '模型变化',
+      short_prompt_or_low_cacheable_input: '输入较短或可缓存内容少',
+      attachment_or_multimodal_variance: '附件/图片变化',
+      unknown_or_upstream_cache_ttl: '未知或上游缓存过期'
     };
 
     const fmt = value => Number(value || 0).toLocaleString('zh-CN');
@@ -887,6 +962,28 @@
       fillMetric('cacheGaugeText', summary.cacheHitRatio, fmtPct);
       document.getElementById('cacheGauge').style.setProperty('--rate', clamp01(summary.cacheHitRatio));
       renderContextRows(normalizedSectionsFromSummary(data), 'total');
+      renderAnalysisFreshness(data.analysisFreshness);
+      renderDiagnosticsSummary(data.diagnosticsSummary || {});
+    }
+
+    function renderAnalysisFreshness(freshness = {}) {
+      const node = document.getElementById('analysisFreshness');
+      if (!freshness || freshness.status === 'missing') {
+        node.innerHTML = '<span class="pill warn">missing</span> 尚无离线分析结果。';
+        return;
+      }
+      const statusClass = freshness.status === 'fresh' ? 'good' : 'warn';
+      node.innerHTML = `<span class="pill ${statusClass}">${escapeHtml(freshness.status)}</span> 生成于 ${escapeHtml(shortTime(freshness.generatedAt))}，延迟约 ${fmt(freshness.staleSeconds)} 秒。`;
+    }
+
+    function renderDiagnosticsSummary(summary = {}) {
+      const node = document.getElementById('diagnosticsSummary');
+      const entries = Object.entries(summary).sort((a, b) => Number(b[1]) - Number(a[1]));
+      if (entries.length === 0) {
+        node.innerHTML = '<span class="diagnostic-chip">暂无诊断</span>';
+        return;
+      }
+      node.innerHTML = entries.map(([code, count]) => `<span class="diagnostic-chip"><span>${escapeHtml(DIAGNOSTIC_LABELS[code] || code)}</span><strong>${fmt(count)}</strong></span>`).join('');
     }
 
     function normalizeRequestSections(event) {
@@ -920,6 +1017,7 @@
     function detailHtml(event) {
       const usage = event.usage || {};
       const sections = normalizeRequestSections(event);
+      const reasons = event.diagnosis?.reasons || [];
       const rows = SECTION_ORDER.map(id => {
         const item = sections[id] || { tokens: 0, percentOfTotalContext: 0 };
         return `
@@ -934,10 +1032,14 @@
       return `
         <td class="detail-cell" colspan="10">
           <div class="detail-panel">
-            <div>
-              <h3>单次请求 token 分类</h3>
-              <div class="context-rows">${rows}</div>
-            </div>
+                <div>
+                  <h3>单次请求 token 分类</h3>
+                  <div class="context-rows">${rows}</div>
+                  <h3>可能原因</h3>
+                  <div class="reason-list">
+                    ${reasons.length ? reasons.map(reason => `<div class="reason-item"><strong>${escapeHtml(DIAGNOSTIC_LABELS[reason.code] || reason.code)}</strong><br><span class="muted">code=${escapeHtml(reason.code)} · severity=${escapeHtml(reason.severity || '-')}</span></div>`).join('') : '<div class="reason-item muted">暂无离线诊断；等待 analyzer 生成或调整时间窗后重试。</div>'}
+                  </div>
+                </div>
             <div class="detail-grid">
               <div class="detail-box"><span>来源协议</span><strong>${escapeHtml(event.request?.fromProvider || '-')}</strong></div>
               <div class="detail-box"><span>上游渠道</span><strong>${escapeHtml(event.request?.toProvider || '-')}</strong></div>

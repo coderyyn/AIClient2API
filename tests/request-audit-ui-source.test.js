@@ -26,6 +26,13 @@ describe('request audit ui source', () => {
     expect(html).toContain('data-range-today="true"');
     expect(html).toContain('value="200"');
     expect(html).toContain('localDatetimeToIso');
+    expect(html).toContain('分析延迟');
+    expect(html).toContain('可能原因');
+    expect(html).toContain('prefix_changed');
+    expect(html).toContain('tools_changed');
+    expect(html).toContain('account_changed');
+    expect(html).toContain('analysisFreshness');
+    expect(html).toContain('诊断结果仅供排查');
     for (const id of ['instructions', 'tools', 'conversation', 'attachments', 'cached_input', 'output', 'reasoning']) {
       expect(html).toContain(id);
     }
