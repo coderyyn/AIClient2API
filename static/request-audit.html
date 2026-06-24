@@ -872,6 +872,8 @@
                   <select id="rawCaptureKeySelect">
                     <option value="">加载 key 列表中...</option>
                   </select>
+                  <input id="rawCaptureKeyInput" autocomplete="off" spellcheck="false" placeholder="或手动输入完整采集 key，例如 maki_...">
+                  <span id="rawCaptureManualHelp" class="field-help">key 列表不可用时，可手动输入完整 key 或 sha256:xxxxxxxxxxxxxxxx；页面只提交 hash。</span>
                 </label>
                 <label>保留分钟
                   <input id="rawCaptureTtl" type="number" min="1" max="1440" step="1" value="30" inputmode="numeric">
@@ -1086,6 +1088,12 @@
         : `已关闭。当前历史文件 ${fmt(status.fileCount)} 个；过期文件会按 TTL 定时清理。`;
     }
 
+    async function resolveRawCaptureKeyHash() {
+      const selectedKeyHash = document.getElementById('rawCaptureKeySelect').value.trim();
+      const manualKey = document.getElementById('rawCaptureKeyInput').value.trim();
+      return selectedKeyHash || await hashPotluckKeyLocally(manualKey);
+    }
+
     async function loadRawCaptureStatus() {
       try {
         const result = await fetchJson('/api/request-audit/raw-capture', { auth: true });
@@ -1099,11 +1107,11 @@
 
     async function saveRawCaptureSettings() {
       const button = document.getElementById('saveRawCapture');
-      const keyHash = document.getElementById('rawCaptureKeySelect').value.trim();
       const ttlMinutes = Math.min(Math.max(Number(document.getElementById('rawCaptureTtl').value) || 30, 1), 1440);
       const maxMb = Math.min(Math.max(Number(document.getElementById('rawCaptureMaxMb').value) || 2, 1), 10);
       button.disabled = true;
       try {
+        const keyHash = await resolveRawCaptureKeyHash();
         const result = await fetchJson('/api/request-audit/raw-capture', {
           auth: true,
           method: 'POST',
@@ -1136,6 +1144,7 @@
       } catch (error) {
         select.innerHTML = '<option value="">key 列表加载失败，手动输入完整 key</option>';
         renderRawCaptureKeySelect([]);
+        document.getElementById('rawCaptureManualHelp').textContent = 'key 列表加载失败。仍可手动输入完整采集 key，页面会本地计算 hash 后提交。';
         setStatus(`key 列表加载失败：${error.message}。通常是未登录管理端；仍可手动输入完整 key，本地计算 hash 后查询。`, true);
       }
     }
@@ -1421,6 +1430,20 @@
         setStatus('已选择 key。完整 key 不会显示在输入框中，查询时使用该 key 的 hash。');
       } else {
         setStatus('可手动输入完整 key；页面会先本地计算 hash，再查询审计。');
+      }
+    });
+    document.getElementById('rawCaptureKeySelect').addEventListener('change', event => {
+      if (event.target.value) {
+        document.getElementById('rawCaptureKeyInput').value = '';
+        document.getElementById('rawCaptureManualHelp').textContent = '已选择 key。保存时只提交该 key 的 hash，不提交完整 key。';
+      } else {
+        document.getElementById('rawCaptureManualHelp').textContent = '选择关闭后保存即可关闭采集；也可手动输入完整采集 key 开启。';
+      }
+    });
+    document.getElementById('rawCaptureKeyInput').addEventListener('input', event => {
+      if (event.target.value.trim()) {
+        document.getElementById('rawCaptureKeySelect').value = '';
+        document.getElementById('rawCaptureManualHelp').textContent = '将使用手动输入的完整 key 在浏览器本地计算 hash 后保存。';
       }
     });
     setDefaultTimeRange(20);

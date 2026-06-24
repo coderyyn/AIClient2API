@@ -44,6 +44,10 @@ describe('request audit ui source', () => {
     expect(html).toContain('原始请求采集');
     expect(html).toContain('/api/request-audit/raw-capture');
     expect(html).toContain('rawCaptureKeySelect');
+    expect(html).toContain('rawCaptureKeyInput');
+    expect(html).toContain('resolveRawCaptureKeyHash');
+    expect(html).toContain('rawCaptureManualHelp');
+    expect(html).toContain('手动输入完整采集 key');
     expect(html).toContain('保存采集设置');
     expect(html).toContain('会保存原始 prompt');
     expect(html).toContain('REQUEST_AUDIT_RAW_CAPTURE');
