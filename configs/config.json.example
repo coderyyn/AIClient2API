@@ -42,6 +42,14 @@
       "claude-kiro-oauth": ["claude-custom"],
       "claude-custom": ["claude-kiro-oauth"]
     },
+    "mixedProviderPools": {
+      "gpt": {
+        "enabled": false,
+        "matchModels": ["gpt-*"],
+        "entryProviders": ["openai-codex-oauth"],
+        "candidateProviders": ["openai-codex-oauth", "openaiResponses-custom"]
+      }
+    },
     "modelFallbackMapping": {
       "gemini-claude-opus-4-5-thinking": {
         "targetProviderType": "claude-kiro-oauth",

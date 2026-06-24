@@ -1,0 +1,111 @@
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
+
+jest.mock('../src/providers/adapter.js', () => ({
+    getServiceAdapter: jest.fn(),
+    getRegisteredProviders: jest.fn(() => ['openai-codex-oauth', 'openaiResponses-custom']),
+    invalidateServiceAdapter: jest.fn()
+}));
+
+jest.mock('../src/ui-modules/event-broadcast.js', () => ({
+    broadcastEvent: jest.fn()
+}));
+
+let consoleSpies = [];
+let managers = [];
+
+function createMixedGptPoolManager(overrides = {}) {
+    const manager = new ProviderPoolManager({
+        'openai-codex-oauth': [
+            {
+                uuid: 'codex-local',
+                customName: 'Codex Local',
+                providerWeight: 2,
+                supportedModels: ['gpt-5.5'],
+                ...overrides.codex
+            }
+        ],
+        'openaiResponses-custom': [
+            {
+                uuid: 'edge-remote',
+                customName: 'Edge Remote',
+                providerWeight: 2,
+                supportedModels: ['gpt-5.5'],
+                ...overrides.edge
+            }
+        ]
+    }, {
+        logLevel: 'error',
+        saveDebounceTime: 60 * 60 * 1000,
+        globalConfig: {
+            PROVIDER_POOLS_FILE_PATH: 'configs/provider_pools.test.json',
+            mixedProviderPools: {
+                gpt: {
+                    enabled: true,
+                    matchModels: ['gpt-*'],
+                    entryProviders: ['openai-codex-oauth'],
+                    candidateProviders: ['openai-codex-oauth', 'openaiResponses-custom']
+                }
+            }
+        }
+    });
+    managers.push(manager);
+    return manager;
+}
+
+beforeEach(() => {
+    consoleSpies = ['log', 'warn', 'error'].map((method) => jest.spyOn(console, method).mockImplementation(() => {}));
+});
+
+afterEach(() => {
+    for (const manager of managers) {
+        if (manager.saveTimer) {
+            clearTimeout(manager.saveTimer);
+        }
+    }
+    managers = [];
+    consoleSpies.forEach((spy) => spy.mockRestore());
+    consoleSpies = [];
+});
+
+describe('mixed GPT provider pool', () => {
+    test('flattens GPT candidate provider types and balances by provider weight', async () => {
+        const manager = createMixedGptPoolManager();
+        const counts = { 'openai-codex-oauth': 0, 'openaiResponses-custom': 0 };
+
+        for (let i = 0; i < 4; i++) {
+            const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.5');
+            counts[selected.actualProviderType] += 1;
+        }
+
+        expect(counts).toEqual({
+            'openai-codex-oauth': 2,
+            'openaiResponses-custom': 2
+        });
+    });
+
+    test('uses another mixed candidate when a weighted provider is at concurrency capacity', async () => {
+        const manager = createMixedGptPoolManager({
+            codex: { concurrencyLimit: 1, queueLimit: 0 },
+            edge: { concurrencyLimit: 1, queueLimit: 0 }
+        });
+        manager.providerStatus['openai-codex-oauth'][0].state.activeCount = 1;
+
+        const selected = await manager.acquireSlotWithFallback('openai-codex-oauth', 'gpt-5.5');
+
+        expect(selected.actualProviderType).toBe('openaiResponses-custom');
+        expect(selected.config.uuid).toBe('edge-remote');
+    });
+
+    test('does not mix providers for non-matching models', async () => {
+        const manager = createMixedGptPoolManager({
+            codex: { supportedModels: ['claude-test'] },
+            edge: { supportedModels: ['claude-test'] }
+        });
+
+        const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'claude-test');
+
+        expect(selected.actualProviderType).toBe('openai-codex-oauth');
+        expect(selected.config.uuid).toBe('codex-local');
+    });
+});

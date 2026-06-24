@@ -63,6 +63,28 @@ function hasCustomProviderWeights(providers) {
     return providers.some(provider => getProviderWeight(provider.config) !== 1);
 }
 
+function toStringArray(value) {
+    if (Array.isArray(value)) {
+        return value.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim());
+    }
+    if (typeof value === 'string' && value.trim()) {
+        return [value.trim()];
+    }
+    return [];
+}
+
+function globPatternToRegExp(pattern) {
+    const escaped = String(pattern)
+        .replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
+        .replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+}
+
+function modelMatchesAnyPattern(model, patterns) {
+    if (!model || patterns.length === 0) return false;
+    return patterns.some(pattern => globPatternToRegExp(pattern).test(model));
+}
+
 function getPositiveTokenLimit(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -265,6 +287,9 @@ export class ProviderPoolManager {
         
         // Model Fallback 映射配置
         this.modelFallbackMapping = options.globalConfig?.modelFallbackMapping || {};
+
+        // Mixed Provider Pool 配置：将多个 providerType 展平后统一按 providerWeight 选点
+        this.mixedProviderPools = options.globalConfig?.mixedProviderPools || {};
 
         // 并发控制：每个 providerType 的选择锁
         // 用于确保 selectProvider 的排序 and 更新操作是原子的
@@ -806,6 +831,267 @@ export class ProviderPoolManager {
         const freshBonus = isFresh ? (now - lastHealthCheckTime) : 0;
 
         return baseScore + usageScore + sequenceScore + loadScore + freshBonus;
+    }
+
+    _getMixedProviderPoolConfig(entryProviderType, requestedModel) {
+        if (!entryProviderType || !requestedModel || !this.mixedProviderPools || typeof this.mixedProviderPools !== 'object') {
+            return null;
+        }
+
+        for (const [poolName, rawConfig] of Object.entries(this.mixedProviderPools)) {
+            if (!rawConfig || typeof rawConfig !== 'object' || rawConfig.enabled === false) {
+                continue;
+            }
+
+            const entryProviders = toStringArray(rawConfig.entryProviders || rawConfig.entryProvider);
+            if (entryProviders.length > 0 && !entryProviders.includes(entryProviderType)) {
+                continue;
+            }
+
+            const matchModels = toStringArray(rawConfig.matchModels || rawConfig.models || ['gpt-*']);
+            if (!modelMatchesAnyPattern(requestedModel, matchModels)) {
+                continue;
+            }
+
+            const candidateProviders = toStringArray(rawConfig.candidateProviders || rawConfig.providers);
+            if (candidateProviders.length === 0) {
+                continue;
+            }
+
+            return {
+                name: poolName,
+                candidateProviders
+            };
+        }
+
+        return null;
+    }
+
+    _getHealthyProvidersForType(providerType, requestedModel, options = {}) {
+        const availableProviders = this.providerStatus[providerType] || [];
+        this._checkAndRecoverScheduledProviders(providerType);
+
+        let candidates = availableProviders.filter(p =>
+            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+        );
+
+        const excludedProviderUuids = new Set(options.excludeProviderUuids || []);
+        if (excludedProviderUuids.size > 0) {
+            candidates = candidates.filter(p => {
+                const uuid = p.uuid || p.config?.uuid;
+                return !excludedProviderUuids.has(uuid);
+            });
+        }
+
+        if (requestedModel) {
+            candidates = candidates.filter(p => {
+                const supportedModels = getConfiguredSupportedModels(providerType, p.config);
+                if (supportedModels.length > 0) {
+                    return supportedModels.includes(requestedModel);
+                }
+                if (!p.config.notSupportedModels || !Array.isArray(p.config.notSupportedModels)) {
+                    return true;
+                }
+                return !p.config.notSupportedModels.includes(requestedModel);
+            });
+        }
+
+        if (isCodexProviderType(providerType) && candidates.length > 0) {
+            candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates);
+        }
+
+        return candidates;
+    }
+
+    _hasAcquireCapacity(providerStatus) {
+        const config = providerStatus.config;
+        const state = providerStatus.state;
+        const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
+        const queueLimit = parseInt(config.queueLimit || 0);
+
+        if (concurrencyLimit <= 0) return true;
+        if (state.activeCount < concurrencyLimit) return true;
+        return queueLimit > 0 && state.waitingCount < queueLimit;
+    }
+
+    _selectFromMixedCandidates(candidates, requestedModel, options = {}) {
+        if (candidates.length === 0) return null;
+
+        const now = Date.now();
+        const minSeq = Math.min(...candidates.map(p => p.config._lastSelectionSeq || 0));
+
+        let selected;
+        if (options.stickyProviderKey) {
+            const affinityCandidates = [...candidates].sort((a, b) => {
+                const typeCompare = (a.type || '').localeCompare(b.type || '');
+                if (typeCompare !== 0) return typeCompare;
+                const uuidA = a.uuid || a.config?.uuid || '';
+                const uuidB = b.uuid || b.config?.uuid || '';
+                return uuidA.localeCompare(uuidB);
+            });
+            selected = affinityCandidates[stableHashToIndex(`mixed:${requestedModel || ''}:${options.stickyProviderKey}`, affinityCandidates.length)];
+        } else if (hasCustomProviderWeights(candidates)) {
+            selected = [...candidates].sort((a, b) => {
+                const weightA = getProviderWeight(a.config);
+                const weightB = getProviderWeight(b.config);
+                const weightedUsageA = (a.config.usageCount || 0) / weightA;
+                const weightedUsageB = (b.config.usageCount || 0) / weightB;
+                if (weightedUsageA !== weightedUsageB) return weightedUsageA - weightedUsageB;
+
+                const loadA = a.state?.activeCount || 0;
+                const loadB = b.state?.activeCount || 0;
+                if (loadA !== loadB) return loadA - loadB;
+
+                const lastUsedA = a.config.lastUsed ? new Date(a.config.lastUsed).getTime() : 0;
+                const lastUsedB = b.config.lastUsed ? new Date(b.config.lastUsed).getTime() : 0;
+                if (lastUsedA !== lastUsedB) return lastUsedA - lastUsedB;
+
+                const typeCompare = (a.type || '').localeCompare(b.type || '');
+                if (typeCompare !== 0) return typeCompare;
+                return (a.uuid || '').localeCompare(b.uuid || '');
+            })[0];
+        } else {
+            selected = [...candidates].sort((a, b) => {
+                const scoreA = this._calculateNodeScore(a, now, minSeq);
+                const scoreB = this._calculateNodeScore(b, now, minSeq);
+                if (scoreA !== scoreB) return scoreA - scoreB;
+
+                const typeCompare = (a.type || '').localeCompare(b.type || '');
+                if (typeCompare !== 0) return typeCompare;
+                return (a.uuid || '').localeCompare(b.uuid || '');
+            })[0];
+        }
+
+        selected.config.lastUsed = new Date().toISOString();
+        this._selectionSequence++;
+        selected.config._lastSelectionSeq = this._selectionSequence;
+
+        if (!options.skipUsageCount) {
+            selected.config.usageCount++;
+        }
+
+        this._debouncedSave(selected.type);
+        return selected;
+    }
+
+    async selectProviderFromMixedPool(providerType, requestedModel = null, options = {}) {
+        const mixedPool = this._getMixedProviderPoolConfig(providerType, requestedModel);
+        if (!mixedPool) return null;
+
+        const candidates = [];
+        for (const candidateType of mixedPool.candidateProviders) {
+            try {
+                const providers = this._getHealthyProvidersForType(candidateType, requestedModel, options);
+                candidates.push(...providers);
+            } catch (error) {
+                if (error.status === 429 || error.code === 429) {
+                    this._log('info', `Mixed pool ${mixedPool.name} skipping busy/limited type ${candidateType}: ${error.message}`);
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        const selected = this._selectFromMixedCandidates(candidates, requestedModel, options);
+        if (!selected) {
+            this._log('warn', `No available provider found in mixed pool ${mixedPool.name} for ${providerType} (${requestedModel})`);
+            return null;
+        }
+
+        this._log('info', `Mixed pool ${mixedPool.name} selected ${selected.type}: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        return {
+            config: selected.config,
+            actualProviderType: selected.type,
+            isFallback: false,
+            isMixedPool: true
+        };
+    }
+
+    async acquireSlotFromMixedPool(providerType, requestedModel = null, options = {}) {
+        const mixedPool = this._getMixedProviderPoolConfig(providerType, requestedModel);
+        if (!mixedPool) return null;
+
+        const candidates = [];
+        for (const candidateType of mixedPool.candidateProviders) {
+            try {
+                const providers = this._getHealthyProvidersForType(candidateType, requestedModel, options)
+                    .filter(provider => this._hasAcquireCapacity(provider));
+                candidates.push(...providers);
+            } catch (error) {
+                if (error.status === 429 || error.code === 429) {
+                    this._log('info', `Mixed pool ${mixedPool.name} skipping busy/limited type ${candidateType}: ${error.message}`);
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        const selected = this._selectFromMixedCandidates(candidates, requestedModel, { ...options, skipUsageCount: true });
+        if (!selected) {
+            this._log('warn', `No available slot found in mixed pool ${mixedPool.name} for ${providerType} (${requestedModel})`);
+            return null;
+        }
+
+        const acquiredConfig = await this._acquireSelectedProviderSlot(selected, options);
+        this._log('info', `Mixed pool ${mixedPool.name} acquired ${selected.type}: ${this._getDisplayName(acquiredConfig)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        return {
+            config: acquiredConfig,
+            actualProviderType: selected.type,
+            isFallback: false,
+            isMixedPool: true
+        };
+    }
+
+    async _acquireSelectedProviderSlot(provider, options = {}) {
+        const config = provider.config;
+        const state = provider.state;
+        const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
+        const queueLimit = parseInt(config.queueLimit || 0);
+
+        if (concurrencyLimit <= 0) {
+            state.activeCount++;
+            return config;
+        }
+
+        if (state.activeCount < concurrencyLimit) {
+            state.activeCount++;
+            return config;
+        }
+
+        if (queueLimit > 0 && state.waitingCount < queueLimit) {
+            this._log('info', `[Concurrency] Node ${this._getDisplayName(config)} busy (${state.activeCount}/${concurrencyLimit}), enqueuing request (queue: ${state.waitingCount + 1}/${queueLimit})`);
+
+            state.waitingCount++;
+            try {
+                await new Promise((resolve, reject) => {
+                    const timeoutMs = options.queueTimeout || 300000;
+                    const timeout = setTimeout(() => {
+                        const idx = state.queue.indexOf(handler);
+                        if (idx !== -1) {
+                            state.queue.splice(idx, 1);
+                            reject(new Error(`Queue timeout after ${timeoutMs / 1000}s`));
+                        }
+                    }, timeoutMs);
+
+                    const handler = () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                    state.queue.push(handler);
+                });
+            } finally {
+                state.waitingCount--;
+            }
+
+            state.activeCount++;
+            return config;
+        }
+
+        this._log('warn', `[Concurrency] Node ${this._getDisplayName(config)} full capacity (${state.activeCount}/${concurrencyLimit}, queue: ${state.waitingCount}/${queueLimit}), returning 429`);
+        const error = new Error('Too many requests: account concurrency limit and queue reached');
+        error.status = 429;
+        error.code = 429;
+        throw error;
     }
 
     /**
@@ -1356,6 +1642,11 @@ export class ProviderPoolManager {
             return null;
         }
 
+        const mixedSlot = await this.acquireSlotFromMixedPool(providerType, requestedModel, options);
+        if (mixedSlot) {
+            return mixedSlot;
+        }
+
         const triedTypes = new Set();
         const typesToTry = [providerType];
         
@@ -1481,6 +1772,11 @@ export class ProviderPoolManager {
         if (!providerType || typeof providerType !== 'string') {
             this._log('error', `Invalid providerType: ${providerType}`);
             return null;
+        }
+
+        const mixedSelection = await this.selectProviderFromMixedPool(providerType, requestedModel, options);
+        if (mixedSelection) {
+            return mixedSelection;
         }
 
         // ==========================

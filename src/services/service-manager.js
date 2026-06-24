@@ -326,6 +326,10 @@ export async function initApiService(config, isReady = false) {
     // Initialize or update ProviderPoolManager
     if (providerPoolManager) {
         providerPoolManager.providerPools = config.providerPools || {};
+        providerPoolManager.globalConfig = config;
+        providerPoolManager.fallbackChain = config.providerFallbackChain || {};
+        providerPoolManager.modelFallbackMapping = config.modelFallbackMapping || {};
+        providerPoolManager.mixedProviderPools = config.mixedProviderPools || {};
         providerPoolManager.initializeProviderStatus();
         logger.info('[Initialization] ProviderPoolManager existing instance updated.');
     } else {
@@ -550,8 +554,8 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             selectedUuid = selectedProviderConfig.uuid;
             actualModel = fallbackModel || actualModelName;
             
-            // 如果发生了 fallback，需要更新 MODEL_PROVIDER
-            if (isFallback) {
+            // mixed pool/fallback 可能跨 providerType 命中真实节点，需要切到真实 adapter。
+            if (actualProviderType && actualProviderType !== config.MODEL_PROVIDER) {
                 serviceConfig.MODEL_PROVIDER = actualProviderType;
             }
         } else {
