@@ -1,6 +1,7 @@
 import logger from '../../utils/logger.js';
 import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
-import { getAuditStore, handleRequestAuditRoutes, setAuditStore } from './api-routes.js';
+import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore } from './api-routes.js';
+import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
 
 const pendingUsage = new Map();
 const auditQueue = [];
@@ -11,6 +12,7 @@ let lastCleanupAt = 0;
 let cleanupTimer = null;
 let cleanupInFlight = false;
 let deepContextBreakdown = false;
+let analyzerRunner = null;
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_AUDIT_QUEUE_EVENTS = 1000;
@@ -150,8 +152,21 @@ const requestAuditPlugin = {
         deepContextBreakdown = config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === true || config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === 'true';
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
+        const materializedStore = config._requestAuditAnalysisStore || getAnalysisStore(config);
+        setAnalysisStore(materializedStore);
         lastCleanupAt = 0;
         startCleanupTimer();
+        if (config.REQUEST_AUDIT_ANALYZER_ENABLED !== false && config.REQUEST_AUDIT_ANALYZER_ENABLED !== 'false') {
+            analyzerRunner = createRequestAuditAnalyzerRunner({
+                auditStore: store,
+                analysisStore: materializedStore,
+                intervalMs: config.REQUEST_AUDIT_ANALYZER_INTERVAL_MS || 60000,
+                lookbackMinutes: config.REQUEST_AUDIT_ANALYZER_LOOKBACK_MINUTES || 180,
+                maxEvents: config.REQUEST_AUDIT_ANALYZER_MAX_EVENTS || 5000,
+                runOnInit: config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === true || config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === 'true'
+            });
+            analyzerRunner.start();
+        }
         logger.info(`[Request Audit] Initialized enabled=${enabled} deepContextBreakdown=${deepContextBreakdown}`);
     },
 
@@ -161,6 +176,10 @@ const requestAuditPlugin = {
         if (cleanupTimer) {
             clearInterval(cleanupTimer);
             cleanupTimer = null;
+        }
+        if (analyzerRunner) {
+            analyzerRunner.stop();
+            analyzerRunner = null;
         }
         logger.info('[Request Audit] Destroyed');
     },
