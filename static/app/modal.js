@@ -862,6 +862,11 @@ function renderProviderDetailList(providers) {
         const toggleButtonText = isDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
+        const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+                        <button class="btn-small btn-info btn-reauthorize-provider" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
+                            <i class="fas fa-key"></i> <span data-i18n="modal.provider.reauthorize">${t('modal.provider.reauthorize')}</span>
+                        </button>
+        ` : '';
         const needsRefresh = !!provider.needsRefresh;
         
         // 构建错误信息显示
@@ -920,6 +925,7 @@ function renderProviderDetailList(providers) {
                         <button class="btn-small btn-info btn-provider-health-check" onclick="window.performSingleHealthCheck('${provider.uuid}', event)" title="${t('modal.provider.healthCheckCurrentTitle')}">
                             <i class="fas fa-stethoscope"></i> <span data-i18n="modal.provider.healthCheck">${t('modal.provider.healthCheck')}</span>
                         </button>
+                        ${reauthorizeButtonHtml}
                         <button class="btn-small btn-delete" onclick="window.deleteProvider('${provider.uuid}', event)">
                             <i class="fas fa-trash"></i> <span data-i18n="modal.provider.delete">删除</span>
                         </button>
@@ -955,6 +961,11 @@ function renderProviderCardList(providers) {
         const toggleButtonText = isDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
+        const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+                    <button class="card-action-btn btn-info" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
+                        <i class="fas fa-key"></i>
+                    </button>
+        ` : '';
 
         return `
             <div class="provider-item-card ${healthClass} ${disabledClass}" data-uuid="${provider.uuid}">
@@ -977,6 +988,7 @@ function renderProviderCardList(providers) {
                     <button class="card-action-btn ${toggleButtonClass}" onclick="window.toggleProviderStatus('${provider.uuid}', event)" title="${toggleButtonText}">
                         <i class="${toggleButtonIcon}"></i>
                     </button>
+                    ${reauthorizeButtonHtml}
                     <button class="card-action-btn btn-delete" onclick="window.deleteProvider('${provider.uuid}', event)" title="${t('modal.provider.delete')}">
                         <i class="fas fa-trash"></i>
                     </button>
@@ -1460,6 +1472,11 @@ function cancelEdit(uuid, event) {
     const toggleButtonText = isCurrentlyDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
     const toggleButtonIcon = isCurrentlyDisabled ? 'fas fa-play' : 'fas fa-ban';
     const toggleButtonClass = isCurrentlyDisabled ? 'btn-success' : 'btn-warning';
+    const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+        <button class="btn-small btn-info btn-reauthorize-provider" onclick="window.reauthorizeProvider('${uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
+            <i class="fas fa-key"></i> <span data-i18n="modal.provider.reauthorize">${t('modal.provider.reauthorize')}</span>
+        </button>
+    ` : '';
     
     actionsGroup.innerHTML = `
         <button class="btn-small ${toggleButtonClass}" onclick="window.toggleProviderStatus('${uuid}', event)" title="${toggleButtonText}此提供商">
@@ -1471,6 +1488,7 @@ function cancelEdit(uuid, event) {
         <button class="btn-small btn-info btn-provider-health-check" onclick="window.performSingleHealthCheck('${uuid}', event)" title="${t('modal.provider.healthCheckCurrentTitle')}">
             <i class="fas fa-stethoscope"></i> <span data-i18n="modal.provider.healthCheck">${t('modal.provider.healthCheck')}</span>
         </button>
+        ${reauthorizeButtonHtml}
         <button class="btn-small btn-delete" onclick="window.deleteProvider('${uuid}', event)">
             <i class="fas fa-trash"></i> <span data-i18n="modal.provider.delete">${t('modal.provider.delete')}</span>
         </button>
@@ -1506,6 +1524,30 @@ async function saveProvider(uuid, event) {
     } catch (error) {
         console.error('Failed to update provider:', error);
         showToast(t('common.error'), t('modal.provider.save.failed') + ': ' + error.message, 'error');
+    }
+}
+
+async function reauthorizeProvider(uuid, event) {
+    event.stopPropagation();
+
+    const providerDetail = event.target.closest('.provider-item-detail, .provider-item-card');
+    const providerType = providerDetail?.closest('.provider-modal')?.getAttribute('data-provider-type');
+    if (providerType !== 'openai-codex-oauth') {
+        showToast(t('common.error'), t('modal.provider.reauthorizeUnsupported'), 'error');
+        return;
+    }
+
+    if (!confirm(t('modal.provider.reauthorizeConfirm'))) {
+        return;
+    }
+
+    try {
+        await window.executeGenerateAuthUrl(providerType, {
+            targetProviderUuid: uuid
+        });
+    } catch (error) {
+        console.error('Failed to reauthorize provider:', error);
+        showToast(t('common.error'), t('modal.provider.reauthorizeFailed') + ': ' + error.message, 'error');
     }
 }
 
@@ -2253,7 +2295,8 @@ export {
     renderNotSupportedModelsSelector,
     goToProviderPage,
     performSingleHealthCheck,
-    refreshProviderUuid
+    refreshProviderUuid,
+    reauthorizeProvider
 };
 
 // 将函数挂载到window对象
@@ -2274,3 +2317,5 @@ window.refreshUnhealthyUuids = refreshUnhealthyUuids;
 window.openSupportedModelsPicker = openSupportedModelsPicker;
 window.goToProviderPage = goToProviderPage;
 window.refreshProviderUuid = refreshProviderUuid;
+window.refreshProviderConfig = refreshProviderConfig;
+window.reauthorizeProvider = reauthorizeProvider;

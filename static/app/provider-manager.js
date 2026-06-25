@@ -3933,6 +3933,27 @@ async function executeGenerateAuthUrl(providerType, extraOptions = {}) {
                 window.addEventListener('oauth_success_event', handleSuccess);
             }
 
+            if (extraOptions.targetProviderUuid) {
+                const targetProviderUuid = extraOptions.targetProviderUuid;
+                const handleReauthorizeSuccess = async (e) => {
+                    const data = e.detail;
+                    if (data.provider === providerType && data.targetProviderUuid === targetProviderUuid) {
+                        window.removeEventListener('oauth_success_event', handleReauthorizeSuccess);
+                        try {
+                            await window.apiClient.post('/reload-config');
+                            if (window.refreshProviderConfig) {
+                                await window.refreshProviderConfig(providerType);
+                            }
+                            showToast(t('common.success'), t('modal.provider.reauthorizeSuccess'), 'success');
+                        } catch (refreshError) {
+                            console.error('Failed to refresh provider after reauthorization:', refreshError);
+                            showToast(t('common.warning'), t('modal.provider.reauthorizeRefreshFailed') + ': ' + refreshError.message, 'warning');
+                        }
+                    }
+                };
+                window.addEventListener('oauth_success_event', handleReauthorizeSuccess);
+            }
+
             // 显示授权信息模态框
             showAuthModal(response.authUrl, response.authInfo);
         } else {

@@ -174,6 +174,67 @@ export async function autoLinkProviderConfigs(config, options = {}) {
 }
 
 /**
+ * Replace the credential file path on an existing provider without recreating it.
+ * This is used by reauthorization flows so routing settings (weight, limits,
+ * supported models, etc.) stay attached to the same provider UUID.
+ */
+export async function replaceProviderCredentialPath(config, options = {}) {
+    const { providerType, providerUuid, credPath } = options;
+    if (!providerType || !providerUuid || !credPath) {
+        throw new Error('providerType, providerUuid and credPath are required');
+    }
+
+    const mapping = PROVIDER_MAPPINGS.find(item => item.providerType === providerType);
+    if (!mapping) {
+        throw new Error(`Unsupported provider type: ${providerType}`);
+    }
+
+    const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+    let updatedProvider = null;
+
+    await withFileLock(filePath, async () => {
+        const providerPools = fs.existsSync(filePath)
+            ? JSON.parse(await pfs.readFile(filePath, 'utf8'))
+            : {};
+        const providers = providerPools[providerType] || [];
+        const providerIndex = providers.findIndex(provider => provider.uuid === providerUuid);
+
+        if (providerIndex === -1) {
+            throw new Error(`Provider not found: ${providerType}/${providerUuid}`);
+        }
+
+        updatedProvider = {
+            ...providers[providerIndex],
+            [mapping.credPathKey]: formatSystemPath(credPath),
+            isHealthy: true,
+            needsRefresh: false,
+            errorCount: 0,
+            lastErrorTime: null,
+            lastErrorMessage: null
+        };
+
+        providerPools[providerType][providerIndex] = updatedProvider;
+        await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
+
+        if (providerPoolManager) {
+            providerPoolManager.providerPools = providerPools;
+            providerPoolManager.initializeProviderStatus();
+        }
+        if (config) {
+            config.providerPools = providerPools;
+        }
+    });
+
+    logger.info(`[Auto-Link] Reauthorized provider ${providerType}/${providerUuid} with new credential path`);
+    return {
+        updated: true,
+        providerType,
+        providerUuid,
+        provider: updatedProvider
+    };
+}
+
+/**
  * 关联单个凭证文件到对应的提供商
  * @param {Object} config - 服务器配置对象
  * @param {string} credPath - 凭证文件路径（相对或绝对路径）
