@@ -904,7 +904,7 @@ export async function refreshCodexTokensWithRetry(refreshToken, config = {}, max
     throw lastError;
 }
 
-async function persistCodexOAuthCredentials(credentials, targetProviderUuid = null) {
+async function persistCodexOAuthCredentials(credentials, targetProviderUuid = null, providerDefaults = {}) {
     if (targetProviderUuid) {
         return replaceProviderCredentialPath(CONFIG, {
             providerType: 'openai-codex-oauth',
@@ -915,7 +915,8 @@ async function persistCodexOAuthCredentials(credentials, targetProviderUuid = nu
 
     return autoLinkProviderConfigs(CONFIG, {
         onlyCurrentCred: true,
-        credPath: credentials.relativePath
+        credPath: credentials.relativePath,
+        providerDefaults
     });
 }
 
@@ -943,8 +944,13 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
         ? options.targetProviderUuid.trim()
         : null;
     const targetProviderConfig = resolveTargetProviderConfig(currentConfig, targetProviderUuid);
+    const selectedProxyId = targetProviderUuid
+        ? targetProviderConfig.PROXY_ID
+        : (options.proxyId || options.PROXY_ID || '').trim();
+    const providerDefaults = selectedProxyId ? { PROXY_ID: selectedProxyId } : {};
     const auth = new CodexAuth({
         ...currentConfig,
+        ...providerDefaults,
         ...targetProviderConfig,
         requestHost: options.requestHost || null
     });
@@ -995,6 +1001,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
             pkce,
             server,
             targetProviderUuid,
+            proxyId: selectedProxyId || null,
             pollTimer: null,
             createdAt: Date.now()
         };
@@ -1056,7 +1063,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
                     targetProviderUuid
                 });
 
-                await persistCodexOAuthCredentials(credentials, targetProviderUuid);
+                await persistCodexOAuthCredentials(credentials, targetProviderUuid, providerDefaults);
 
                 logger.info('[Codex Auth] OAuth flow completed successfully');
             } catch (error) {
@@ -1098,6 +1105,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
                 redirectUri: auth.redirectUri || auth.getRedirectUri(),
                 port: CODEX_OAUTH_CONFIG.port,
                 targetProviderUuid,
+                proxyId: selectedProxyId || null,
                 instructions: [
                     '1. 点击下方按钮在浏览器中打开授权链接',
                     '2. 使用您的 OpenAI 账户登录',
@@ -1140,7 +1148,7 @@ export async function handleCodexOAuthCallback(code, state) {
         }
 
         const session = global.codexOAuthSessions.get(state);
-        const { auth, state: expectedState, pkce, targetProviderUuid = null } = session;
+        const { auth, state: expectedState, pkce, targetProviderUuid = null, proxyId = null } = session;
 
         logger.info('[Codex Auth] Processing OAuth callback...');
 
@@ -1161,7 +1169,7 @@ export async function handleCodexOAuthCallback(code, state) {
             targetProviderUuid
         });
 
-        await persistCodexOAuthCredentials(result, targetProviderUuid);
+        await persistCodexOAuthCredentials(result, targetProviderUuid, proxyId ? { PROXY_ID: proxyId } : {});
 
         logger.info('[Codex Auth] OAuth callback processed successfully');
 
@@ -1173,7 +1181,8 @@ export async function handleCodexOAuthCallback(code, state) {
             accountId: result.account_id,
             credPath: result.credPath,
             relativePath: result.relativePath,
-            targetProviderUuid
+            targetProviderUuid,
+            proxyId
         };
     } catch (error) {
         logger.error('[Codex Auth] OAuth callback failed:', error.message);

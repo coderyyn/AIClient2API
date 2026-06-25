@@ -869,7 +869,7 @@ async function handleGenerateAuthUrl(providerType) {
 
     // 如果是 Codex OAuth，显示认证方式选择对话框
     if (providerType === 'openai-codex-oauth') {
-        showCodexAuthMethodSelector(providerType);
+        await showCodexAuthMethodSelector(providerType);
         return;
     }
 
@@ -891,7 +891,21 @@ async function handleGenerateAuthUrl(providerType) {
  * 显示 Codex OAuth 认证方式选择对话框
  * @param {string} providerType - 提供商类型
  */
-function showCodexAuthMethodSelector(providerType) {
+async function showCodexAuthMethodSelector(providerType) {
+    let proxyOptionsHtml = '<option value="">不使用代理</option>';
+    try {
+        const response = await window.apiClient.get('/proxy-pools');
+        const proxies = Array.isArray(response?.proxies) ? response.proxies : [];
+        proxyOptionsHtml += proxies.map(proxy => {
+            const disabled = proxy.enabled === false ? 'disabled' : '';
+            const name = proxy.name || proxy.id;
+            const label = `${name} (${proxy.id})${proxy.enabled === false ? ' - 已禁用' : ''}`;
+            return `<option value="${escapeHtml(proxy.id || '')}" ${disabled}>${escapeHtml(label)}</option>`;
+        }).join('');
+    } catch (error) {
+        console.warn('Failed to load proxy pools for Codex auth:', error);
+    }
+
     const modal = document.createElement('div');
     modal.className = 'modal-overlay';
     modal.style.display = 'flex';
@@ -904,6 +918,13 @@ function showCodexAuthMethodSelector(providerType) {
             </div>
             <div class="modal-body">
                 <div class="auth-method-options" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div class="form-group" style="padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb;">
+                        <label for="codexAuthProxySelect" style="display: block; margin-bottom: 6px; font-weight: 600; color: #374151;">授权代理节点</label>
+                        <select id="codexAuthProxySelect" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                            ${proxyOptionsHtml}
+                        </select>
+                        <div style="margin-top: 6px; font-size: 12px; color: #6b7280;">新绑定账号时，请让本机浏览器也切到同一个代理节点。</div>
+                    </div>
                     <button class="auth-method-btn" data-method="oauth" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
                         <i class="fas fa-key" style="font-size: 24px; color: #10b981;"></i>
                         <div style="text-align: left;">
@@ -964,6 +985,7 @@ function showCodexAuthMethodSelector(providerType) {
         });
         btn.addEventListener('click', async () => {
             const method = btn.dataset.method;
+            const proxyId = modal.querySelector('#codexAuthProxySelect')?.value || '';
             modal.remove();
             
             if (method === 'batch-import') {
@@ -973,7 +995,7 @@ function showCodexAuthMethodSelector(providerType) {
             } else if (method === 'sub2api-import') {
                 showCodexExternalImportModal(providerType, 'sub2api');
             } else {
-                await executeGenerateAuthUrl(providerType, {});
+                await executeGenerateAuthUrl(providerType, { proxyId });
             }
         });
     });

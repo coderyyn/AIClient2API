@@ -50,4 +50,23 @@ describe('Codex auto-link config scan', () => {
         expect(config.providerPools['openai-codex-oauth'][0].customName).toBe('user@example.com');
         expect(fs.existsSync(path.join(tempDir, 'configs', 'provider_pools.json'))).toBe(true);
     });
+
+    test('applies selected proxy defaults when linking the current Codex credential', async () => {
+        const config = { providerPools: {} };
+        const credPath = path.join(tempDir, 'configs', 'codex', 'codex-account.json');
+
+        await autoLinkProviderConfigs(config, {
+            onlyCurrentCred: true,
+            credPath,
+            providerDefaults: {
+                PROXY_ID: 'pool-47-77-230-19'
+            }
+        });
+
+        expect(config.providerPools['openai-codex-oauth']).toHaveLength(1);
+        expect(config.providerPools['openai-codex-oauth'][0]).toMatchObject({
+            customName: 'user@example.com',
+            PROXY_ID: 'pool-47-77-230-19'
+        });
+    });
 });

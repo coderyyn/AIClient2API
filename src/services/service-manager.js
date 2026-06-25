@@ -90,7 +90,7 @@ export async function autoLinkProviderConfigs(config, options = {}) {
     
     // 如果只关联当前凭证
     if (options.onlyCurrentCred && options.credPath) {
-        const result = await linkSingleCredential(config, options.credPath);
+        const result = await linkSingleCredential(config, options.credPath, options.providerDefaults || {});
         if (result) {
             totalNewProviders = 1;
             allNewProviders[result.displayName] = [result.provider];
@@ -240,7 +240,15 @@ export async function replaceProviderCredentialPath(config, options = {}) {
  * @param {string} credPath - 凭证文件路径（相对或绝对路径）
  * @returns {Promise<Object|null>} 返回关联结果或 null
  */
-async function linkSingleCredential(config, credPath) {
+function pickProviderDefaults(providerDefaults = {}) {
+    const defaults = {};
+    if (typeof providerDefaults.PROXY_ID === 'string' && providerDefaults.PROXY_ID.trim()) {
+        defaults.PROXY_ID = providerDefaults.PROXY_ID.trim();
+    }
+    return defaults;
+}
+
+async function linkSingleCredential(config, credPath, providerDefaults = {}) {
     try {
         // 规范化路径
         const absolutePath = path.isAbsolute(credPath) ? credPath : path.join(process.cwd(), credPath);
@@ -302,13 +310,16 @@ async function linkSingleCredential(config, credPath) {
         }
         
         // 创建新的提供商配置
-        const newProvider = createProviderConfig({
-            credPathKey,
-            credPath: formatSystemPath(relativePath),
-            defaultCheckModel,
-            needsProjectId,
-            customName
-        });
+        const newProvider = {
+            ...createProviderConfig({
+                credPathKey,
+                credPath: formatSystemPath(relativePath),
+                defaultCheckModel,
+                needsProjectId,
+                customName
+            }),
+            ...pickProviderDefaults(providerDefaults)
+        };
         
         // 添加到配置
         config.providerPools[providerType].push(newProvider);
