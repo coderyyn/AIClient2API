@@ -215,6 +215,9 @@ function getFieldLabel(key) {
         'codexMaxWeeklyTokens': t('modal.provider.codexMaxWeeklyTokens') + ' ' + t('config.optional'),
         'codexMax5hPercent': t('modal.provider.codexMax5hPercent') + ' ' + t('config.optional'),
         'codexMaxWeeklyPercent': t('modal.provider.codexMaxWeeklyPercent') + ' ' + t('config.optional'),
+        'PROXY_URL': t('modal.provider.proxyUrl') + ' ' + t('config.optional'),
+        'PROXY_REQUIRED': t('modal.provider.proxyRequired') + ' ' + t('config.optional'),
+        'PROXY_ID': t('modal.provider.proxyId') + ' ' + t('config.optional'),
         'OPENAI_API_KEY': 'OpenAI API Key',
         'OPENAI_BASE_URL': 'OpenAI Base URL',
         'CLAUDE_API_KEY': 'Claude API Key',
@@ -259,6 +262,35 @@ function getFieldLabel(key) {
  * @returns {Array} 字段配置数组
  */
 function getProviderTypeFields(providerType) {
+    const providerProxyFields = [
+        {
+            id: 'PROXY_URL',
+            label: `${t('modal.provider.proxyUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
+            type: 'text',
+            placeholder: '例如: socks5h://172.18.0.1:11001'
+        },
+        {
+            id: 'PROXY_REQUIRED',
+            label: `${t('modal.provider.proxyRequired')} <span class="optional-tag">${t('config.optional')}</span>`,
+            type: 'boolean',
+            placeholder: 'true 表示代理不可用时失败关闭'
+        },
+        {
+            id: 'PROXY_ID',
+            label: `${t('modal.provider.proxyId')} <span class="optional-tag">${t('config.optional')}</span>`,
+            type: 'text',
+            placeholder: '例如: res-ip-1'
+        }
+    ];
+    const withProviderProxyFields = (fields = []) => {
+        const seen = new Set();
+        return [...fields, ...providerProxyFields].filter(field => {
+            if (!field?.id || seen.has(field.id)) return false;
+            seen.add(field.id);
+            return true;
+        });
+    };
+
     // 基础配置字段定义
     const fieldConfigs = {
         'openai-custom': [
@@ -453,6 +485,24 @@ function getProviderTypeFields(providerType) {
                 label: `${t('modal.provider.codexMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'number',
                 placeholder: '例如 90，达到 90% 已用量后停用；0 = 不限制'
+            },
+            {
+                id: 'PROXY_URL',
+                label: `${t('modal.provider.proxyUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'text',
+                placeholder: '例如: socks5h://172.18.0.1:11001'
+            },
+            {
+                id: 'PROXY_REQUIRED',
+                label: `${t('modal.provider.proxyRequired')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'boolean',
+                placeholder: 'true 表示代理不可用时失败关闭'
+            },
+            {
+                id: 'PROXY_ID',
+                label: `${t('modal.provider.proxyId')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'text',
+                placeholder: '例如: res-ip-1'
             }
         ],
         'grok-cli-oauth': [
@@ -543,17 +593,17 @@ function getProviderTypeFields(providerType) {
 
     // 1. 尝试精确匹配
     if (fieldConfigs[providerType]) {
-        return fieldConfigs[providerType];
+        return withProviderProxyFields(fieldConfigs[providerType]);
     }
 
     // 2. 尝试匹配前缀 (例如 openai-custom-test -> openai-custom)
     for (const baseType in fieldConfigs) {
         if (providerType.startsWith(baseType + '-')) {
-            return fieldConfigs[baseType];
+            return withProviderProxyFields(fieldConfigs[baseType]);
         }
     }
 
-    return [];
+    return providerProxyFields;
 }
 
 /**

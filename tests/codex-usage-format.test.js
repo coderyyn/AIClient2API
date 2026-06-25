@@ -128,7 +128,7 @@ describe('Codex usage formatting', () => {
         ]));
     });
 
-    test('hides Codex Spark additional rate limits from the displayed quota summary', () => {
+    test('keeps Codex Spark additional rate limits visible without counting them in total summary', () => {
         const formatted = formatCodexUsage({
             account: 'codex@example.com',
             plan_type: 'PRO',
@@ -149,8 +149,18 @@ describe('Codex usage formatting', () => {
         });
 
         expect(formatted.summary.usedPercent).toBe(60);
-        expect(formatted.items.map(item => item.id)).not.toContain('additional_gpt_5_3_codex_spark_primary_window');
-        expect(formatted.items.map(item => item.id)).not.toContain('additional_gpt_5_3_codex_spark_secondary_window');
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'additional_gpt_5_3_codex_spark_primary_window',
+                label: 'GPT-5.3-Codex-Spark (5h)',
+                percent: 91
+            }),
+            expect.objectContaining({
+                id: 'additional_gpt_5_3_codex_spark_secondary_window',
+                label: 'GPT-5.3-Codex-Spark (Weekly)',
+                percent: 64
+            })
+        ]));
     });
 
     test('extracts available Codex rate limit reset credits from official usage payload', () => {

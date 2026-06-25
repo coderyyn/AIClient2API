@@ -140,6 +140,8 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
             value = Number(value || '1');
         } else if (key === 'codexMax5hTokens' || key === 'codexMaxWeeklyTokens' || key === 'codexMax5hPercent' || key === 'codexMaxWeeklyPercent') {
             value = Number(value || '0');
+        } else if (key === 'PROXY_REQUIRED') {
+            value = String(value || '').trim().toLowerCase() === 'true';
         }
         providerConfig[key] = value;
     });
@@ -1055,7 +1057,7 @@ function renderProviderConfig(provider) {
                            placeholder="${placeholder}">
                 </div>
             `;
-        } else if (fieldKey === 'checkHealth') {
+        } else if (fieldKey === 'checkHealth' || fieldDef.type === 'boolean') {
             // 如果没有值，默认为 false
             const actualValue = value !== undefined ? value : false;
             const isEnabled = actualValue === true || actualValue === 'true';
@@ -1102,7 +1104,22 @@ function renderProviderConfig(provider) {
         const field1DisplayValue = field1IsPassword && field1Value ? '••••••••' : ((field1Value !== undefined && field1Value !== null) ? field1Value : '');
         const field1Def = fieldConfigs.find(f => f.id === field1Key) || fieldConfigs.find(f => f.id.toUpperCase() === field1Key.toUpperCase()) || {};
         
-        if (field1IsPassword) {
+        if (field1Def.type === 'boolean') {
+            const actualValue = field1Value !== undefined ? field1Value : false;
+            const isEnabled = actualValue === true || actualValue === 'true';
+            html += `
+                <div class="config-item">
+                    <label>${field1Label}</label>
+                    <select class="form-control"
+                            data-config-key="${field1Key}"
+                            data-config-value="${actualValue}"
+                            disabled>
+                        <option value="true" ${isEnabled ? 'selected' : ''} data-i18n="modal.provider.enabled">启用</option>
+                        <option value="false" ${!isEnabled ? 'selected' : ''} data-i18n="modal.provider.disabled">禁用</option>
+                    </select>
+                </div>
+            `;
+        } else if (field1IsPassword) {
             html += `
                 <div class="config-item">
                     <label>${field1Label}</label>
@@ -1164,7 +1181,22 @@ function renderProviderConfig(provider) {
             const field2DisplayValue = field2IsPassword && field2Value ? '••••••••' : ((field2Value !== undefined && field2Value !== null) ? field2Value : '');
             const field2Def = fieldConfigs.find(f => f.id === field2Key) || fieldConfigs.find(f => f.id.toUpperCase() === field2Key.toUpperCase()) || {};
             
-            if (field2IsPassword) {
+            if (field2Def.type === 'boolean') {
+                const actualValue = field2Value !== undefined ? field2Value : false;
+                const isEnabled = actualValue === true || actualValue === 'true';
+                html += `
+                    <div class="config-item">
+                        <label>${field2Label}</label>
+                        <select class="form-control"
+                                data-config-key="${field2Key}"
+                                data-config-value="${actualValue}"
+                                disabled>
+                            <option value="true" ${isEnabled ? 'selected' : ''} data-i18n="modal.provider.enabled">启用</option>
+                            <option value="false" ${!isEnabled ? 'selected' : ''} data-i18n="modal.provider.disabled">禁用</option>
+                        </select>
+                    </div>
+                `;
+            } else if (field2IsPassword) {
                 html += `
                     <div class="config-item">
                         <label>${field2Label}</label>
@@ -1755,7 +1787,18 @@ function addDynamicConfigFields(form, providerType) {
             // 检查是否为OAuth凭据文件路径字段（兼容两种命名方式）
             const isOAuthFilePath1 = field1.id.includes('OAUTH_CREDS_FILE_PATH') || field1.id.includes('OauthCredsFilePath');
             
-            if (isPassword1) {
+            if (field1.type === 'boolean') {
+                const isEnabled = field1.value === true || field1.value === 'true';
+                fields += `
+                    <div class="form-group">
+                        <label>${field1.label}</label>
+                        <select id="new${field1.id}" class="form-control">
+                            <option value="false" ${!isEnabled ? 'selected' : ''} data-i18n="modal.provider.disabled">禁用</option>
+                            <option value="true" ${isEnabled ? 'selected' : ''} data-i18n="modal.provider.enabled">启用</option>
+                        </select>
+                    </div>
+                `;
+            } else if (isPassword1) {
                 fields += `
                     <div class="form-group">
                         <label>${field1.label}</label>
@@ -1798,7 +1841,18 @@ function addDynamicConfigFields(form, providerType) {
                 // 检查是否为OAuth凭据文件路径字段（兼容两种命名方式）
                 const isOAuthFilePath2 = field2.id.includes('OAUTH_CREDS_FILE_PATH') || field2.id.includes('OauthCredsFilePath');
                 
-                if (isPassword2) {
+                if (field2.type === 'boolean') {
+                    const isEnabled = field2.value === true || field2.value === 'true';
+                    fields += `
+                        <div class="form-group">
+                            <label>${field2.label}</label>
+                            <select id="new${field2.id}" class="form-control">
+                                <option value="false" ${!isEnabled ? 'selected' : ''} data-i18n="modal.provider.disabled">禁用</option>
+                                <option value="true" ${isEnabled ? 'selected' : ''} data-i18n="modal.provider.enabled">启用</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (isPassword2) {
                     fields += `
                         <div class="form-group">
                             <label>${field2.label}</label>
@@ -1897,6 +1951,8 @@ async function addProvider(providerType) {
         if (element) {
             if (field.id === 'codexMax5hTokens' || field.id === 'codexMaxWeeklyTokens' || field.id === 'codexMax5hPercent' || field.id === 'codexMaxWeeklyPercent') {
                 providerConfig[field.id] = Number(element.value || '0');
+            } else if (field.id === 'PROXY_REQUIRED') {
+                providerConfig[field.id] = element.value === 'true';
             } else {
                 providerConfig[field.id] = element.value || '';
             }
