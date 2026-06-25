@@ -29,6 +29,21 @@ function createCodexPoolManager() {
     });
 }
 
+function createWeightedCodexPoolManager() {
+    return new ProviderPoolManager({
+        'openai-codex-oauth': [
+            { uuid: 'codex-low', customName: 'Codex Low', providerWeight: 1, supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-high', customName: 'Codex High', providerWeight: 3, supportedModels: ['gpt-5.5'] }
+        ]
+    }, {
+        logLevel: 'error',
+        saveDebounceTime: 60 * 60 * 1000,
+        globalConfig: {
+            PROVIDER_POOLS_FILE_PATH: 'configs/provider_pools.test.json'
+        }
+    });
+}
+
 beforeEach(() => {
     consoleSpies = ['log', 'warn', 'error'].map((method) => jest.spyOn(console, method).mockImplementation(() => {}));
 });
@@ -95,5 +110,32 @@ describe('provider pool sticky affinity', () => {
         clearTimeout(manager.saveTimer);
         expect(retrySelection.uuid).not.toBe(first.uuid);
         expect(retrySelection.isHealthy).toBe(true);
+    });
+
+    test('distributes different affinity keys by Codex provider weight while keeping each key sticky', async () => {
+        const manager = createWeightedCodexPoolManager();
+        const firstSelections = new Map();
+        const counts = { 'codex-low': 0, 'codex-high': 0 };
+
+        for (let i = 0; i < 200; i++) {
+            const stickyProviderKey = `cache-key-${i}`;
+            const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                skipUsageCount: true
+            });
+            firstSelections.set(stickyProviderKey, selected.uuid);
+            counts[selected.uuid] += 1;
+        }
+
+        for (const [stickyProviderKey, uuid] of firstSelections.entries()) {
+            const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                skipUsageCount: true
+            });
+            expect(selected.uuid).toBe(uuid);
+        }
+
+        clearTimeout(manager.saveTimer);
+        expect(counts['codex-high']).toBeGreaterThanOrEqual(counts['codex-low'] * 2);
     });
 });

@@ -44,10 +44,9 @@ function getCustomModelIdsForProvider(config, providerType) {
         .map(model => model.id);
 }
 
-function stableHashToIndex(value, length) {
-    if (!value || length <= 0) return 0;
+function stableHashToUnitInterval(value) {
     const hash = crypto.createHash('sha256').update(String(value)).digest();
-    return hash.readUInt32BE(0) % length;
+    return (hash.readUInt32BE(0) + 1) / 0x100000001;
 }
 
 function isCodexProviderType(providerType) {
@@ -61,6 +60,30 @@ function getProviderWeight(config = {}) {
 
 function hasCustomProviderWeights(providers) {
     return providers.some(provider => getProviderWeight(provider.config) !== 1);
+}
+
+function getProviderStableId(provider) {
+    const type = provider.type || '';
+    const uuid = provider.uuid || provider.config?.uuid || '';
+    return `${type}:${uuid}`;
+}
+
+function selectWeightedStickyProvider(providers, affinityScope) {
+    if (!Array.isArray(providers) || providers.length === 0) return null;
+
+    return providers
+        .map(provider => {
+            const weight = getProviderWeight(provider.config);
+            const unit = stableHashToUnitInterval(`${affinityScope}:${getProviderStableId(provider)}`);
+            return {
+                provider,
+                score: -Math.log(unit) / weight
+            };
+        })
+        .sort((a, b) => {
+            if (a.score !== b.score) return a.score - b.score;
+            return getProviderStableId(a.provider).localeCompare(getProviderStableId(b.provider));
+        })[0].provider;
 }
 
 function toStringArray(value) {
@@ -949,14 +972,10 @@ export class ProviderPoolManager {
 
         let selected;
         if (options.stickyProviderKey) {
-            const affinityCandidates = [...candidates].sort((a, b) => {
-                const typeCompare = (a.type || '').localeCompare(b.type || '');
-                if (typeCompare !== 0) return typeCompare;
-                const uuidA = a.uuid || a.config?.uuid || '';
-                const uuidB = b.uuid || b.config?.uuid || '';
-                return uuidA.localeCompare(uuidB);
-            });
-            selected = affinityCandidates[stableHashToIndex(`mixed:${requestedModel || ''}:${options.stickyProviderKey}`, affinityCandidates.length)];
+            selected = selectWeightedStickyProvider(
+                candidates,
+                `mixed:${requestedModel || ''}:${options.stickyProviderKey}`
+            );
         } else if (hasCustomProviderWeights(candidates)) {
             selected = [...candidates].sort((a, b) => {
                 const weightA = getProviderWeight(a.config);
@@ -1568,12 +1587,10 @@ export class ProviderPoolManager {
 
         let selected;
         if (options.stickyProviderKey && isCodexProviderType(providerType)) {
-            const affinityCandidates = [...availableAndHealthyProviders].sort((a, b) => {
-                const uuidA = a.uuid || a.config?.uuid || '';
-                const uuidB = b.uuid || b.config?.uuid || '';
-                return uuidA.localeCompare(uuidB);
-            });
-            selected = affinityCandidates[stableHashToIndex(`${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`, affinityCandidates.length)];
+            selected = selectWeightedStickyProvider(
+                availableAndHealthyProviders,
+                `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
+            );
             this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         } else if (hasCustomProviderWeights(availableAndHealthyProviders)) {
             selected = [...availableAndHealthyProviders].sort((a, b) => {

@@ -143,4 +143,33 @@ describe('mixed GPT provider pool', () => {
         expect(selected.actualProviderType).toBe('openai-codex-oauth');
         expect(selected.config.uuid).toBe('codex-local');
     });
+
+    test('distributes sticky mixed GPT affinity keys by provider weight', async () => {
+        const manager = createMixedGptPoolManager({
+            codex: { providerWeight: 1 },
+            edge: { providerWeight: 3 }
+        });
+        const firstSelections = new Map();
+        const counts = { 'openai-codex-oauth': 0, 'openaiResponses-custom': 0 };
+
+        for (let i = 0; i < 200; i++) {
+            const stickyProviderKey = `mixed-cache-key-${i}`;
+            const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                skipUsageCount: true
+            });
+            firstSelections.set(stickyProviderKey, selected.actualProviderType);
+            counts[selected.actualProviderType] += 1;
+        }
+
+        for (const [stickyProviderKey, actualProviderType] of firstSelections.entries()) {
+            const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                skipUsageCount: true
+            });
+            expect(selected.actualProviderType).toBe(actualProviderType);
+        }
+
+        expect(counts['openaiResponses-custom']).toBeGreaterThanOrEqual(counts['openai-codex-oauth'] * 2);
+    });
 });
