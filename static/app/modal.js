@@ -13,6 +13,7 @@ let currentProviders = [];
 let currentProviderType = '';
 let nodeSearchTerm = '';
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
+let cachedProxyPools = [];
 
 function usesManagedModelList(providerType = '') {
     return Array.from(MANAGED_MODEL_LIST_PROVIDERS).some(baseType =>
@@ -44,6 +45,50 @@ function parseModelsData(rawValue = '') {
         console.warn('Failed to parse models data:', error);
         return [];
     }
+}
+
+async function loadProxyPools(force = false) {
+    if (!force && cachedProxyPools.length > 0) {
+        return cachedProxyPools;
+    }
+    try {
+        const response = await window.apiClient.get('/proxy-pools');
+        cachedProxyPools = Array.isArray(response?.proxies) ? response.proxies : [];
+    } catch (error) {
+        console.error('Failed to load proxy pools:', error);
+        cachedProxyPools = [];
+    }
+    return cachedProxyPools;
+}
+
+function renderProxySelectOptions(selectedValue = '') {
+    const options = [
+        `<option value="" ${!selectedValue ? 'selected' : ''}>${escapeHtml(t('modal.proxyPool.none'))}</option>`
+    ];
+    cachedProxyPools.forEach(proxy => {
+        const disabled = proxy.enabled === false ? 'disabled' : '';
+        const selected = proxy.id === selectedValue ? 'selected' : '';
+        const name = proxy.name || proxy.id;
+        const label = `${name} (${proxy.id})${proxy.enabled === false ? ` - ${t('modal.proxyPool.disabled')}` : ''}`;
+        options.push(`<option value="${escapeHtml(proxy.id)}" ${selected} ${disabled}>${escapeHtml(label)}</option>`);
+    });
+    return options.join('');
+}
+
+function renderProxySelectField(fieldKey, fieldLabel, value = '', disabled = true) {
+    const selectedValue = value || '';
+    return `
+        <div class="config-item">
+            <label>${fieldLabel}</label>
+            <select class="form-control"
+                    data-config-key="${fieldKey}"
+                    data-config-value="${selectedValue}"
+                    ${disabled ? 'disabled' : ''}>
+                ${renderProxySelectOptions(selectedValue)}
+            </select>
+            <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
+        </div>
+    `;
 }
 
 function renderSupportedModelsValue(models = []) {
@@ -148,7 +193,7 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
 
     configSelects.forEach(select => {
         const key = select.dataset.configKey;
-        providerConfig[key] = select.value === 'true';
+        providerConfig[key] = key === 'PROXY_ID' ? select.value : select.value === 'true';
     });
 
     if (usesManagedModelList(providerType)) {
@@ -391,8 +436,9 @@ async function openSupportedModelsPicker(providerType, uuid, event) {
  * @param {Object} data - 提供商数据
  * @param {string} initialSearchTerm - 初始搜索词
  */
-function showProviderManagerModal(data, initialSearchTerm = '') {
+async function showProviderManagerModal(data, initialSearchTerm = '') {
     const { providerType, providers, totalCount, healthyCount } = data;
+    await loadProxyPools();
     
     // 保存当前数据用于分页
     currentProviders = providers;
@@ -438,6 +484,9 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
                     <div class="provider-summary-actions">
                         <button class="btn btn-success" onclick="window.showAddProviderForm('${providerType}')">
                             <i class="fas fa-plus"></i> <span data-i18n="modal.provider.add">添加新提供商</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.showProxyPoolManager()">
+                            <i class="fas fa-network-wired"></i> <span data-i18n="modal.proxyPool.title">${t('modal.proxyPool.title')}</span>
                         </button>
                         <button class="btn btn-warning" onclick="window.resetAllProvidersHealth('${providerType}')" data-i18n="modal.provider.resetHealth" title="将所有节点的健康状态重置为健康">
                             <i class="fas fa-heartbeat"></i> 重置为健康
@@ -487,6 +536,110 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     
     // 初始渲染
     window.goToProviderPage(1);
+}
+
+async function showProxyPoolManager() {
+    await loadProxyPools(true);
+
+    const existingModal = document.querySelector('.proxy-pool-modal');
+    if (existingModal) existingModal.remove();
+
+    const rows = cachedProxyPools.map(proxy => renderProxyPoolRow(proxy)).join('');
+    const modal = document.createElement('div');
+    modal.className = 'provider-modal proxy-pool-modal';
+    modal.innerHTML = `
+        <div class="provider-modal-content">
+            <div class="provider-modal-header">
+                <h3><i class="fas fa-network-wired"></i> ${escapeHtml(t('modal.proxyPool.title'))}</h3>
+                <button class="modal-close" onclick="this.closest('.proxy-pool-modal').remove()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="provider-modal-body">
+                <div class="provider-summary-actions" style="margin-bottom: 12px;">
+                    <button class="btn btn-success" onclick="window.addProxyPoolRow()">
+                        <i class="fas fa-plus"></i> ${escapeHtml(t('modal.proxyPool.add'))}
+                    </button>
+                    <button class="btn btn-primary" onclick="window.saveProxyPools()">
+                        <i class="fas fa-save"></i> ${escapeHtml(t('modal.provider.save'))}
+                    </button>
+                </div>
+                <div class="proxy-pool-list">
+                    ${rows || renderProxyPoolRow({ enabled: true })}
+                </div>
+                <small class="form-text">${escapeHtml(t('modal.proxyPool.help'))}</small>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function renderProxyPoolRow(proxy = {}) {
+    const enabled = proxy.enabled !== false;
+    return `
+        <div class="form-grid proxy-pool-row">
+            <div class="config-item">
+                <label>ID</label>
+                <input data-proxy-field="id" value="${escapeHtml(proxy.id || '')}" placeholder="res-ip-1">
+            </div>
+            <div class="config-item">
+                <label>${escapeHtml(t('modal.proxyPool.name'))}</label>
+                <input data-proxy-field="name" value="${escapeHtml(proxy.name || '')}" placeholder="${escapeHtml(t('modal.proxyPool.name'))}">
+            </div>
+            <div class="config-item">
+                <label>URL</label>
+                <input data-proxy-field="url" value="${escapeHtml(proxy.url || '')}" placeholder="socks5h://127.0.0.1:1081">
+            </div>
+            <div class="config-item">
+                <label>${escapeHtml(t('modal.proxyPool.enabled'))}</label>
+                <select class="form-control" data-proxy-field="enabled">
+                    <option value="true" ${enabled ? 'selected' : ''}>${escapeHtml(t('modal.provider.enabled'))}</option>
+                    <option value="false" ${!enabled ? 'selected' : ''}>${escapeHtml(t('modal.provider.disabled'))}</option>
+                </select>
+            </div>
+            <div class="config-item">
+                <label>${escapeHtml(t('modal.proxyPool.note'))}</label>
+                <input data-proxy-field="note" value="${escapeHtml(proxy.note || '')}" placeholder="${escapeHtml(t('modal.proxyPool.note'))}">
+            </div>
+            <div class="config-item">
+                <label>&nbsp;</label>
+                <button class="btn btn-danger" onclick="this.closest('.proxy-pool-row').remove()">
+                    <i class="fas fa-trash"></i> ${escapeHtml(t('modal.provider.delete'))}
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function addProxyPoolRow() {
+    const list = document.querySelector('.proxy-pool-modal .proxy-pool-list');
+    if (list) {
+        list.insertAdjacentHTML('beforeend', renderProxyPoolRow({ enabled: true }));
+    }
+}
+
+async function saveProxyPools() {
+    const rows = Array.from(document.querySelectorAll('.proxy-pool-modal .proxy-pool-row'));
+    const proxies = rows.map(row => ({
+        id: row.querySelector('[data-proxy-field="id"]')?.value || '',
+        name: row.querySelector('[data-proxy-field="name"]')?.value || '',
+        url: row.querySelector('[data-proxy-field="url"]')?.value || '',
+        enabled: row.querySelector('[data-proxy-field="enabled"]')?.value !== 'false',
+        note: row.querySelector('[data-proxy-field="note"]')?.value || ''
+    })).filter(proxy => proxy.id && proxy.url);
+
+    try {
+        const response = await window.apiClient.post('/proxy-pools', { proxies });
+        cachedProxyPools = Array.isArray(response?.proxies) ? response.proxies : proxies;
+        showToast(t('common.success'), t('modal.proxyPool.saveSuccess'), 'success');
+        document.querySelector('.proxy-pool-modal')?.remove();
+        if (currentProviderType) {
+            await refreshProviderConfig(currentProviderType);
+        }
+    } catch (error) {
+        console.error('Failed to save proxy pools:', error);
+        showToast(t('common.error'), t('modal.proxyPool.saveFailed') + ': ' + error.message, 'error');
+    }
 }
 
 /**
@@ -1104,7 +1257,9 @@ function renderProviderConfig(provider) {
         const field1DisplayValue = field1IsPassword && field1Value ? '••••••••' : ((field1Value !== undefined && field1Value !== null) ? field1Value : '');
         const field1Def = fieldConfigs.find(f => f.id === field1Key) || fieldConfigs.find(f => f.id.toUpperCase() === field1Key.toUpperCase()) || {};
         
-        if (field1Def.type === 'boolean') {
+        if (field1Def.type === 'proxy-select') {
+            html += renderProxySelectField(field1Key, field1Label, field1Value, true);
+        } else if (field1Def.type === 'boolean') {
             const actualValue = field1Value !== undefined ? field1Value : false;
             const isEnabled = actualValue === true || actualValue === 'true';
             html += `
@@ -1181,7 +1336,9 @@ function renderProviderConfig(provider) {
             const field2DisplayValue = field2IsPassword && field2Value ? '••••••••' : ((field2Value !== undefined && field2Value !== null) ? field2Value : '');
             const field2Def = fieldConfigs.find(f => f.id === field2Key) || fieldConfigs.find(f => f.id.toUpperCase() === field2Key.toUpperCase()) || {};
             
-            if (field2Def.type === 'boolean') {
+            if (field2Def.type === 'proxy-select') {
+                html += renderProxySelectField(field2Key, field2Label, field2Value, true);
+            } else if (field2Def.type === 'boolean') {
                 const actualValue = field2Value !== undefined ? field2Value : false;
                 const isEnabled = actualValue === true || actualValue === 'true';
                 html += `
@@ -1787,7 +1944,17 @@ function addDynamicConfigFields(form, providerType) {
             // 检查是否为OAuth凭据文件路径字段（兼容两种命名方式）
             const isOAuthFilePath1 = field1.id.includes('OAUTH_CREDS_FILE_PATH') || field1.id.includes('OauthCredsFilePath');
             
-            if (field1.type === 'boolean') {
+            if (field1.type === 'proxy-select') {
+                fields += `
+                    <div class="form-group">
+                        <label>${field1.label}</label>
+                        <select id="new${field1.id}" class="form-control">
+                            ${renderProxySelectOptions(field1.value || '')}
+                        </select>
+                        <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
+                    </div>
+                `;
+            } else if (field1.type === 'boolean') {
                 const isEnabled = field1.value === true || field1.value === 'true';
                 fields += `
                     <div class="form-group">
@@ -1841,7 +2008,17 @@ function addDynamicConfigFields(form, providerType) {
                 // 检查是否为OAuth凭据文件路径字段（兼容两种命名方式）
                 const isOAuthFilePath2 = field2.id.includes('OAUTH_CREDS_FILE_PATH') || field2.id.includes('OauthCredsFilePath');
                 
-                if (field2.type === 'boolean') {
+                if (field2.type === 'proxy-select') {
+                    fields += `
+                        <div class="form-group">
+                            <label>${field2.label}</label>
+                            <select id="new${field2.id}" class="form-control">
+                                ${renderProxySelectOptions(field2.value || '')}
+                            </select>
+                            <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
+                        </div>
+                    `;
+                } else if (field2.type === 'boolean') {
                     const isEnabled = field2.value === true || field2.value === 'true';
                     fields += `
                         <div class="form-group">
@@ -2352,7 +2529,10 @@ export {
     goToProviderPage,
     performSingleHealthCheck,
     refreshProviderUuid,
-    reauthorizeProvider
+    reauthorizeProvider,
+    showProxyPoolManager,
+    addProxyPoolRow,
+    saveProxyPools
 };
 
 // 将函数挂载到window对象
@@ -2375,3 +2555,6 @@ window.goToProviderPage = goToProviderPage;
 window.refreshProviderUuid = refreshProviderUuid;
 window.refreshProviderConfig = refreshProviderConfig;
 window.reauthorizeProvider = reauthorizeProvider;
+window.showProxyPoolManager = showProxyPoolManager;
+window.addProxyPoolRow = addProxyPoolRow;
+window.saveProxyPools = saveProxyPools;

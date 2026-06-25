@@ -278,8 +278,8 @@ function getProviderTypeFields(providerType) {
         {
             id: 'PROXY_ID',
             label: `${t('modal.provider.proxyId')} <span class="optional-tag">${t('config.optional')}</span>`,
-            type: 'text',
-            placeholder: '例如: res-ip-1'
+            type: 'proxy-select',
+            placeholder: '选择集中代理配置，默认不启用'
         }
     ];
     const withProviderProxyFields = (fields = []) => {
@@ -501,8 +501,8 @@ function getProviderTypeFields(providerType) {
             {
                 id: 'PROXY_ID',
                 label: `${t('modal.provider.proxyId')} <span class="optional-tag">${t('config.optional')}</span>`,
-                type: 'text',
-                placeholder: '例如: res-ip-1'
+                type: 'proxy-select',
+                placeholder: '选择集中代理配置，默认不启用'
             }
         ],
         'grok-cli-oauth': [

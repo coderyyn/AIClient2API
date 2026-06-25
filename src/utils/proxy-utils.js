@@ -10,6 +10,7 @@ import { HttpProxyAgent } from 'http-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { getTLSSidecar } from './tls-sidecar.js';
 import { NETWORK } from './constants.js';
+import { resolveProxyPoolEntry } from './proxy-pool-store.js';
 
 // 代理 Agent 缓存，避免重复创建 Agent 导致连接池失效和内存泄漏
 const agentCache = new Map();
@@ -139,6 +140,10 @@ export function isProxyEnabledForProvider(config, providerType) {
         return true;
     }
 
+    if (config?.PROXY_ID && config?.uuid) {
+        return true;
+    }
+
     // Provider pool nodes may carry their own PROXY_URL. Treat that as an
     // explicit per-node proxy binding so it does not require a global allowlist.
     if (config?.PROXY_URL && config?.uuid) {
@@ -181,7 +186,8 @@ export function getProxyConfigForProvider(config, providerType) {
     }
 
     const boundProxyUrl = getNodeProxyUrlFromBinding(config, providerType);
-    const proxyUrl = boundProxyUrl || config.PROXY_URL;
+    const proxyPoolEntry = boundProxyUrl ? null : resolveProxyPoolEntry(config);
+    const proxyUrl = boundProxyUrl || proxyPoolEntry?.url || config.PROXY_URL;
     const proxyConfig = parseProxyUrl(proxyUrl);
     if (!proxyConfig) {
         if (config?.PROXY_REQUIRED) {
@@ -195,7 +201,9 @@ export function getProxyConfigForProvider(config, providerType) {
         const contextIpNodeProxy = requestContext.get('ipNodeProxy');
         const clientIp = contextIpNodeProxy?.clientIp || config.ipNodeProxy?.clientIp || 'unknown';
         
-        const source = boundProxyUrl ? `${nodeDisplay} (IP binding ${clientIp})` : nodeDisplay;
+        const source = boundProxyUrl
+            ? `${nodeDisplay} (IP binding ${clientIp})`
+            : (proxyPoolEntry ? `${nodeDisplay} (proxy pool ${proxyPoolEntry.id})` : nodeDisplay);
         logger.info(`[Proxy] Using ${proxyConfig.proxyType} proxy for ${source}: ${proxyUrl}`);
     }
 

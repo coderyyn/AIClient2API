@@ -17,6 +17,7 @@ import * as oauthApi from '../ui-modules/oauth-api.js';
 import * as customModelsApi from '../ui-modules/custom-models-api.js';
 import * as accessApi from '../ui-modules/access-api.js';
 import * as eventBroadcast from '../ui-modules/event-broadcast.js';
+import * as proxyPoolApi from '../ui-modules/proxy-pool-api.js';
 import { HELP_DATA, API_GUIDE_DATA, API_EXAMPLES, formatHelpText, formatApiGuideText } from '../utils/docs-data.js';
 
 // Re-export from event-broadcast module
@@ -114,6 +115,14 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     // Get configuration
     if (method === 'GET' && pathParam === '/api/config') {
         return await configApi.handleGetConfig(req, res, currentConfig);
+    }
+
+    if (method === 'GET' && pathParam === '/api/proxy-pools') {
+        return await proxyPoolApi.handleGetProxyPools(req, res, currentConfig);
+    }
+
+    if (method === 'POST' && pathParam === '/api/proxy-pools') {
+        return await proxyPoolApi.handleSaveProxyPools(req, res, currentConfig);
     }
 
     // Get access overview information for the simplified connection page

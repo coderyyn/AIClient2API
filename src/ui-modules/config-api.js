@@ -134,6 +134,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         TRUST_PROXY: currentConfig.TRUST_PROXY,
         TRUSTED_PROXY_IPS: currentConfig.TRUSTED_PROXY_IPS,
         PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+        PROXY_POOLS_FILE_PATH: currentConfig.PROXY_POOLS_FILE_PATH,
         MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
         SYSTEM_PROMPT_REPLACEMENTS: currentConfig.SYSTEM_PROMPT_REPLACEMENTS,
         WARMUP_TARGET: currentConfig.WARMUP_TARGET,
@@ -291,6 +292,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             }
         }
         if (newConfig.PROVIDER_POOLS_FILE_PATH !== undefined) currentConfig.PROVIDER_POOLS_FILE_PATH = newConfig.PROVIDER_POOLS_FILE_PATH;
+        if (newConfig.PROXY_POOLS_FILE_PATH !== undefined) currentConfig.PROXY_POOLS_FILE_PATH = newConfig.PROXY_POOLS_FILE_PATH;
         if (newConfig.MAX_ERROR_COUNT !== undefined) currentConfig.MAX_ERROR_COUNT = newConfig.MAX_ERROR_COUNT;
         if (newConfig.WARMUP_TARGET !== undefined) currentConfig.WARMUP_TARGET = newConfig.WARMUP_TARGET;
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
@@ -469,6 +471,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 TRUST_PROXY: currentConfig.TRUST_PROXY,
                 TRUSTED_PROXY_IPS: currentConfig.TRUSTED_PROXY_IPS,
                 PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+                PROXY_POOLS_FILE_PATH: currentConfig.PROXY_POOLS_FILE_PATH,
                 MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
                 WARMUP_TARGET: currentConfig.WARMUP_TARGET,
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,

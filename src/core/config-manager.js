@@ -149,6 +149,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         TRUST_PROXY: false, // 是否信任反向代理传入的 x-forwarded-for
         TRUSTED_PROXY_IPS: ['127.0.0.1', '::1'], // 允许提供 x-forwarded-for 的反向代理 IP 列表
         PROVIDER_POOLS_FILE_PATH: null, // 新增号池配置文件路径
+        PROXY_POOLS_FILE_PATH: null, // 集中代理池配置文件路径
         MAX_ERROR_COUNT: 10, // 提供商最大错误次数
         CUSTOM_MODELS_FILE_PATH: null, // 自定义模型配置文件路径
         SYSTEM_PROMPT_REPLACEMENTS: [], // 系统提示词内容替换规则，例如: [{"old": "AI", "new": "Bot"}, {"old": "OpenAI", "new": "Gemini"}]
@@ -297,6 +298,9 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
     // 加载号池配置
     if (!currentConfig.PROVIDER_POOLS_FILE_PATH) {
         currentConfig.PROVIDER_POOLS_FILE_PATH = 'configs/provider_pools.json';
+    }
+    if (!currentConfig.PROXY_POOLS_FILE_PATH) {
+        currentConfig.PROXY_POOLS_FILE_PATH = 'configs/proxy-pools.json';
     }
     if (currentConfig.PROVIDER_POOLS_FILE_PATH) {
         try {
