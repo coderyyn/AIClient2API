@@ -62,9 +62,10 @@
         /* 统计卡片网格 */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: minmax(260px, 0.95fr) minmax(520px, 1.45fr) minmax(260px, 0.95fr);
             gap: 1.5rem;
             margin-bottom: 2rem;
+            align-items: start;
         }
         .stat-card {
             background: var(--bg-primary);
@@ -142,25 +143,28 @@
             background: linear-gradient(90deg, var(--primary-color), var(--primary-light));
             border-radius: var(--radius-full);
         }
-        .provider-account-tree {
-            gap: 14px;
-        }
+        .provider-account-tree { gap: 12px; }
         .provider-account-node {
-            padding: 12px;
-            background: linear-gradient(135deg, var(--bg-secondary), var(--bg-primary));
+            padding: 14px 14px 12px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), var(--bg-primary));
             border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
+            border-radius: 18px;
+            box-shadow: var(--shadow-sm);
         }
         .provider-account-children {
             margin-top: 10px;
-            padding-left: 14px;
-            border-left: 2px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            gap: 9px;
+            padding-left: 0;
+            border-left: none;
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
         }
         .provider-account-child {
-            padding: 7px 0 0;
+            padding: 10px 12px 9px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            box-shadow: var(--shadow-sm);
         }
         .account-title {
             display: flex;
@@ -177,7 +181,7 @@
         }
         .account-sub {
             display: block;
-            margin: -1px 0 7px 16px;
+            margin: 0 0 6px 16px;
             color: var(--text-tertiary);
             font-size: 11px;
             overflow: hidden;
@@ -647,12 +651,14 @@
             .key-stats { gap: 16px; }
             .key-stat { min-width: 60px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .provider-account-children { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 768px) {
             .navbar-inner { padding: 0 16px; }
             .main-container { padding: 20px 16px; }
             .stats-grid { grid-template-columns: 1fr; }
+            .provider-account-children { grid-template-columns: 1fr; }
             .key-card {
                 flex-direction: column;
                 align-items: stretch;
