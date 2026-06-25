@@ -31,4 +31,15 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('范围内服务商');
         expect(source).toContain('范围内模型');
     });
+
+    test('admin provider distribution shows token share from the center provider view', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('function renderProviderTokenDistribution(elementId, providers, totalTokens)');
+        expect(source).toContain("renderProviderTokenDistribution('providerDistribution', rangeSummary.providers, totalTokens)");
+        expect(source).toContain('usageTokens(b) - usageTokens(a)');
+        expect(source).toContain('formatTokenCompact(tokens)');
+        expect(source).toContain('Token');
+        expect(source).toContain('次');
+    });
 });

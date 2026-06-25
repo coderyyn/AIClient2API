@@ -859,10 +859,10 @@
                     <div id="calendarFooter" style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;"></div>
                 </div>
                 
-                <!-- 提供商分布 -->
+                <!-- Provider Token 占比 -->
                 <div class="stat-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
-                        <span>提供商占比 (Providers)</span>
+                        <span>Provider Token 占比</span>
                         <span id="providerTotalCount" style="color: var(--primary-color);">0 次</span>
                     </div>
                     <div id="providerDistribution" class="distribution-list">
@@ -1346,14 +1346,10 @@
             document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
 
             const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
-            const aggregatedProviders = {};
             const aggregatedModels = {};
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
 
-            Object.entries(rangeSummary.providers).forEach(([p, usage]) => {
-                aggregatedProviders[p] = usageCount(usage);
-            });
             Object.entries(rangeSummary.models).forEach(([m, usage]) => {
                 aggregatedModels[m] = usageCount(usage);
             });
@@ -1366,13 +1362,68 @@
                 return;
             }
 
-            // 渲染提供商分布
-            renderDistribution('providerDistribution', aggregatedProviders, totalCalls);
+            // 渲染中心视角 Provider Token 占比
+            renderProviderTokenDistribution('providerDistribution', rangeSummary.providers, totalTokens);
             document.getElementById('providerTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', aggregatedModels, totalCalls);
             document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
+        }
+
+        function renderProviderTokenDistribution(elementId, providers, totalTokens) {
+            const container = document.getElementById(elementId);
+            const sorted = Object.entries(providers || {}).sort(([, a], [, b]) => usageTokens(b) - usageTokens(a));
+            const denominator = Number(totalTokens || 0);
+            if (denominator <= 0 || sorted.length === 0) {
+                container.innerHTML = '<div class="detail-empty">当前范围暂无 Provider Token 数据</div>';
+                return;
+            }
+
+            const topData = sorted.slice(0, 5);
+
+            container.innerHTML = topData.map(([name, usage]) => {
+                const calls = usageCount(usage);
+                const tokens = usageTokens(usage);
+                const percent = Math.round((tokens / denominator) * 100);
+                return `
+                    <div class="distribution-item">
+                        <div class="dist-info">
+                            <span class="dist-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percent}%)</span>
+                        </div>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(calls)} 次</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${percent}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (sorted.length > 5) {
+                const other = sorted.slice(5).reduce((sum, [, usage]) => {
+                    sum.calls += usageCount(usage);
+                    sum.tokens += usageTokens(usage);
+                    return sum;
+                }, { calls: 0, tokens: 0 });
+                const otherPercent = Math.round((other.tokens / denominator) * 100);
+                container.innerHTML += `
+                    <div class="distribution-item">
+                        <div class="dist-info">
+                            <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - 5} 个)</span>
+                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${otherPercent}%)</span>
+                        </div>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
+                        </div>
+                    </div>
+                `;
+            }
         }
 
         function renderDistribution(elementId, data, total) {
