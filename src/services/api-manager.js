@@ -314,7 +314,11 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
 
         // 从号池获取服务实例
         const shouldUsePool = !!(providerPoolManager && CONFIG.providerPools);
-        const result = await getApiServiceWithFallback(CONFIG, model, {acquireSlot: shouldUsePool});
+        const result = await getApiServiceWithFallback(CONFIG, model, {
+            acquireSlot: shouldUsePool,
+            excludeProviderUuids: retryContext?.failedCredentialUuids || [],
+            deprioritizeProviderTypes: retryContext?.failedProviderTypes || []
+        });
         const service = result.service;
 
         if (!service) {
@@ -454,6 +458,14 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         }))}`);
 
         if (willRetry) {
+            const failedCredentialUuids = [
+                ...(retryContext?.failedCredentialUuids || []),
+                slotUuid
+            ].filter(Boolean);
+            const failedProviderTypes = [
+                ...(retryContext?.failedProviderTypes || []),
+                slotProviderType || CONFIG.MODEL_PROVIDER
+            ].filter(Boolean);
             const randomDelay = Math.floor(Math.random() * 10000);
             logger.info(`[Image Generation Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
@@ -464,6 +476,8 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     CONFIG,
                     currentRetry: currentRetry + 1,
                     maxRetries,
+                    failedCredentialUuids,
+                    failedProviderTypes,
                     parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest}
                 });
             } catch (retryError) {

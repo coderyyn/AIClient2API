@@ -1203,6 +1203,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
             ].filter(Boolean);
+            const failedProviderTypes = [
+                ...(retryContext?.failedProviderTypes || []),
+                toProvider
+            ].filter(Boolean);
             // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
             const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
             logger.info(`[Stream Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
@@ -1214,7 +1218,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
-                    excludeProviderUuids: failedCredentialUuids
+                    excludeProviderUuids: failedCredentialUuids,
+                    deprioritizeProviderTypes: failedProviderTypes
                 });
                 
                 if (result && result.service) {
@@ -1227,6 +1232,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         currentRetry: currentRetry + 1,
                         maxRetries,
                         failedCredentialUuids,
+                        failedProviderTypes,
                         clientDisconnected,  // 传递断开状态
                         anyDataSent          // 传递数据发送状态
                     };
@@ -1439,6 +1445,10 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
             ].filter(Boolean);
+            const failedProviderTypes = [
+                ...(retryContext?.failedProviderTypes || []),
+                toProvider
+            ].filter(Boolean);
             // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
             const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
             logger.info(`[Unary Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
@@ -1450,7 +1460,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
-                    excludeProviderUuids: failedCredentialUuids
+                    excludeProviderUuids: failedCredentialUuids,
+                    deprioritizeProviderTypes: failedProviderTypes
                 });
                 
                 if (result && result.service) {
@@ -1462,7 +1473,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries,
-                        failedCredentialUuids
+                        failedCredentialUuids,
+                        failedProviderTypes
                     };
                     
                     // 递归调用，使用新的服务

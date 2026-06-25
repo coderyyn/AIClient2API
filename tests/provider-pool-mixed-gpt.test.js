@@ -97,6 +97,41 @@ describe('mixed GPT provider pool', () => {
         expect(selected.config.uuid).toBe('edge-remote');
     });
 
+    test('can exclude a failed provider type during mixed pool retry selection', async () => {
+        const manager = createMixedGptPoolManager();
+
+        const selected = await manager.acquireSlotWithFallback('openai-codex-oauth', 'gpt-5.5', {
+            excludeProviderTypes: ['openai-codex-oauth']
+        });
+
+        expect(selected.actualProviderType).toBe('openaiResponses-custom');
+        expect(selected.config.uuid).toBe('edge-remote');
+    });
+
+    test('deprioritizes a failed provider type when another mixed candidate is available', async () => {
+        const manager = createMixedGptPoolManager();
+
+        const selected = await manager.acquireSlotWithFallback('openai-codex-oauth', 'gpt-5.5', {
+            deprioritizeProviderTypes: ['openai-codex-oauth']
+        });
+
+        expect(selected.actualProviderType).toBe('openaiResponses-custom');
+        expect(selected.config.uuid).toBe('edge-remote');
+    });
+
+    test('falls back to a deprioritized provider type when it is the only available candidate', async () => {
+        const manager = createMixedGptPoolManager({
+            edge: { isHealthy: false }
+        });
+
+        const selected = await manager.acquireSlotWithFallback('openai-codex-oauth', 'gpt-5.5', {
+            deprioritizeProviderTypes: ['openai-codex-oauth']
+        });
+
+        expect(selected.actualProviderType).toBe('openai-codex-oauth');
+        expect(selected.config.uuid).toBe('codex-local');
+    });
+
     test('does not mix providers for non-matching models', async () => {
         const manager = createMixedGptPoolManager({
             codex: { supportedModels: ['claude-test'] },

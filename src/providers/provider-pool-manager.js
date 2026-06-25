@@ -868,6 +868,11 @@ export class ProviderPoolManager {
     }
 
     _getHealthyProvidersForType(providerType, requestedModel, options = {}) {
+        const excludedProviderTypes = new Set(options.excludeProviderTypes || []);
+        if (excludedProviderTypes.has(providerType)) {
+            return [];
+        }
+
         const availableProviders = this.providerStatus[providerType] || [];
         this._checkAndRecoverScheduledProviders(providerType);
 
@@ -916,6 +921,14 @@ export class ProviderPoolManager {
 
     _selectFromMixedCandidates(candidates, requestedModel, options = {}) {
         if (candidates.length === 0) return null;
+
+        const deprioritizedTypes = new Set(options.deprioritizeProviderTypes || []);
+        if (deprioritizedTypes.size > 0) {
+            const preferredCandidates = candidates.filter(p => !deprioritizedTypes.has(p.type));
+            if (preferredCandidates.length > 0) {
+                candidates = preferredCandidates;
+            }
+        }
 
         const now = Date.now();
         const minSeq = Math.min(...candidates.map(p => p.config._lastSelectionSeq || 0));
