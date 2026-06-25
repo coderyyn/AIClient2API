@@ -64,6 +64,7 @@ export async function handleGenerateAuthUrl(req, res, currentConfig, providerTyp
             authInfo = result.authInfo;
         } else if (providerType === 'openai-codex-oauth') {
             // Codex OAuth（OAuth2 + PKCE）
+            options.requestHost = req.headers['x-forwarded-host'] || req.headers.host || null;
             const result = await handleCodexOAuth(currentConfig, options);
             authUrl = result.authUrl;
             authInfo = result.authInfo;

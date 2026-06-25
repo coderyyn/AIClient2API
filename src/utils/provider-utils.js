@@ -342,7 +342,7 @@ export async function isValidOAuthCredentials(filePath) {
  * @returns {Object} 新的提供商配置对象
  */
 export function createProviderConfig(options) {
-    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys } = options;
+    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys, customName } = options;
     
     const newProvider = {
         [credPathKey]: credPath,
@@ -351,6 +351,7 @@ export function createProviderConfig(options) {
         checkHealth: defaultCheckHealth ?? false,
         isHealthy: true,
         isDisabled: false,
+        customName: typeof customName === 'string' ? customName.trim() : '',
         lastUsed: null,
         usageCount: 0,
         errorCount: 0,

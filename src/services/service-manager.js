@@ -14,6 +14,7 @@ import {
     getFileName,
     formatSystemPath
 } from '../utils/provider-utils.js';
+import { readCodexCredentialDisplayName } from '../utils/codex-utils.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 
@@ -122,6 +123,7 @@ export async function autoLinkProviderConfigs(config, options = {}) {
             // 递归扫描目录
             const newProviders = [];
             await scanProviderDirectory(configsPath, linkedPaths, newProviders, {
+                providerType,
                 credPathKey,
                 defaultCheckModel,
                 needsProjectId
@@ -213,6 +215,9 @@ async function linkSingleCredential(config, credPath) {
         }
         
         const { providerType, credPathKey, defaultCheckModel, displayName, needsProjectId } = matchedMapping;
+        const customName = isCodexProviderType(providerType)
+            ? await readCodexCredentialDisplayName(absolutePath)
+            : '';
         
         // 确保提供商类型数组存在
         if (!config.providerPools[providerType]) {
@@ -240,7 +245,8 @@ async function linkSingleCredential(config, credPath) {
             credPathKey,
             credPath: formatSystemPath(relativePath),
             defaultCheckModel,
-            needsProjectId
+            needsProjectId,
+            customName
         });
         
         // 添加到配置
@@ -270,7 +276,7 @@ async function linkSingleCredential(config, credPath) {
  * @param {boolean} options.needsProjectId - 是否需要 PROJECT_ID
  */
 async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options) {
-    const { credPathKey, defaultCheckModel, needsProjectId } = options;
+    const { providerType, credPathKey, defaultCheckModel, needsProjectId } = options;
     
     try {
         const files = await pfs.readdir(dirPath, { withFileTypes: true });
@@ -284,6 +290,9 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                 if (ext === '.json') {
                     const relativePath = path.relative(process.cwd(), fullPath);
                     const fileName = getFileName(fullPath);
+                    const customName = isCodexProviderType(providerType)
+                        ? await readCodexCredentialDisplayName(fullPath)
+                        : '';
                     
                     // 使用与 ui-manager.js 相同的 isPathUsed 函数检查是否已关联
                     const isLinked = isPathUsed(relativePath, fileName, linkedPaths);
@@ -294,7 +303,8 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                             credPathKey,
                             credPath: formatSystemPath(relativePath),
                             defaultCheckModel,
-                            needsProjectId
+                            needsProjectId,
+                            customName
                         });
                         
                         newProviders.push(newProvider);

@@ -9,6 +9,7 @@ import { broadcastEvent } from '../services/ui-manager.js';
 import { autoLinkProviderConfigs } from '../services/service-manager.js';
 import { CONFIG } from '../core/config-manager.js';
 import { configureAxiosProxy } from '../utils/proxy-utils.js';
+import { buildCodexRedirectUri } from '../utils/codex-utils.js';
 
 /**
  * Codex OAuth 配置
@@ -17,7 +18,7 @@ const CODEX_OAUTH_CONFIG = {
     clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
     authUrl: 'https://auth.openai.com/oauth/authorize',
     tokenUrl: 'https://auth.openai.com/oauth/token',
-    redirectUri: 'http://localhost:1455/auth/callback',
+    redirectUri: buildCodexRedirectUri('localhost'),
     port: 1455,
     scopes: 'openid email profile offline_access',
     logPrefix: '[Codex Auth]'
@@ -86,6 +87,7 @@ async function closeActiveServer(provider, port = null) {
 class CodexAuth {
     constructor(config) {
         this.config = config;
+        this.redirectUri = null;
         
         // 配置代理支持
         const axiosConfig = { timeout: 30000 };
@@ -96,6 +98,19 @@ class CodexAuth {
         
         this.httpClient = axios.create(axiosConfig);
         this.server = null; // 存储服务器实例
+    }
+
+    getRedirectUri() {
+        if (!this.redirectUri) {
+            const configuredHost = typeof this.config?.HOST === 'string' && this.config.HOST && !['0.0.0.0', '::', '::0'].includes(this.config.HOST)
+                ? this.config.HOST
+                : null;
+            this.redirectUri = buildCodexRedirectUri(
+                this.config?.requestHost || configuredHost || null,
+                CODEX_OAUTH_CONFIG.port
+            );
+        }
+        return this.redirectUri;
     }
 
     /**
@@ -122,6 +137,7 @@ class CodexAuth {
     async generateAuthUrl() {
         const pkce = this.generatePKCECodes();
         const state = crypto.randomBytes(16).toString('hex');
+        const redirectUri = this.getRedirectUri();
 
         logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Generating auth URL...`);
 
@@ -133,7 +149,7 @@ class CodexAuth {
         const authUrl = new URL(CODEX_OAUTH_CONFIG.authUrl);
         authUrl.searchParams.set('client_id', CODEX_OAUTH_CONFIG.clientId);
         authUrl.searchParams.set('response_type', 'code');
-        authUrl.searchParams.set('redirect_uri', CODEX_OAUTH_CONFIG.redirectUri);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', CODEX_OAUTH_CONFIG.scopes);
         authUrl.searchParams.set('state', state);
         authUrl.searchParams.set('code_challenge', pkce.challenge);
@@ -146,7 +162,8 @@ class CodexAuth {
             authUrl: authUrl.toString(),
             state,
             pkce,
-            server
+            server,
+            redirectUri
         };
     }
 
@@ -211,6 +228,7 @@ class CodexAuth {
     async startOAuthFlow() {
         const pkce = this.generatePKCECodes();
         const state = crypto.randomBytes(16).toString('hex');
+        const redirectUri = this.getRedirectUri();
 
         logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Starting OAuth flow...`);
 
@@ -221,7 +239,7 @@ class CodexAuth {
         const authUrl = new URL(CODEX_OAUTH_CONFIG.authUrl);
         authUrl.searchParams.set('client_id', CODEX_OAUTH_CONFIG.clientId);
         authUrl.searchParams.set('response_type', 'code');
-        authUrl.searchParams.set('redirect_uri', CODEX_OAUTH_CONFIG.redirectUri);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', CODEX_OAUTH_CONFIG.scopes);
         authUrl.searchParams.set('state', state);
         authUrl.searchParams.set('code_challenge', pkce.challenge);
@@ -282,7 +300,7 @@ class CodexAuth {
 
             server.on('request', (req, res) => {
                 if (req.url.startsWith('/auth/callback')) {
-                    const url = new URL(req.url, `http://localhost:${CODEX_OAUTH_CONFIG.port}`);
+                    const url = new URL(req.url, this.getRedirectUri());
                     const code = url.searchParams.get('code');
                     const state = url.searchParams.get('state');
                     const error = url.searchParams.get('error');
@@ -404,6 +422,7 @@ class CodexAuth {
      */
     async exchangeCodeForTokens(code, codeVerifier) {
         logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Exchanging authorization code for tokens...`);
+        const redirectUri = this.getRedirectUri();
 
         try {
             const response = await this.httpClient.post(
@@ -412,7 +431,7 @@ class CodexAuth {
                     grant_type: 'authorization_code',
                     client_id: CODEX_OAUTH_CONFIG.clientId,
                     code: code,
-                    redirect_uri: CODEX_OAUTH_CONFIG.redirectUri,
+                    redirect_uri: redirectUri,
                     code_verifier: codeVerifier
                 }).toString(),
                 {
@@ -502,6 +521,10 @@ class CodexAuth {
     async saveCredentials(creds) {
         const email = creds.email || this.config.CODEX_EMAIL || 'default';
         const safeEmail = sanitizeCodexCredentialFilenamePart(email);
+        const normalizedCreds = {
+            ...creds,
+            name: creds.name || email
+        };
 
         // 优先使用配置中指定的路径，否则保存到 configs/codex 目录
         let credsPath;
@@ -520,7 +543,7 @@ class CodexAuth {
         try {
             const credsDir = path.dirname(credsPath);
             await fs.promises.mkdir(credsDir, { recursive: true });
-            await fs.promises.writeFile(credsPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
+            await fs.promises.writeFile(credsPath, JSON.stringify(normalizedCreds, null, 2), { mode: 0o600 });
 
             const relativePath = path.relative(process.cwd(), credsPath);
             logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Credentials saved to ${relativePath}`);
@@ -888,7 +911,10 @@ export async function refreshCodexTokensWithRetry(refreshToken, config = {}, max
  * @returns {Promise<Object>} 返回认证结果
  */
 export async function handleCodexOAuth(currentConfig, options = {}) {
-    const auth = new CodexAuth(currentConfig);
+    const auth = new CodexAuth({
+        ...currentConfig,
+        requestHost: options.requestHost || null
+    });
 
     try {
         logger.info('[Codex Auth] Generating OAuth URL...');
@@ -1038,7 +1064,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
                 provider: 'openai-codex-oauth',
                 method: 'oauth2-pkce',
                 sessionId: sessionId,
-                redirectUri: CODEX_OAUTH_CONFIG.redirectUri,
+                redirectUri: auth.redirectUri || auth.getRedirectUri(),
                 port: CODEX_OAUTH_CONFIG.port,
                 instructions: [
                     '1. 点击下方按钮在浏览器中打开授权链接',

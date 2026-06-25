@@ -930,6 +930,12 @@ function buildAdditionalCodexRateLimitItems(usageData) {
         if (!primary && !secondary) return;
 
         const label = limitData.limit_name || limitData.limitName || limitData.metered_feature || limitData.meteredFeature || `Additional Limit ${index + 1}`;
+        const normalizedLabel = String(label).toLowerCase();
+        const normalizedFeature = String(limitData.metered_feature || limitData.meteredFeature || '').toLowerCase();
+        if (normalizedLabel.includes('gpt-5.3-codex-spark') || normalizedLabel.includes('codex spark') || normalizedFeature.includes('codex_bengalfox') || normalizedFeature.includes('spark')) {
+            return;
+        }
+
         const slug = slugifyCodexRateLimitName(label, `additional_${index + 1}`);
         const primaryItem = buildCodexRateLimitWindowItem(
             `additional_${slug}_primary_window`,

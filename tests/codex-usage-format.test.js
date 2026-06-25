@@ -128,7 +128,7 @@ describe('Codex usage formatting', () => {
         ]));
     });
 
-    test('formats additional Codex Spark rate limit windows from official usage payload', () => {
+    test('hides Codex Spark additional rate limits from the displayed quota summary', () => {
         const formatted = formatCodexUsage({
             account: 'codex@example.com',
             plan_type: 'PRO',
@@ -141,27 +141,16 @@ describe('Codex usage formatting', () => {
                     limit_name: 'GPT-5.3-Codex-Spark',
                     metered_feature: 'codex_bengalfox',
                     rate_limit: {
-                        primary_window: { used_percent: 12, reset_at: 1780100000 },
-                        secondary_window: { used_percent: 34, reset_at: 1780600000 }
+                        primary_window: { used_percent: 91, reset_at: 1780100000 },
+                        secondary_window: { used_percent: 64, reset_at: 1780600000 }
                     }
                 }
             ]
         });
 
-        expect(formatted.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                id: 'additional_gpt_5_3_codex_spark_primary_window',
-                label: 'GPT-5.3-Codex-Spark (5h)',
-                used: 12,
-                unit: 'percent'
-            }),
-            expect.objectContaining({
-                id: 'additional_gpt_5_3_codex_spark_secondary_window',
-                label: 'GPT-5.3-Codex-Spark (Weekly)',
-                used: 34,
-                unit: 'percent'
-            })
-        ]));
+        expect(formatted.summary.usedPercent).toBe(60);
+        expect(formatted.items.map(item => item.id)).not.toContain('additional_gpt_5_3_codex_spark_primary_window');
+        expect(formatted.items.map(item => item.id)).not.toContain('additional_gpt_5_3_codex_spark_secondary_window');
     });
 
     test('extracts available Codex rate limit reset credits from official usage payload', () => {
