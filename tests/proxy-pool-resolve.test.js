@@ -55,28 +55,31 @@ describe('provider proxy pool resolution', () => {
         expect(result.httpsAgent).toBeDefined();
     });
 
-    test('fails closed when PROXY_REQUIRED is true and selected proxy is disabled', () => {
+    test('ignores disabled selected proxy pool entry without legacy fail-closed mode', () => {
         const proxyPoolsPath = writeProxyPools([
             { id: 'res-ip-1', name: '住宅号池1', url: 'socks5h://127.0.0.1:11001', enabled: false }
         ]);
 
-        expect(() => configureAxiosProxy({ timeout: 1000 }, {
+        const result = configureAxiosProxy({ timeout: 1000 }, {
             uuid: 'codex-node-1',
             PROXY_ID: 'res-ip-1',
             PROXY_REQUIRED: true,
             PROXY_POOLS_FILE_PATH: proxyPoolsPath
-        }, 'openai-codex-oauth')).toThrow('Proxy is required');
+        }, 'openai-codex-oauth');
+
+        expect(result.proxy).toBe(false);
+        expect(result.httpAgent).toBeUndefined();
+        expect(result.httpsAgent).toBeUndefined();
     });
 
-    test('keeps provider PROXY_URL fallback when PROXY_ID is not configured', () => {
+    test('does not fall back to legacy provider PROXY_URL when PROXY_ID is not configured', () => {
         const result = configureAxiosProxy({ timeout: 1000 }, {
             uuid: 'codex-node-1',
             PROXY_URL: 'http://127.0.0.1:7890'
         }, 'openai-codex-oauth');
 
         expect(result.proxy).toBe(false);
-        expect(result.httpAgent).toBeDefined();
-        expect(result.httpsAgent).toBeDefined();
+        expect(result.httpAgent).toBeUndefined();
+        expect(result.httpsAgent).toBeUndefined();
     });
 });
-

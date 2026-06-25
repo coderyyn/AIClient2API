@@ -33,7 +33,7 @@ describe('config managed proxy control', () => {
         expect(result.httpsAgent).toBeUndefined();
     });
 
-    test('uses configured proxy agents when provider proxy is enabled in config', () => {
+    test('uses configured global proxy agents when provider proxy is enabled in config', () => {
         const axiosConfig = { timeout: 1000 };
 
         const result = configureAxiosProxy(axiosConfig, {
@@ -46,7 +46,7 @@ describe('config managed proxy control', () => {
         expect(result.httpsAgent).toBeDefined();
     });
 
-    test('uses provider node proxy URL without requiring global provider list', () => {
+    test('ignores legacy provider node PROXY_URL without global provider allowlist', () => {
         const axiosConfig = { timeout: 1000 };
 
         const result = configureAxiosProxy(axiosConfig, {
@@ -56,18 +56,22 @@ describe('config managed proxy control', () => {
         }, 'openai-codex-oauth');
 
         expect(result.proxy).toBe(false);
-        expect(result.httpAgent).toBeDefined();
-        expect(result.httpsAgent).toBeDefined();
+        expect(result.httpAgent).toBeUndefined();
+        expect(result.httpsAgent).toBeUndefined();
     });
 
-    test('throws when provider node requires proxy but proxy URL is invalid', () => {
+    test('ignores legacy provider node PROXY_REQUIRED instead of failing closed', () => {
         const axiosConfig = { timeout: 1000 };
 
-        expect(() => configureAxiosProxy(axiosConfig, {
+        const result = configureAxiosProxy(axiosConfig, {
             uuid: 'codex-node-1',
             customName: 'Codex Node 1',
             PROXY_REQUIRED: true,
             PROXY_URL: 'ftp://127.0.0.1:11001'
-        }, 'openai-codex-oauth')).toThrow('Proxy is required');
+        }, 'openai-codex-oauth');
+
+        expect(result.proxy).toBe(false);
+        expect(result.httpAgent).toBeUndefined();
+        expect(result.httpsAgent).toBeUndefined();
     });
 });

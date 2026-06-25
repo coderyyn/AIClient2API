@@ -5,7 +5,11 @@ const PROVIDER_STRING_ARRAY_CONFIG_FIELDS = [
 ];
 
 const PROVIDER_BOOLEAN_CONFIG_FIELDS = [
-    'TLS_SIDECAR_ENABLED',
+    'TLS_SIDECAR_ENABLED'
+];
+
+const LEGACY_PROVIDER_PROXY_FIELDS = [
+    'PROXY_URL',
     'PROXY_REQUIRED'
 ];
 
@@ -112,6 +116,10 @@ export function normalizeProviderConfigFields(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
 
     const result = { ...data };
+    for (const key of LEGACY_PROVIDER_PROXY_FIELDS) {
+        delete result[key];
+    }
+
     for (const key of PROVIDER_STRING_ARRAY_CONFIG_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(result, key)) {
             result[key] = normalizeStringArrayConfigValue(result[key]);

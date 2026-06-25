@@ -14,11 +14,15 @@ describe('provider config normalizer', () => {
         });
     });
 
-    test('normalizes provider proxy required flag as boolean', () => {
+    test('removes legacy provider node proxy fields from saved config', () => {
         const normalized = normalizeProviderConfigFields({
-            PROXY_REQUIRED: 'true'
+            PROXY_URL: 'socks5h://127.0.0.1:11001',
+            PROXY_REQUIRED: 'true',
+            PROXY_ID: 'res-ip-1'
         });
 
-        expect(normalized.PROXY_REQUIRED).toBe(true);
+        expect(normalized.PROXY_URL).toBeUndefined();
+        expect(normalized.PROXY_REQUIRED).toBeUndefined();
+        expect(normalized.PROXY_ID).toBe('res-ip-1');
     });
 });

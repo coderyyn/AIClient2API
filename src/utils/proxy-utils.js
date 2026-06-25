@@ -144,12 +144,6 @@ export function isProxyEnabledForProvider(config, providerType) {
         return true;
     }
 
-    // Provider pool nodes may carry their own PROXY_URL. Treat that as an
-    // explicit per-node proxy binding so it does not require a global allowlist.
-    if (config?.PROXY_URL && config?.uuid) {
-        return true;
-    }
-
     if (!config || !config.PROXY_URL || !config.PROXY_ENABLED_PROVIDERS) {
         return false;
     }
@@ -179,9 +173,6 @@ export function getProxyConfigForProvider(config, providerType) {
     const nodeDisplay = nodeName ? `${providerType}/${nodeName}` : providerType;
 
     if (!isProxyEnabledForProvider(config, providerType)) {
-        if (config?.PROXY_REQUIRED) {
-            throw new Error(`Proxy is required for ${nodeDisplay}, but no proxy is configured or enabled`);
-        }
         return null;
     }
 
@@ -190,9 +181,6 @@ export function getProxyConfigForProvider(config, providerType) {
     const proxyUrl = boundProxyUrl || proxyPoolEntry?.url || config.PROXY_URL;
     const proxyConfig = parseProxyUrl(proxyUrl);
     if (!proxyConfig) {
-        if (config?.PROXY_REQUIRED) {
-            throw new Error(`Proxy is required for ${nodeDisplay}, but proxy URL is invalid or unsupported`);
-        }
         return null;
     }
 
