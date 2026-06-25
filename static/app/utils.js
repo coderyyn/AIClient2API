@@ -264,18 +264,6 @@ function getFieldLabel(key) {
 function getProviderTypeFields(providerType) {
     const providerProxyFields = [
         {
-            id: 'PROXY_URL',
-            label: `${t('modal.provider.proxyUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
-            type: 'text',
-            placeholder: '例如: socks5h://172.18.0.1:11001'
-        },
-        {
-            id: 'PROXY_REQUIRED',
-            label: `${t('modal.provider.proxyRequired')} <span class="optional-tag">${t('config.optional')}</span>`,
-            type: 'boolean',
-            placeholder: 'true 表示代理不可用时失败关闭'
-        },
-        {
             id: 'PROXY_ID',
             label: `${t('modal.provider.proxyId')} <span class="optional-tag">${t('config.optional')}</span>`,
             type: 'proxy-select',
@@ -485,18 +473,6 @@ function getProviderTypeFields(providerType) {
                 label: `${t('modal.provider.codexMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'number',
                 placeholder: '例如 90，达到 90% 已用量后停用；0 = 不限制'
-            },
-            {
-                id: 'PROXY_URL',
-                label: `${t('modal.provider.proxyUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
-                type: 'text',
-                placeholder: '例如: socks5h://172.18.0.1:11001'
-            },
-            {
-                id: 'PROXY_REQUIRED',
-                label: `${t('modal.provider.proxyRequired')} <span class="optional-tag">${t('config.optional')}</span>`,
-                type: 'boolean',
-                placeholder: 'true 表示代理不可用时失败关闭'
             },
             {
                 id: 'PROXY_ID',

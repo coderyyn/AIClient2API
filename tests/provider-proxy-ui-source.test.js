@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 
 describe('provider proxy UI source', () => {
-    test('Codex provider edit fields expose provider-level proxy settings', () => {
+    test('Codex provider edit fields expose only centralized proxy selection', () => {
         const source = readFileSync('static/app/utils.js', 'utf8');
 
         const codexSection = source.slice(
@@ -9,21 +9,22 @@ describe('provider proxy UI source', () => {
             source.indexOf("'grok-cli-oauth': [")
         );
 
-        expect(codexSection).toContain("id: 'PROXY_URL'");
-        expect(codexSection).toContain("id: 'PROXY_REQUIRED'");
+        expect(codexSection).not.toContain("id: 'PROXY_URL'");
+        expect(codexSection).not.toContain("id: 'PROXY_REQUIRED'");
         expect(codexSection).toContain("id: 'PROXY_ID'");
-        expect(codexSection).toContain("type: 'boolean'");
-        expect(source).toContain("'PROXY_URL':");
-        expect(source).toContain("'PROXY_REQUIRED':");
-        expect(source).toContain("'PROXY_ID':");
+        expect(codexSection).toContain("type: 'proxy-select'");
     });
 
-    test('provider edit modal renders boolean provider fields as selects', () => {
-        const source = readFileSync('static/app/modal.js', 'utf8');
+    test('shared provider proxy fields no longer render legacy per-node proxy URL or required toggle', () => {
+        const source = readFileSync('static/app/utils.js', 'utf8');
+        const proxyFieldsSection = source.slice(
+            source.indexOf('const providerProxyFields = ['),
+            source.indexOf('const withProviderProxyFields')
+        );
 
-        expect(source).toContain("fieldDef.type === 'boolean'");
-        expect(source).toContain("field1.type === 'boolean'");
-        expect(source).toContain("field.id === 'PROXY_REQUIRED'");
-        expect(source).toContain('<select class="form-control"');
+        expect(proxyFieldsSection).not.toContain("id: 'PROXY_URL'");
+        expect(proxyFieldsSection).not.toContain("id: 'PROXY_REQUIRED'");
+        expect(proxyFieldsSection).toContain("id: 'PROXY_ID'");
+        expect(proxyFieldsSection).toContain("type: 'proxy-select'");
     });
 });
