@@ -13,4 +13,12 @@ describe('provider config normalizer', () => {
             codexMaxWeeklyPercent: 90
         });
     });
+
+    test('normalizes provider proxy required flag as boolean', () => {
+        const normalized = normalizeProviderConfigFields({
+            PROXY_REQUIRED: 'true'
+        });
+
+        expect(normalized.PROXY_REQUIRED).toBe(true);
+    });
 });

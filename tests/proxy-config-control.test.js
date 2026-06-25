@@ -45,4 +45,29 @@ describe('config managed proxy control', () => {
         expect(result.httpAgent).toBeDefined();
         expect(result.httpsAgent).toBeDefined();
     });
+
+    test('uses provider node proxy URL without requiring global provider list', () => {
+        const axiosConfig = { timeout: 1000 };
+
+        const result = configureAxiosProxy(axiosConfig, {
+            uuid: 'codex-node-1',
+            customName: 'Codex Node 1',
+            PROXY_URL: 'socks5h://127.0.0.1:11001'
+        }, 'openai-codex-oauth');
+
+        expect(result.proxy).toBe(false);
+        expect(result.httpAgent).toBeDefined();
+        expect(result.httpsAgent).toBeDefined();
+    });
+
+    test('throws when provider node requires proxy but proxy URL is invalid', () => {
+        const axiosConfig = { timeout: 1000 };
+
+        expect(() => configureAxiosProxy(axiosConfig, {
+            uuid: 'codex-node-1',
+            customName: 'Codex Node 1',
+            PROXY_REQUIRED: true,
+            PROXY_URL: 'ftp://127.0.0.1:11001'
+        }, 'openai-codex-oauth')).toThrow('Proxy is required');
+    });
 });

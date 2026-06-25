@@ -97,7 +97,7 @@ export function parseProxyUrl(proxyUrl) {
         };
 
         let result = null;
-        if (protocol === 'socks5:' || protocol === 'socks4:' || protocol === 'socks:') {
+        if (protocol === 'socks5:' || protocol === 'socks5h:' || protocol === 'socks4:' || protocol === 'socks:') {
             // SOCKS 代理
             const socksAgent = new SocksProxyAgent(trimmedUrl, agentOptions);
             result = {
@@ -139,6 +139,12 @@ export function isProxyEnabledForProvider(config, providerType) {
         return true;
     }
 
+    // Provider pool nodes may carry their own PROXY_URL. Treat that as an
+    // explicit per-node proxy binding so it does not require a global allowlist.
+    if (config?.PROXY_URL && config?.uuid) {
+        return true;
+    }
+
     if (!config || !config.PROXY_URL || !config.PROXY_ENABLED_PROVIDERS) {
         return false;
     }
@@ -164,17 +170,27 @@ export function isProxyEnabledForProvider(config, providerType) {
  * @returns {Object|null} 代理配置对象或 null
  */
 export function getProxyConfigForProvider(config, providerType) {
+    const nodeName = config?.customName || config?.uuid;
+    const nodeDisplay = nodeName ? `${providerType}/${nodeName}` : providerType;
+
     if (!isProxyEnabledForProvider(config, providerType)) {
+        if (config?.PROXY_REQUIRED) {
+            throw new Error(`Proxy is required for ${nodeDisplay}, but no proxy is configured or enabled`);
+        }
         return null;
     }
 
     const boundProxyUrl = getNodeProxyUrlFromBinding(config, providerType);
     const proxyUrl = boundProxyUrl || config.PROXY_URL;
     const proxyConfig = parseProxyUrl(proxyUrl);
+    if (!proxyConfig) {
+        if (config?.PROXY_REQUIRED) {
+            throw new Error(`Proxy is required for ${nodeDisplay}, but proxy URL is invalid or unsupported`);
+        }
+        return null;
+    }
+
     if (proxyConfig) {
-        const nodeName = config?.customName || config?.uuid;
-        const nodeDisplay = nodeName ? `${providerType}/${nodeName}` : providerType;
-        
         // 优先从上下文中获取 clientIp
         const contextIpNodeProxy = requestContext.get('ipNodeProxy');
         const clientIp = contextIpNodeProxy?.clientIp || config.ipNodeProxy?.clientIp || 'unknown';
