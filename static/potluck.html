@@ -142,6 +142,37 @@
             background: linear-gradient(90deg, var(--primary-color), var(--primary-light));
             border-radius: var(--radius-full);
         }
+        .account-distribution-list {
+            gap: 14px;
+        }
+        .account-distribution-list .distribution-item {
+            padding: 10px 12px;
+            background: linear-gradient(135deg, var(--bg-secondary), var(--bg-primary));
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+        }
+        .account-title {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+            gap: 8px;
+        }
+        .account-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: var(--radius-full);
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
+            flex-shrink: 0;
+        }
+        .account-sub {
+            display: block;
+            margin: -1px 0 7px 16px;
+            color: var(--text-tertiary);
+            font-size: 11px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
         /* 区块标题 */
 
@@ -869,6 +900,16 @@
                         <!-- 动态填充 -->
                     </div>
                 </div>
+                <!-- Codex OAuth 账号分布 -->
+                <div class="stat-card" style="text-align: left; padding: 20px;">
+                    <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
+                        <span>Codex OAuth 账号 Token 占比</span>
+                        <span id="codexAccountTotalCount" style="color: var(--primary-color);">0 次</span>
+                    </div>
+                    <div id="codexAccountDistribution" class="distribution-list account-distribution-list">
+                        <!-- 动态填充 -->
+                    </div>
+                </div>
                 <!-- 模型分布 -->
                 <div class="stat-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
@@ -1149,6 +1190,23 @@
             addUsageBucket(target[name], usage);
         }
 
+        function addAccountUsageMap(target, name, account = {}) {
+            if (!target[name]) {
+                target[name] = {
+                    provider: account.provider || name.split(':')[0] || 'unknown',
+                    providerUuid: account.providerUuid || name.split(':').slice(1).join(':') || '',
+                    providerName: account.providerName || '',
+                    summary: createUsageSummaryBucket(),
+                    models: {}
+                };
+            } else if (account.providerName && !target[name].providerName) {
+                target[name].providerName = account.providerName;
+            }
+
+            addUsageBucket(target[name].summary, account.summary || {});
+            Object.entries(account.models || {}).forEach(([model, usage]) => addUsageMap(target[name].models, model, usage));
+        }
+
         function withCacheHitRatio(summary) {
             return {
                 ...summary,
@@ -1161,19 +1219,22 @@
             const summary = createUsageSummaryBucket();
             const providers = {};
             const models = {};
+            const accounts = {};
 
             dates.forEach(date => {
                 const day = usageHistory[date] || {};
                 addUsageBucket(summary, day.summary || {});
                 Object.entries(day.providers || {}).forEach(([name, usage]) => addUsageMap(providers, name, usage));
                 Object.entries(day.models || {}).forEach(([name, usage]) => addUsageMap(models, name, usage));
+                Object.entries(day.accounts || {}).forEach(([name, account]) => addAccountUsageMap(accounts, name, account));
             });
 
             return {
                 dates,
                 summary: withCacheHitRatio(summary),
                 providers,
-                models
+                models,
+                accounts
             };
         }
 
@@ -1356,8 +1417,10 @@
 
             if (totalCalls === 0) {
                 document.getElementById('providerDistribution').innerHTML = '<div class="detail-empty">当前范围暂无服务商数据</div>';
+                document.getElementById('codexAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Codex OAuth 账号数据</div>';
                 document.getElementById('modelDistribution').innerHTML = '<div class="detail-empty">当前范围暂无模型数据</div>';
                 document.getElementById('providerTotalCount').textContent = `0 次 / 0 Tokens`;
+                document.getElementById('codexAccountTotalCount').textContent = `0 次 / 0 Tokens`;
                 document.getElementById('modelTotalCount').textContent = `0 次`;
                 return;
             }
@@ -1365,6 +1428,9 @@
             // 渲染中心视角 Provider Token 占比
             renderProviderTokenDistribution('providerDistribution', rangeSummary.providers, totalTokens);
             document.getElementById('providerTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
+
+            const codexAccountTotals = renderCodexAccountTokenDistribution('codexAccountDistribution', rangeSummary.accounts, totalTokens);
+            document.getElementById('codexAccountTotalCount').textContent = `${formatNumber(codexAccountTotals.calls)} 次 / ${formatTokenCompact(codexAccountTotals.tokens)} Tokens`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', aggregatedModels, totalCalls);
@@ -1424,6 +1490,85 @@
                     </div>
                 `;
             }
+        }
+
+        function isCodexOauthAccount(account) {
+            const provider = String(account?.provider || '');
+            return provider === 'openai-codex-oauth' || provider.startsWith('openai-codex-oauth-');
+        }
+
+        function getAccountDisplayName(account, fallbackKey) {
+            return account?.providerName || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
+        }
+
+        function renderCodexAccountTokenDistribution(elementId, accounts, totalTokens) {
+            const container = document.getElementById(elementId);
+            const sorted = Object.entries(accounts || {})
+                .filter(([, account]) => isCodexOauthAccount(account))
+                .sort(([, a], [, b]) => usageTokens(b.summary) - usageTokens(a.summary));
+            const totals = sorted.reduce((sum, [, account]) => {
+                sum.calls += usageCount(account.summary);
+                sum.tokens += usageTokens(account.summary);
+                return sum;
+            }, { calls: 0, tokens: 0 });
+            const denominator = totals.tokens || Number(totalTokens || 0);
+
+            if (denominator <= 0 || sorted.length === 0) {
+                container.innerHTML = '<div class="detail-empty">当前范围暂无 Codex OAuth 账号数据</div>';
+                return totals;
+            }
+
+            const topData = sorted.slice(0, 6);
+            container.innerHTML = topData.map(([accountKey, account]) => {
+                const calls = usageCount(account.summary);
+                const tokens = usageTokens(account.summary);
+                const percent = Math.round((tokens / denominator) * 100);
+                const displayName = getAccountDisplayName(account, accountKey);
+                const uuid = account.providerUuid || accountKey;
+                return `
+                    <div class="distribution-item">
+                        <div class="dist-info">
+                            <span class="account-title">
+                                <span class="account-dot"></span>
+                                <span class="dist-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
+                            </span>
+                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percent}%)</span>
+                        </div>
+                        <span class="account-sub" title="${escapeHtml(uuid)}">${escapeHtml(uuid)}</span>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(calls)} 次</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${percent}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (sorted.length > 6) {
+                const other = sorted.slice(6).reduce((sum, [, account]) => {
+                    sum.calls += usageCount(account.summary);
+                    sum.tokens += usageTokens(account.summary);
+                    return sum;
+                }, { calls: 0, tokens: 0 });
+                const otherPercent = Math.round((other.tokens / denominator) * 100);
+                container.innerHTML += `
+                    <div class="distribution-item">
+                        <div class="dist-info">
+                            <span class="dist-name" style="font-style: italic;">其他账号 (${sorted.length - 6} 个)</span>
+                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${otherPercent}%)</span>
+                        </div>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return totals;
         }
 
         function renderDistribution(elementId, data, total) {

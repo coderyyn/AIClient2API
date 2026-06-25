@@ -287,6 +287,19 @@ function ensureHourUsage(dayHistory, hour) {
     return dayHistory.hours[hour];
 }
 
+function addAccountUsage(targetMap, account = {}) {
+    const provider = account.provider || 'unknown';
+    const providerUuid = account.providerUuid || null;
+    const accountUsage = ensureAccountUsage(targetMap, provider, providerUuid, account.providerName);
+    if (!accountUsage) return;
+
+    addUsage(accountUsage.summary, account.summary);
+    for (const [model, usage] of Object.entries(account.models || {})) {
+        accountUsage.models[model] = normalizeUsageBucket(accountUsage.models[model]);
+        addUsage(accountUsage.models[model], usage);
+    }
+}
+
 function resetUsageBucketTokens(bucket) {
     if (!bucket || typeof bucket !== 'object') return;
     bucket.promptTokens = 0;
@@ -944,6 +957,13 @@ export async function getStats() {
                     Object.entries(history.models).forEach(([m, usage]) => {
                         aggregatedHistory[date].models[m] = normalizeUsageBucket(aggregatedHistory[date].models[m]);
                         addUsage(aggregatedHistory[date].models[m], usage);
+                    });
+                }
+
+                // 汇总账号维度，供管理页展示 Codex OAuth 账号 Token 占比。
+                if (history.accounts) {
+                    Object.values(history.accounts).forEach((account) => {
+                        addAccountUsage(aggregatedHistory[date].accounts, account);
                     });
                 }
             });

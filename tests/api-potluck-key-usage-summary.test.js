@@ -119,6 +119,59 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('getStats aggregates provider account buckets for admin token-share UI', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, getStats } = await loadKeyManager();
+
+        const keyA = await createKey('Image Client A', 1000);
+        const keyB = await createKey('Image Client B', 1000);
+
+        await incrementUsage(keyA.id, 'openai-codex-oauth', 'gpt-image-2', {
+            requestCount: 1,
+            promptTokens: 2000,
+            completionTokens: 300,
+            totalTokens: 2300,
+            cachedTokens: 800
+        }, 'req-admin-account-1', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+        await incrementUsage(keyB.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 2,
+            promptTokens: 3000,
+            completionTokens: 500,
+            totalTokens: 3500,
+            cachedTokens: 600
+        }, 'req-admin-account-2', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A',
+            timestamp: '2026-06-22T02:20:30.000Z'
+        });
+
+        const stats = await getStats();
+        const accountKey = 'openai-codex-oauth:codex-account-a';
+
+        expect(stats.usageHistory['2026-06-22'].accounts[accountKey]).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+        expect(stats.usageHistory['2026-06-22'].accounts[accountKey].summary).toMatchObject({
+            requestCount: 3,
+            totalTokens: 5800,
+            cachedTokens: 1400
+        });
+        expect(stats.usageHistory['2026-06-22'].accounts[accountKey].models['gpt-image-2']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 2300
+        });
+        expect(stats.usageHistory['2026-06-22'].accounts[accountKey].models['gpt-5.5']).toMatchObject({
+            requestCount: 2,
+            totalTokens: 3500
+        });
+    });
+
     test('listKeys exposes sanitized related account names for audit key selectors', async () => {
         const { createKey, incrementUsage, listKeys } = await loadKeyManager();
 

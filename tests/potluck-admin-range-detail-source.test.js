@@ -42,4 +42,16 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('Token');
         expect(source).toContain('次');
     });
+
+    test('admin dashboard exposes Codex OAuth account token share as a finer-grained provider view', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('Codex OAuth 账号 Token 占比');
+        expect(source).toContain('id="codexAccountDistribution"');
+        expect(source).toContain('id="codexAccountTotalCount"');
+        expect(source).toContain('function renderCodexAccountTokenDistribution(elementId, accounts, totalTokens)');
+        expect(source).toContain('isCodexOauthAccount(account)');
+        expect(source).toContain("renderCodexAccountTokenDistribution('codexAccountDistribution', rangeSummary.accounts, totalTokens)");
+        expect(source).toContain('Object.entries(day.accounts || {})');
+    });
 });
