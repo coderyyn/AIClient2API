@@ -35,23 +35,27 @@ describe('API Potluck admin range and key detail UI source', () => {
     test('admin provider distribution shows token share from the center provider view', () => {
         const source = loadPotluckSource();
 
-        expect(source).toContain('function renderProviderTokenDistribution(elementId, providers, totalTokens)');
-        expect(source).toContain("renderProviderTokenDistribution('providerDistribution', rangeSummary.providers, totalTokens)");
+        expect(source).toContain('function renderProviderAccountTokenTree(elementId, providers, accounts, totalTokens)');
+        expect(source).toContain("renderProviderAccountTokenTree('providerAccountDistribution', rangeSummary.providers, rangeSummary.accounts, totalTokens)");
         expect(source).toContain('usageTokens(b) - usageTokens(a)');
         expect(source).toContain('formatTokenCompact(tokens)');
         expect(source).toContain('Token');
         expect(source).toContain('次');
     });
 
-    test('admin dashboard exposes Codex OAuth account token share as a finer-grained provider view', () => {
+    test('admin dashboard folds account token share into the provider tree view', () => {
         const source = loadPotluckSource();
 
-        expect(source).toContain('Codex OAuth 账号 Token 占比');
-        expect(source).toContain('id="codexAccountDistribution"');
-        expect(source).toContain('id="codexAccountTotalCount"');
-        expect(source).toContain('function renderCodexAccountTokenDistribution(elementId, accounts, totalTokens)');
+        expect(source).toContain('Provider / 账号 Token 占比');
+        expect(source).toContain('id="providerAccountDistribution"');
+        expect(source).toContain('id="providerAccountTotalCount"');
+        expect(source).not.toContain('id="codexAccountDistribution"');
+        expect(source).not.toContain('id="codexAccountTotalCount"');
+        expect(source).toContain('function buildProviderAccountTokenTree(providers, accounts)');
+        expect(source).toContain('function renderProviderAccountRows(provider)');
+        expect(source).toContain('provider-account-children');
+        expect(source).toContain('account-sub');
         expect(source).toContain('isCodexOauthAccount(account)');
-        expect(source).toContain("renderCodexAccountTokenDistribution('codexAccountDistribution', rangeSummary.accounts, totalTokens)");
         expect(source).toContain('Object.entries(day.accounts || {})');
     });
 });

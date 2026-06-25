@@ -142,14 +142,25 @@
             background: linear-gradient(90deg, var(--primary-color), var(--primary-light));
             border-radius: var(--radius-full);
         }
-        .account-distribution-list {
+        .provider-account-tree {
             gap: 14px;
         }
-        .account-distribution-list .distribution-item {
-            padding: 10px 12px;
+        .provider-account-node {
+            padding: 12px;
             background: linear-gradient(135deg, var(--bg-secondary), var(--bg-primary));
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
+        }
+        .provider-account-children {
+            margin-top: 10px;
+            padding-left: 14px;
+            border-left: 2px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 9px;
+        }
+        .provider-account-child {
+            padding: 7px 0 0;
         }
         .account-title {
             display: flex;
@@ -890,23 +901,13 @@
                     <div id="calendarFooter" style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;"></div>
                 </div>
                 
-                <!-- Provider Token 占比 -->
+                <!-- Provider / 账号 Token 占比 -->
                 <div class="stat-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
-                        <span>Provider Token 占比</span>
-                        <span id="providerTotalCount" style="color: var(--primary-color);">0 次</span>
+                        <span>Provider / 账号 Token 占比</span>
+                        <span id="providerAccountTotalCount" style="color: var(--primary-color);">0 次</span>
                     </div>
-                    <div id="providerDistribution" class="distribution-list">
-                        <!-- 动态填充 -->
-                    </div>
-                </div>
-                <!-- Codex OAuth 账号分布 -->
-                <div class="stat-card" style="text-align: left; padding: 20px;">
-                    <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
-                        <span>Codex OAuth 账号 Token 占比</span>
-                        <span id="codexAccountTotalCount" style="color: var(--primary-color);">0 次</span>
-                    </div>
-                    <div id="codexAccountDistribution" class="distribution-list account-distribution-list">
+                    <div id="providerAccountDistribution" class="distribution-list provider-account-tree">
                         <!-- 动态填充 -->
                     </div>
                 </div>
@@ -1120,6 +1121,14 @@
         function formatPercentRatio(value) {
             const ratio = Number(value || 0);
             return `${(ratio * 100).toFixed(ratio > 0 && ratio < 0.01 ? 2 : 1)}%`;
+        }
+        function formatPercentShare(value, total) {
+            const denominator = Number(total || 0);
+            if (denominator <= 0) return '0%';
+            const percent = (Number(value || 0) / denominator) * 100;
+            if (percent > 0 && percent < 0.1) return '<0.1%';
+            if (percent < 1) return `${percent.toFixed(1)}%`;
+            return `${Math.round(percent)}%`;
         }
         function formatShortDate(dateKey) {
             const parts = String(dateKey || '').split('-');
@@ -1416,80 +1425,20 @@
             });
 
             if (totalCalls === 0) {
-                document.getElementById('providerDistribution').innerHTML = '<div class="detail-empty">当前范围暂无服务商数据</div>';
-                document.getElementById('codexAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Codex OAuth 账号数据</div>';
+                document.getElementById('providerAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
                 document.getElementById('modelDistribution').innerHTML = '<div class="detail-empty">当前范围暂无模型数据</div>';
-                document.getElementById('providerTotalCount').textContent = `0 次 / 0 Tokens`;
-                document.getElementById('codexAccountTotalCount').textContent = `0 次 / 0 Tokens`;
+                document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
                 document.getElementById('modelTotalCount').textContent = `0 次`;
                 return;
             }
 
-            // 渲染中心视角 Provider Token 占比
-            renderProviderTokenDistribution('providerDistribution', rangeSummary.providers, totalTokens);
-            document.getElementById('providerTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
-
-            const codexAccountTotals = renderCodexAccountTokenDistribution('codexAccountDistribution', rangeSummary.accounts, totalTokens);
-            document.getElementById('codexAccountTotalCount').textContent = `${formatNumber(codexAccountTotals.calls)} 次 / ${formatTokenCompact(codexAccountTotals.tokens)} Tokens`;
+            // 渲染中心视角 Provider / 账号 Token 树形占比
+            renderProviderAccountTokenTree('providerAccountDistribution', rangeSummary.providers, rangeSummary.accounts, totalTokens);
+            document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', aggregatedModels, totalCalls);
             document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
-        }
-
-        function renderProviderTokenDistribution(elementId, providers, totalTokens) {
-            const container = document.getElementById(elementId);
-            const sorted = Object.entries(providers || {}).sort(([, a], [, b]) => usageTokens(b) - usageTokens(a));
-            const denominator = Number(totalTokens || 0);
-            if (denominator <= 0 || sorted.length === 0) {
-                container.innerHTML = '<div class="detail-empty">当前范围暂无 Provider Token 数据</div>';
-                return;
-            }
-
-            const topData = sorted.slice(0, 5);
-
-            container.innerHTML = topData.map(([name, usage]) => {
-                const calls = usageCount(usage);
-                const tokens = usageTokens(usage);
-                const percent = Math.round((tokens / denominator) * 100);
-                return `
-                    <div class="distribution-item">
-                        <div class="dist-info">
-                            <span class="dist-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
-                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percent}%)</span>
-                        </div>
-                        <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(calls)} 次</span>
-                        </div>
-                        <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${percent}%"></div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            if (sorted.length > 5) {
-                const other = sorted.slice(5).reduce((sum, [, usage]) => {
-                    sum.calls += usageCount(usage);
-                    sum.tokens += usageTokens(usage);
-                    return sum;
-                }, { calls: 0, tokens: 0 });
-                const otherPercent = Math.round((other.tokens / denominator) * 100);
-                container.innerHTML += `
-                    <div class="distribution-item">
-                        <div class="dist-info">
-                            <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - 5} 个)</span>
-                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${otherPercent}%)</span>
-                        </div>
-                        <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
-                        </div>
-                        <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
-                        </div>
-                    </div>
-                `;
-            }
         }
 
         function isCodexOauthAccount(account) {
@@ -1501,74 +1450,159 @@
             return account?.providerName || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
         }
 
-        function renderCodexAccountTokenDistribution(elementId, accounts, totalTokens) {
-            const container = document.getElementById(elementId);
-            const sorted = Object.entries(accounts || {})
-                .filter(([, account]) => isCodexOauthAccount(account))
-                .sort(([, a], [, b]) => usageTokens(b.summary) - usageTokens(a.summary));
-            const totals = sorted.reduce((sum, [, account]) => {
-                sum.calls += usageCount(account.summary);
-                sum.tokens += usageTokens(account.summary);
-                return sum;
-            }, { calls: 0, tokens: 0 });
-            const denominator = totals.tokens || Number(totalTokens || 0);
+        function buildProviderAccountTokenTree(providers, accounts) {
+            const providerMap = new Map();
+            Object.entries(providers || {}).forEach(([name, usage]) => {
+                providerMap.set(name, {
+                    name,
+                    summary: usage,
+                    accounts: []
+                });
+            });
 
-            if (denominator <= 0 || sorted.length === 0) {
-                container.innerHTML = '<div class="detail-empty">当前范围暂无 Codex OAuth 账号数据</div>';
-                return totals;
-            }
+            Object.entries(accounts || {}).forEach(([accountKey, account]) => {
+                const providerName = account.provider || accountKey.split(':')[0] || 'unknown';
+                if (!providerMap.has(providerName)) {
+                    providerMap.set(providerName, {
+                        name: providerName,
+                        summary: createUsageSummaryBucket(),
+                        accounts: []
+                    });
+                }
+                const node = providerMap.get(providerName);
+                if (usageTokens(node.summary) <= 0 && usageTokens(account.summary) > 0) {
+                    addUsageBucket(node.summary, account.summary || {});
+                }
+                node.accounts.push({
+                    key: accountKey,
+                    ...account,
+                    isCodex: isCodexOauthAccount(account)
+                });
+            });
 
-            const topData = sorted.slice(0, 6);
-            container.innerHTML = topData.map(([accountKey, account]) => {
+            return [...providerMap.values()]
+                .map(provider => ({
+                    ...provider,
+                    accounts: provider.accounts.sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary))
+                }))
+                .sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary));
+        }
+
+        function renderProviderAccountRows(provider) {
+            const providerTokens = usageTokens(provider.summary);
+            if (!provider.accounts || provider.accounts.length === 0 || providerTokens <= 0) return '';
+
+            const topAccounts = provider.accounts.slice(0, 5);
+            const rows = topAccounts.map(account => {
                 const calls = usageCount(account.summary);
                 const tokens = usageTokens(account.summary);
-                const percent = Math.round((tokens / denominator) * 100);
-                const displayName = getAccountDisplayName(account, accountKey);
-                const uuid = account.providerUuid || accountKey;
+                const percentText = formatPercentShare(tokens, providerTokens);
+                const barWidth = Math.max(1, Math.min(100, (tokens / providerTokens) * 100));
+                const displayName = getAccountDisplayName(account, account.key);
+                const uuid = account.providerUuid || account.key;
                 return `
-                    <div class="distribution-item">
+                    <div class="provider-account-child">
                         <div class="dist-info">
                             <span class="account-title">
                                 <span class="account-dot"></span>
                                 <span class="dist-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
                             </span>
-                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percent}%)</span>
+                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
                         </div>
                         <span class="account-sub" title="${escapeHtml(uuid)}">${escapeHtml(uuid)}</span>
                         <div class="dist-info" style="margin-top: -2px;">
                             <span class="dist-count">${formatNumber(calls)} 次</span>
                         </div>
                         <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${percent}%"></div>
+                            <div class="dist-fill" style="width: ${barWidth}%"></div>
                         </div>
                     </div>
                 `;
-            }).join('');
+            });
 
-            if (sorted.length > 6) {
-                const other = sorted.slice(6).reduce((sum, [, account]) => {
+            if (provider.accounts.length > 5) {
+                const other = provider.accounts.slice(5).reduce((sum, account) => {
                     sum.calls += usageCount(account.summary);
                     sum.tokens += usageTokens(account.summary);
                     return sum;
                 }, { calls: 0, tokens: 0 });
-                const otherPercent = Math.round((other.tokens / denominator) * 100);
-                container.innerHTML += `
-                    <div class="distribution-item">
+                const percentText = formatPercentShare(other.tokens, providerTokens);
+                const barWidth = Math.max(1, Math.min(100, (other.tokens / providerTokens) * 100));
+                rows.push(`
+                    <div class="provider-account-child">
                         <div class="dist-info">
-                            <span class="dist-name" style="font-style: italic;">其他账号 (${sorted.length - 6} 个)</span>
-                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${otherPercent}%)</span>
+                            <span class="dist-name" style="font-style: italic;">其他账号 (${provider.accounts.length - 5} 个)</span>
+                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${percentText})</span>
                         </div>
                         <div class="dist-info" style="margin-top: -2px;">
                             <span class="dist-count">${formatNumber(other.calls)} 次</span>
                         </div>
                         <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
+                            <div class="dist-fill" style="width: ${barWidth}%; background: #94a3b8;"></div>
+                        </div>
+                    </div>
+                `);
+            }
+
+            return `<div class="provider-account-children">${rows.join('')}</div>`;
+        }
+
+        function renderProviderAccountTokenTree(elementId, providers, accounts, totalTokens) {
+            const container = document.getElementById(elementId);
+            const sorted = buildProviderAccountTokenTree(providers, accounts);
+            const denominator = Number(totalTokens || 0);
+
+            if (denominator <= 0 || sorted.length === 0) {
+                container.innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
+                return;
+            }
+
+            const topData = sorted.slice(0, 5);
+            container.innerHTML = topData.map(provider => {
+                const calls = usageCount(provider.summary);
+                const tokens = usageTokens(provider.summary);
+                const percentText = formatPercentShare(tokens, denominator);
+                const barWidth = Math.max(1, Math.min(100, (tokens / denominator) * 100));
+                return `
+                    <div class="distribution-item provider-account-node">
+                        <div class="dist-info">
+                            <span class="dist-name" title="${escapeHtml(provider.name)}">${escapeHtml(provider.name)}</span>
+                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
+                        </div>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(calls)} 次${provider.accounts.length ? ` · ${provider.accounts.length} 个账号` : ''}</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${barWidth}%"></div>
+                        </div>
+                        ${renderProviderAccountRows(provider)}
+                    </div>
+                `;
+            }).join('');
+
+            if (sorted.length > 5) {
+                const other = sorted.slice(5).reduce((sum, provider) => {
+                    sum.calls += usageCount(provider.summary);
+                    sum.tokens += usageTokens(provider.summary);
+                    return sum;
+                }, { calls: 0, tokens: 0 });
+                const percentText = formatPercentShare(other.tokens, denominator);
+                const barWidth = Math.max(1, Math.min(100, (other.tokens / denominator) * 100));
+                container.innerHTML += `
+                    <div class="distribution-item provider-account-node">
+                        <div class="dist-info">
+                            <span class="dist-name" style="font-style: italic;">其他 Provider (${sorted.length - 5} 个)</span>
+                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${percentText})</span>
+                        </div>
+                        <div class="dist-info" style="margin-top: -2px;">
+                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
+                        </div>
+                        <div class="dist-bar">
+                            <div class="dist-fill" style="width: ${barWidth}%; background: #94a3b8;"></div>
                         </div>
                     </div>
                 `;
             }
-
-            return totals;
         }
 
         function renderDistribution(elementId, data, total) {
