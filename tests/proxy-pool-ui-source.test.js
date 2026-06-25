@@ -21,4 +21,11 @@ describe('provider proxy pool UI source', () => {
         expect(modalSource).toContain('saveProxyPools');
         expect(i18nSource).toContain('modal.proxyPool.title');
     });
+
+    test('proxy pool manager stores expected exit IP for preflight checks', () => {
+        const modalSource = readFileSync('static/app/modal.js', 'utf8');
+
+        expect(modalSource).toContain('expectedIp');
+        expect(modalSource).toContain('data-proxy-field="expectedIp"');
+    });
 });

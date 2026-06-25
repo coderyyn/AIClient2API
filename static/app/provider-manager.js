@@ -893,14 +893,16 @@ async function handleGenerateAuthUrl(providerType) {
  */
 async function showCodexAuthMethodSelector(providerType) {
     let proxyOptionsHtml = '<option value="">不使用代理</option>';
+    let proxies = [];
     try {
         const response = await window.apiClient.get('/proxy-pools');
-        const proxies = Array.isArray(response?.proxies) ? response.proxies : [];
+        proxies = Array.isArray(response?.proxies) ? response.proxies : [];
         proxyOptionsHtml += proxies.map(proxy => {
             const disabled = proxy.enabled === false ? 'disabled' : '';
             const name = proxy.name || proxy.id;
-            const label = `${name} (${proxy.id})${proxy.enabled === false ? ' - 已禁用' : ''}`;
-            return `<option value="${escapeHtml(proxy.id || '')}" ${disabled}>${escapeHtml(label)}</option>`;
+            const expectedIp = proxy.expectedIp ? ` / ${proxy.expectedIp}` : '';
+            const label = `${name} (${proxy.id}${expectedIp})${proxy.enabled === false ? ' - 已禁用' : ''}`;
+            return `<option value="${escapeHtml(proxy.id || '')}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled}>${escapeHtml(label)}</option>`;
         }).join('');
     } catch (error) {
         console.warn('Failed to load proxy pools for Codex auth:', error);
@@ -920,9 +922,15 @@ async function showCodexAuthMethodSelector(providerType) {
                 <div class="auth-method-options" style="display: flex; flex-direction: column; gap: 12px;">
                     <div class="form-group" style="padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb;">
                         <label for="codexAuthProxySelect" style="display: block; margin-bottom: 6px; font-weight: 600; color: #374151;">授权代理节点</label>
-                        <select id="codexAuthProxySelect" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
-                            ${proxyOptionsHtml}
-                        </select>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="codexAuthProxySelect" style="flex: 1; min-width: 0; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                                ${proxyOptionsHtml}
+                            </select>
+                            <button type="button" id="codexAuthProxyTestButton" class="btn btn-secondary" style="white-space: nowrap;">
+                                <i class="fas fa-vial"></i> 测试代理
+                            </button>
+                        </div>
+                        <div id="codexAuthProxyTestResult" style="display: none; margin-top: 8px; padding: 8px; border-radius: 6px; font-size: 12px;"></div>
                         <div style="margin-top: 6px; font-size: 12px; color: #6b7280;">新绑定账号时，请让本机浏览器也切到同一个代理节点。</div>
                     </div>
                     <button class="auth-method-btn" data-method="oauth" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
@@ -971,6 +979,11 @@ async function showCodexAuthMethodSelector(providerType) {
             modal.remove();
         });
     });
+
+    const proxyTestButton = modal.querySelector('#codexAuthProxyTestButton');
+    if (proxyTestButton) {
+        proxyTestButton.addEventListener('click', () => testCodexAuthProxy(modal, proxies));
+    }
     
     // 认证方式选择按钮事件
     const methodBtns = modal.querySelectorAll('.auth-method-btn');
@@ -999,6 +1012,84 @@ async function showCodexAuthMethodSelector(providerType) {
             }
         });
     });
+}
+
+async function fetchBrowserExitIp() {
+    const response = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+    if (!response.ok) {
+        throw new Error(`浏览器出口检测失败: HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return String(data?.ip || '').trim();
+}
+
+function renderProxyTestLine(label, ip, expectedIp) {
+    const matched = expectedIp ? ip === expectedIp : null;
+    const badge = matched === null
+        ? '未配置预期 IP'
+        : (matched ? '匹配' : '不匹配');
+    const color = matched === false ? '#b91c1c' : '#047857';
+    return `<div><strong>${label}：</strong>${escapeHtml(ip || '检测失败')} <span style="color: ${color};">(${escapeHtml(badge)})</span></div>`;
+}
+
+async function testCodexAuthProxy(modal, proxies = []) {
+    const select = modal.querySelector('#codexAuthProxySelect');
+    const resultEl = modal.querySelector('#codexAuthProxyTestResult');
+    const button = modal.querySelector('#codexAuthProxyTestButton');
+    const proxyId = select?.value || '';
+    const selectedProxy = proxies.find(proxy => proxy.id === proxyId) || {};
+    const expectedIp = select?.selectedOptions?.[0]?.dataset?.expectedIp || selectedProxy.expectedIp || '';
+
+    if (!resultEl || !button) return;
+    resultEl.style.display = 'block';
+    resultEl.style.background = '#eff6ff';
+    resultEl.style.border = '1px solid #bfdbfe';
+    resultEl.style.color = '#1e3a8a';
+
+    if (!proxyId) {
+        resultEl.innerHTML = '请先选择一个代理节点。';
+        return;
+    }
+
+    button.disabled = true;
+    const originalHtml = button.innerHTML;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中';
+
+    let browserIp = '';
+    let serverIp = '';
+    let serverError = '';
+    let browserError = '';
+
+    try {
+        browserIp = await fetchBrowserExitIp();
+    } catch (error) {
+        browserError = error.message;
+    }
+
+    try {
+        const serverResult = await window.apiClient.post('/proxy-pools/test', { proxyId });
+        serverIp = String(serverResult?.ip || '').trim();
+        serverError = serverResult?.ok === false ? (serverResult?.error?.message || '94 后端代理检测失败') : '';
+    } catch (error) {
+        serverError = error.message;
+    }
+
+    const browserMatched = expectedIp ? browserIp === expectedIp : null;
+    const serverMatched = expectedIp ? serverIp === expectedIp : null;
+    const allMatched = browserMatched !== false && serverMatched !== false && browserIp && serverIp;
+
+    resultEl.style.background = allMatched ? '#ecfdf5' : '#fff7ed';
+    resultEl.style.border = allMatched ? '1px solid #a7f3d0' : '1px solid #fed7aa';
+    resultEl.style.color = allMatched ? '#064e3b' : '#9a3412';
+    resultEl.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 4px;">代理检测：${escapeHtml(selectedProxy.name || proxyId)}</div>
+        <div>预期出口：${escapeHtml(expectedIp || '未配置')}</div>
+        ${renderProxyTestLine('浏览器出口', browserIp || browserError, expectedIp)}
+        ${renderProxyTestLine('94 后端出口', serverIp || serverError, expectedIp)}
+    `;
+
+    button.disabled = false;
+    button.innerHTML = originalHtml;
 }
 
 /**

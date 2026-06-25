@@ -16,6 +16,7 @@ export function sanitizeProxyPoolEntry(entry = {}) {
         name: stripHtml(entry.name),
         url: String(entry.url || '').trim(),
         enabled: entry.enabled !== false,
+        expectedIp: stripHtml(entry.expectedIp),
         note: stripHtml(entry.note)
     };
 }

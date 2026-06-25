@@ -596,6 +596,10 @@ function renderProxyPoolRow(proxy = {}) {
                 <input data-proxy-field="url" value="${escapeHtml(proxy.url || '')}" placeholder="socks5h://127.0.0.1:1081">
             </div>
             <div class="config-item">
+                <label>预期出口 IP</label>
+                <input data-proxy-field="expectedIp" value="${escapeHtml(proxy.expectedIp || '')}" placeholder="154.64.234.213">
+            </div>
+            <div class="config-item">
                 <label>${escapeHtml(t('modal.proxyPool.enabled'))}</label>
                 <select class="form-control" data-proxy-field="enabled">
                     <option value="true" ${enabled ? 'selected' : ''}>${escapeHtml(t('modal.provider.enabled'))}</option>
@@ -630,6 +634,7 @@ async function saveProxyPools() {
         name: row.querySelector('[data-proxy-field="name"]')?.value || '',
         url: row.querySelector('[data-proxy-field="url"]')?.value || '',
         enabled: row.querySelector('[data-proxy-field="enabled"]')?.value !== 'false',
+        expectedIp: row.querySelector('[data-proxy-field="expectedIp"]')?.value || '',
         note: row.querySelector('[data-proxy-field="note"]')?.value || ''
     })).filter(proxy => proxy.id && proxy.url);
 

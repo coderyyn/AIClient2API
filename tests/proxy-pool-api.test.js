@@ -105,14 +105,14 @@ describe('proxy pool API', () => {
 
         await handleSaveProxyPools(reqWithBody({
             proxies: [
-                { id: 'res-ip-1', name: '<b>住宅1</b>', url: 'socks5h://127.0.0.1:11001', enabled: true, note: 'bind' }
+                { id: 'res-ip-1', name: '<b>住宅1</b>', url: 'socks5h://127.0.0.1:11001', enabled: true, expectedIp: '154.64.234.213', note: 'bind' }
             ]
         }), res, currentConfig);
 
         expect(res.statusCode).toBe(200);
         expect(res.json().success).toBe(true);
         expect(JSON.parse(readFileSync(currentConfig.PROXY_POOLS_FILE_PATH, 'utf8'))).toEqual([
-            { id: 'res-ip-1', name: '住宅1', url: 'socks5h://127.0.0.1:11001', enabled: true, note: 'bind' }
+            { id: 'res-ip-1', name: '住宅1', url: 'socks5h://127.0.0.1:11001', enabled: true, expectedIp: '154.64.234.213', note: 'bind' }
         ]);
         expect(serviceInstances['openai-codex-oauthcodex-a']).toBeUndefined();
         expect(serviceInstances['openai-codex-oauthcodex-b']).toBeDefined();

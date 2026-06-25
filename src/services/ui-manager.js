@@ -125,6 +125,10 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await proxyPoolApi.handleSaveProxyPools(req, res, currentConfig);
     }
 
+    if (method === 'POST' && pathParam === '/api/proxy-pools/test') {
+        return await proxyPoolApi.handleTestProxyPool(req, res, currentConfig);
+    }
+
     // Get access overview information for the simplified connection page
     if (method === 'GET' && pathParam === '/api/access-info') {
         return await accessApi.handleGetAccessInfo(req, res, currentConfig, providerPoolManager);
