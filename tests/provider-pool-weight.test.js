@@ -15,7 +15,7 @@ let consoleSpies = [];
 
 function createWeightedPoolManager() {
     return new ProviderPoolManager({
-        'openai-codex-oauth': [
+        'openaiResponses-custom': [
             { uuid: 'low-weight', customName: 'Low', providerWeight: 1, supportedModels: ['gpt-5.5'] },
             { uuid: 'high-weight', customName: 'High', providerWeight: 3, supportedModels: ['gpt-5.5'] }
         ]
@@ -43,11 +43,29 @@ describe('provider pool weight', () => {
         const counts = { 'high-weight': 0, 'low-weight': 0 };
 
         for (let i = 0; i < 8; i++) {
-            const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
+            const selected = await manager.selectProvider('openaiResponses-custom', 'gpt-5.5');
             counts[selected.uuid] += 1;
         }
 
         clearTimeout(manager.saveTimer);
         expect(counts['high-weight']).toBeGreaterThan(counts['low-weight']);
+    });
+
+    test('removes Codex OAuth weight fields from runtime config', () => {
+        const manager = new ProviderPoolManager({
+            'openai-codex-oauth': [
+                { uuid: 'codex-weight', customName: 'Codex', providerWeight: 3, weight: 2 }
+            ]
+        }, {
+            logLevel: 'error',
+            saveDebounceTime: 60 * 60 * 1000,
+            globalConfig: {
+                PROVIDER_POOLS_FILE_PATH: 'configs/provider_pools.test.json'
+            }
+        });
+
+        clearTimeout(manager.saveTimer);
+        expect(manager.providerStatus['openai-codex-oauth'][0].config).not.toHaveProperty('providerWeight');
+        expect(manager.providerStatus['openai-codex-oauth'][0].config).not.toHaveProperty('weight');
     });
 });

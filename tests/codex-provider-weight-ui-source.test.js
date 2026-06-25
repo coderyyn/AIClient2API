@@ -11,6 +11,7 @@ describe('Codex provider weight UI source', () => {
         expect(source).toContain('getProviderBaseFields(currentProviderType)');
         expect(source).toContain('getProviderBaseFields(providerType)');
         expect(source).toContain("hiddenProviderConfigFields.push('providerWeight')");
+        expect(source).toContain("hiddenProviderConfigFields.push('weight')");
         expect(source).toContain("providerConfig.providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1')");
     });
 });

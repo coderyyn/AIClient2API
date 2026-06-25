@@ -1492,6 +1492,7 @@ function getFieldOrder(provider) {
     ];
     if (providerType === 'openai-codex-oauth') {
         hiddenProviderConfigFields.push('providerWeight');
+        hiddenProviderConfigFields.push('weight');
     }
 
     // 需要排除的内部状态字段
