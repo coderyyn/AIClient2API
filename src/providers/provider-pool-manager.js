@@ -1348,12 +1348,8 @@ export class ProviderPoolManager {
                     providerConfig.lastHealthCheckModel = providerConfig.lastHealthCheckModel || null;
                     providerConfig.lastErrorMessage = providerConfig.lastErrorMessage || null;
                     providerConfig.customName = providerConfig.customName || null;
-                    if (isCodexProviderType(providerType)) {
-                        delete providerConfig.providerWeight;
-                        delete providerConfig.weight;
-                    } else {
-                        providerConfig.providerWeight = getProviderWeight(providerConfig);
-                    }
+                    providerConfig.providerWeight = getProviderWeight(providerConfig);
+                    delete providerConfig.weight;
 
                     this.providerStatus[providerType].push({
                         config: providerConfig,

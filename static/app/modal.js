@@ -23,9 +23,6 @@ function usesManagedModelList(providerType = '') {
 
 function getProviderBaseFields(providerType) {
     const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
-    if (providerType === 'openai-codex-oauth') {
-        return baseFields.filter(field => field !== 'providerWeight');
-    }
     return baseFields;
 }
 
@@ -1488,12 +1485,9 @@ function getFieldOrder(provider) {
     const orderedFields = getProviderBaseFields(providerType);
     const hiddenProviderConfigFields = [
         'codexMax5hTokens',
-        'codexMaxWeeklyTokens'
+        'codexMaxWeeklyTokens',
+        'weight'
     ];
-    if (providerType === 'openai-codex-oauth') {
-        hiddenProviderConfigFields.push('providerWeight');
-        hiddenProviderConfigFields.push('weight');
-    }
 
     // 需要排除的内部状态字段
     const excludedFields = [
@@ -1899,12 +1893,10 @@ function showAddProviderForm(providerType) {
                 <label><span data-i18n="modal.provider.queueLimit">队列限制</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
                 <input type="number" id="newQueueLimit" placeholder="默认0不限制">
             </div>
-            ${providerType === 'openai-codex-oauth' ? '' : `
-                <div class="form-group">
-                    <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
-                    <input type="number" id="newProviderWeight" min="0.01" step="0.01" placeholder="默认1，越大分配越多">
-                </div>
-            `}
+            <div class="form-group">
+                <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
+                <input type="number" id="newProviderWeight" min="0.01" step="0.01" placeholder="默认1，越大分配越多">
+            </div>
         </div>
         <div id="dynamicConfigFields">
             <!-- 动态配置字段将在这里显示 -->
@@ -2131,9 +2123,7 @@ async function addProvider(providerType) {
         concurrencyLimit,
         queueLimit
     };
-    if (providerType !== 'openai-codex-oauth') {
-        providerConfig.providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1');
-    }
+    providerConfig.providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1');
     
     // 根据提供商类型动态收集配置字段（自动匹配 utils.js 中的定义）
     const allFields = getProviderTypeFields(providerType);

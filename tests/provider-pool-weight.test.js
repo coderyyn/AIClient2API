@@ -51,7 +51,7 @@ describe('provider pool weight', () => {
         expect(counts['high-weight']).toBeGreaterThan(counts['low-weight']);
     });
 
-    test('removes Codex OAuth weight fields from runtime config', () => {
+    test('keeps Codex OAuth providerWeight but removes legacy weight alias', () => {
         const manager = new ProviderPoolManager({
             'openai-codex-oauth': [
                 { uuid: 'codex-weight', customName: 'Codex', providerWeight: 3, weight: 2 }
@@ -65,7 +65,7 @@ describe('provider pool weight', () => {
         });
 
         clearTimeout(manager.saveTimer);
-        expect(manager.providerStatus['openai-codex-oauth'][0].config).not.toHaveProperty('providerWeight');
+        expect(manager.providerStatus['openai-codex-oauth'][0].config.providerWeight).toBe(3);
         expect(manager.providerStatus['openai-codex-oauth'][0].config).not.toHaveProperty('weight');
     });
 });
