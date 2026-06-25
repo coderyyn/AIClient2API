@@ -919,6 +919,19 @@ async function persistCodexOAuthCredentials(credentials, targetProviderUuid = nu
     });
 }
 
+function resolveTargetProviderConfig(currentConfig, targetProviderUuid) {
+    if (!targetProviderUuid) {
+        return {};
+    }
+
+    const providers = currentConfig.providerPools?.['openai-codex-oauth'];
+    if (!Array.isArray(providers)) {
+        return {};
+    }
+
+    return providers.find(provider => provider?.uuid === targetProviderUuid) || {};
+}
+
 /**
  * 处理 Codex OAuth 认证
  * @param {Object} currentConfig - 当前配置
@@ -929,8 +942,10 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
     const targetProviderUuid = typeof options.targetProviderUuid === 'string'
         ? options.targetProviderUuid.trim()
         : null;
+    const targetProviderConfig = resolveTargetProviderConfig(currentConfig, targetProviderUuid);
     const auth = new CodexAuth({
         ...currentConfig,
+        ...targetProviderConfig,
         requestHost: options.requestHost || null
     });
 
