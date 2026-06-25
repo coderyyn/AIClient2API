@@ -655,6 +655,45 @@ function getCurrentBeijingWeekDateKeys(now = new Date()) {
     return keys;
 }
 
+function getNextBeijingWeekStartTime(now = new Date()) {
+    const utc8Time = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    const year = utc8Time.getUTCFullYear();
+    const month = utc8Time.getUTCMonth();
+    const day = utc8Time.getUTCDate();
+    const dayOfWeek = utc8Time.getUTCDay();
+    const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const mondayMs = Date.UTC(year, month, day) - daysSinceMonday * 24 * 60 * 60 * 1000;
+    return new Date(mondayMs + 7 * 24 * 60 * 60 * 1000 - 8 * 60 * 60 * 1000);
+}
+
+function getRollingRecoveryTime(events, limit, rollingWindowMs, nowMs) {
+    const tokenLimit = toNumber(limit);
+    if (!Number.isFinite(tokenLimit) || tokenLimit <= 0) return null;
+
+    const rollingEvents = events
+        .map(event => ({
+            eventMs: Date.parse(event.timestamp),
+            totalTokens: toNumber(event.totalTokens)
+        }))
+        .filter(event => Number.isFinite(event.eventMs)
+            && event.eventMs >= nowMs - rollingWindowMs
+            && event.eventMs <= nowMs
+            && event.totalTokens > 0)
+        .sort((a, b) => a.eventMs - b.eventMs);
+
+    let runningTotal = rollingEvents.reduce((sum, event) => sum + event.totalTokens, 0);
+    if (runningTotal < tokenLimit) return null;
+
+    for (const event of rollingEvents) {
+        runningTotal -= event.totalTokens;
+        if (runningTotal < tokenLimit) {
+            return new Date(event.eventMs + rollingWindowMs + 1).toISOString();
+        }
+    }
+
+    return null;
+}
+
 function cleanupAccountUsageEvents(nowMs = Date.now()) {
     if (!statsStore?.accountUsageEvents) return;
     const cutoff = nowMs - ACCOUNT_EVENT_RETENTION_MS;
@@ -923,12 +962,25 @@ export function getAccountTokenUsageSummary(provider, providerUuid, options = {}
         }
     }
 
+    const rolling5hRecoveryTime = getRollingRecoveryTime(
+        events,
+        options.rolling5hTokenLimit,
+        rollingWindowMs,
+        nowMs
+    );
+    const weeklyTokenLimit = toNumber(options.weeklyTokenLimit);
+    const weeklyRecoveryTime = weeklyTokenLimit > 0 && weeklyTokens >= weeklyTokenLimit
+        ? getNextBeijingWeekStartTime(now).toISOString()
+        : null;
+
     return {
         accountKey,
         rolling5hTokens,
         weeklyTokens,
         totalTokens,
-        eventCount: events.length
+        eventCount: events.length,
+        rolling5hRecoveryTime,
+        weeklyRecoveryTime
     };
 }
 

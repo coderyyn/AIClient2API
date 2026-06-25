@@ -81,4 +81,24 @@ describe('model usage account token windows', () => {
             totalTokens: 350
         });
     });
+
+    test('reports the earliest rolling 5h recovery time below a token limit', async () => {
+        const statsManager = await loadStatsManager();
+
+        jest.setSystemTime(new Date('2026-06-16T00:00:00.000Z'));
+        await recordCodexUsage(statsManager, 'req-recovery-1', 700);
+
+        jest.setSystemTime(new Date('2026-06-16T03:00:00.000Z'));
+        await recordCodexUsage(statsManager, 'req-recovery-2', 500);
+
+        const summary = await statsManager.getAccountTokenUsageSummary('openai-codex-oauth', 'codex-account-a', {
+            now: new Date('2026-06-16T04:00:00.000Z'),
+            rolling5hTokenLimit: 1000
+        });
+
+        expect(summary).toMatchObject({
+            rolling5hTokens: 1200,
+            rolling5hRecoveryTime: '2026-06-16T05:00:00.001Z'
+        });
+    });
 });

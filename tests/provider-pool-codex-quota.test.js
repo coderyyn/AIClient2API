@@ -112,13 +112,21 @@ describe('provider pool Codex token quota', () => {
     test('throws 429 when every Codex account exceeds configured token quota', async () => {
         getAccountTokenUsageSummary.mockReturnValue({
             rolling5hTokens: 1200,
-            weeklyTokens: 6000,
-            totalTokens: 6000
+            weeklyTokens: 1000,
+            totalTokens: 1200,
+            rolling5hRecoveryTime: '2026-06-16T05:00:00.001Z',
+            weeklyRecoveryTime: null
         });
         const manager = createQuotaPoolManager();
 
         await expect(manager.selectProvider('openai-codex-oauth', 'gpt-5.5')).rejects.toMatchObject({
             status: 429
+        });
+
+        const provider = manager.providerStatus['openai-codex-oauth'][0].config;
+        expect(provider).toMatchObject({
+            isHealthy: false,
+            scheduledRecoveryTime: '2026-06-16T05:00:00.001Z'
         });
     });
 

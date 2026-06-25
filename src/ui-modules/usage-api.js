@@ -98,6 +98,19 @@ function loadProviderList(providerType, currentConfig, providerPoolManager) {
     return [];
 }
 
+function getScheduledRecoveryError(provider, now = Date.now()) {
+    if (provider?.isHealthy !== false || !provider?.scheduledRecoveryTime) {
+        return null;
+    }
+
+    const recoveryMs = Date.parse(provider.scheduledRecoveryTime);
+    if (!Number.isFinite(recoveryMs) || now >= recoveryMs) {
+        return null;
+    }
+
+    return `Provider is waiting for scheduled recovery until ${new Date(recoveryMs).toISOString()}`;
+}
+
 /**
  * 获取指定提供商类型的用量信息
  * @param {string} providerType - 提供商类型
@@ -135,9 +148,14 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             error: null
         };
 
-        // First check if disabled, skip initialization for disabled providers
+        const scheduledRecoveryError = getScheduledRecoveryError(provider);
+
+        // First check if disabled or cooling down, skip initialization for those providers
         if (provider.isDisabled) {
             instanceResult.error = 'Provider is disabled';
+            result.errorCount++;
+        } else if (scheduledRecoveryError) {
+            instanceResult.error = scheduledRecoveryError;
             result.errorCount++;
         } else if (!adapter) {
             // Service instance not initialized, try auto-initialization

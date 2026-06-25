@@ -220,21 +220,35 @@ function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = nul
     }
 
     try {
-        const usage = getAccountTokenUsageSummary(providerType, uuid);
+        const usage = getAccountTokenUsageSummary(providerType, uuid, {
+            rolling5hTokenLimit: max5hTokens,
+            weeklyTokenLimit: maxWeeklyTokens
+        });
+        const exceededReasons = [];
+        const recoveryTimes = [];
         if (max5hTokens && usage.rolling5hTokens >= max5hTokens) {
-            return {
-                limited: true,
-                exceeded: true,
-                reason: `5h token quota reached (${usage.rolling5hTokens}/${max5hTokens})`,
-                usage
-            };
+            exceededReasons.push(`5h token quota reached (${usage.rolling5hTokens}/${max5hTokens})`);
+            if (usage.rolling5hRecoveryTime) {
+                recoveryTimes.push(usage.rolling5hRecoveryTime);
+            }
         }
         if (maxWeeklyTokens && usage.weeklyTokens >= maxWeeklyTokens) {
+            exceededReasons.push(`weekly token quota reached (${usage.weeklyTokens}/${maxWeeklyTokens})`);
+            if (usage.weeklyRecoveryTime) {
+                recoveryTimes.push(usage.weeklyRecoveryTime);
+            }
+        }
+        if (exceededReasons.length > 0) {
+            const recoveryTime = recoveryTimes
+                .map(value => new Date(value))
+                .filter(date => Number.isFinite(date.getTime()))
+                .sort((a, b) => b.getTime() - a.getTime())[0] || null;
             return {
                 limited: true,
                 exceeded: true,
-                reason: `weekly token quota reached (${usage.weeklyTokens}/${maxWeeklyTokens})`,
-                usage
+                reason: exceededReasons.join('; '),
+                usage,
+                recoveryTime: recoveryTime ? recoveryTime.toISOString() : null
             };
         }
         return { limited: true, exceeded: false, usage, reason: warnings.join('; ') || null };
@@ -1628,6 +1642,14 @@ export class ProviderPoolManager {
             limitedCount += 1;
             if (quotaStatus.exceeded) {
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
+                if (quotaStatus.recoveryTime) {
+                    this.markProviderUnhealthyWithRecoveryTime(
+                        providerType,
+                        provider.config,
+                        quotaStatus.reason,
+                        quotaStatus.recoveryTime
+                    );
+                }
                 continue;
             }
             if (quotaStatus.reason) {
