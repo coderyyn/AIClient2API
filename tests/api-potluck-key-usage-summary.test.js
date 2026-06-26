@@ -34,6 +34,29 @@ afterEach(() => {
 });
 
 describe('api potluck key usage summary', () => {
+    test('listKeys weekly usage only includes the latest seven calendar days', async () => {
+        jest.setSystemTime(new Date('2026-06-16T11:04:05.689Z'));
+        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
+
+        const key = await createKey('Stale Client', 100);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 2,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100,
+            cachedTokens: 200
+        });
+
+        jest.setSystemTime(new Date('2026-06-26T05:00:00.000Z'));
+
+        const [listedKey] = await listKeys();
+
+        expect(listedKey.lastUsedAt).toBeTruthy();
+        expect(listedKey.weeklyUsage).toBe(0);
+        expect(listedKey.weeklyTotalTokens).toBe(0);
+        expect(listedKey.totalTokens).toBe(1100);
+    });
+
     test('listKeys exposes token-first daily weekly and cumulative usage fields', async () => {
         const { createKey, incrementUsage, listKeys } = await loadKeyManager();
 

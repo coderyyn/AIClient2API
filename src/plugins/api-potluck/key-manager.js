@@ -398,11 +398,23 @@ function resetUsageHistoryTokens(usageHistory) {
     }
 }
 
-function getRecentHistorySummary(usageHistory = {}, days = 7) {
+function getRecentDateKeys(days = 7, now = new Date()) {
+    const parts = getBeijingDateParts(now);
+    const todayUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+    const dateKeys = [];
+    for (let offset = days - 1; offset >= 0; offset--) {
+        const date = new Date(todayUtc);
+        date.setUTCDate(todayUtc.getUTCDate() - offset);
+        dateKeys.push(dateKeyFromUtcDate(date));
+    }
+    return dateKeys;
+}
+
+function getRecentHistorySummary(usageHistory = {}, days = 7, now = new Date()) {
     const summary = createUsageBucket();
-    const recentDates = Object.keys(usageHistory || {}).sort().slice(-days);
-    for (const date of recentDates) {
-        addUsage(summary, usageHistory[date]?.summary);
+    for (const date of getRecentDateKeys(days, now)) {
+        const daySummary = usageHistory[date]?.summary;
+        if (daySummary) addUsage(summary, daySummary);
     }
     addCacheHitRatio(summary);
     return summary;
