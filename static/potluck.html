@@ -62,11 +62,20 @@
         /* 统计卡片网格 */
         .stats-grid {
             display: grid;
-            grid-template-columns: minmax(260px, 0.95fr) minmax(520px, 1.45fr) minmax(260px, 0.95fr);
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 1.5rem;
             margin-bottom: 2rem;
             align-items: start;
         }
+        .usage-insights-grid {
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            gap: 1.25rem;
+            align-items: start;
+        }
+        .usage-calendar-card { grid-column: span 4; }
+        .usage-provider-card { grid-column: span 5; }
+        .usage-model-card { grid-column: span 3; }
         .stat-card {
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
@@ -157,10 +166,10 @@
             border-left: none;
             display: grid;
             gap: 10px;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
         .provider-account-child {
-            padding: 10px 12px 9px;
+            padding: 9px 10px 8px;
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
             border-radius: 14px;
@@ -651,6 +660,10 @@
             .key-stats { gap: 16px; }
             .key-stat { min-width: 60px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .usage-insights-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .usage-calendar-card,
+            .usage-provider-card,
+            .usage-model-card { grid-column: span 1; }
             .provider-account-children { grid-template-columns: 1fr; }
         }
 
@@ -658,6 +671,10 @@
             .navbar-inner { padding: 0 16px; }
             .main-container { padding: 20px 16px; }
             .stats-grid { grid-template-columns: 1fr; }
+            .usage-insights-grid { grid-template-columns: 1fr; }
+            .usage-calendar-card,
+            .usage-provider-card,
+            .usage-model-card { grid-column: span 1; }
             .provider-account-children { grid-template-columns: 1fr; }
             .key-card {
                 flex-direction: column;
@@ -891,9 +908,9 @@
             <div class="section-title">
                 <i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (最近 3 个月)
             </div>
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+            <div class="usage-insights-grid">
                 <!-- Token 用量日历 -->
-                <div class="stat-card" style="text-align: left; padding: 20px;">
+                <div class="stat-card usage-calendar-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 10px; font-weight: 600; display: flex; justify-content: space-between;">
                         <span>Token 用量日历</span>
                         <div class="calendar-legend" style="gap: 3px;">
@@ -908,7 +925,7 @@
                 </div>
                 
                 <!-- Provider / 账号 Token 占比 -->
-                <div class="stat-card" style="text-align: left; padding: 20px;">
+                <div class="stat-card usage-provider-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
                         <span>Provider / 账号 Token 占比</span>
                         <span id="providerAccountTotalCount" style="color: var(--primary-color);">0 次</span>
@@ -918,7 +935,7 @@
                     </div>
                 </div>
                 <!-- 模型分布 -->
-                <div class="stat-card" style="text-align: left; padding: 20px;">
+                <div class="stat-card usage-model-card" style="text-align: left; padding: 20px;">
                     <div class="label" style="margin-bottom: 15px; font-weight: 600; display: flex; justify-content: space-between;">
                         <span>模型活跃度 (Models)</span>
                         <span id="modelTotalCount" style="color: var(--primary-color);">0 次</span>
