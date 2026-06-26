@@ -300,6 +300,52 @@ function addAccountUsage(targetMap, account = {}) {
     }
 }
 
+function getBeijingDateParts(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(date);
+    const getPart = (type) => Number(parts.find(part => part.type === type)?.value);
+    return {
+        year: getPart('year'),
+        month: getPart('month'),
+        day: getPart('day')
+    };
+}
+
+function dateKeyFromUtcDate(date) {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function getBeijingPeriodStarts(now = new Date()) {
+    const parts = getBeijingDateParts(now);
+    const todayUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+    const weekday = todayUtc.getUTCDay() || 7;
+    const weekStartUtc = new Date(todayUtc);
+    weekStartUtc.setUTCDate(todayUtc.getUTCDate() - weekday + 1);
+    const monthStartUtc = new Date(Date.UTC(parts.year, parts.month - 1, 1));
+
+    return {
+        today: dateKeyFromUtcDate(todayUtc),
+        week: dateKeyFromUtcDate(weekStartUtc),
+        month: dateKeyFromUtcDate(monthStartUtc)
+    };
+}
+
+function cloneUsageBucket(bucket = {}) {
+    return normalizeUsageBucket(bucket);
+}
+
+function addAccountSummaryRange(target, rangeName, account) {
+    if (!target[rangeName]) target[rangeName] = createUsageBucket();
+    addUsage(target[rangeName], account?.summary);
+}
+
 function resetUsageBucketTokens(bucket) {
     if (!bucket || typeof bucket !== 'object') return;
     bucket.promptTokens = 0;
@@ -997,6 +1043,64 @@ export async function getStats() {
         maxTps: globalRates.maxTps,
         maxRpm: globalRates.maxRpm,
         usageHistory: aggregatedHistory
+    };
+}
+
+/**
+ * 获取按真实账号聚合的今日 / 本周 / 本月使用量。
+ * 用量查询页只需要轻量摘要，避免拉取全部 Potluck Key 历史。
+ */
+export async function getAccountUsageSummary(now = new Date()) {
+    const stats = await getStats();
+    const starts = getBeijingPeriodStarts(now);
+    const accounts = new Map();
+
+    for (const [dateKey, day] of Object.entries(stats.usageHistory || {})) {
+        const inToday = dateKey === starts.today;
+        const inWeek = dateKey >= starts.week;
+        const inMonth = dateKey >= starts.month;
+        if (!inToday && !inWeek && !inMonth) continue;
+
+        for (const [accountKey, account] of Object.entries(day.accounts || {})) {
+            const current = accounts.get(accountKey) || {
+                accountKey,
+                provider: account.provider || accountKey.split(':')[0] || 'unknown',
+                providerUuid: account.providerUuid || accountKey.split(':').slice(1).join(':') || null,
+                providerName: account.providerName || null,
+                today: createUsageBucket(),
+                week: createUsageBucket(),
+                month: createUsageBucket()
+            };
+            if (account.providerName && !current.providerName) {
+                current.providerName = account.providerName;
+            }
+            if (inToday) addAccountSummaryRange(current, 'today', account);
+            if (inWeek) addAccountSummaryRange(current, 'week', account);
+            if (inMonth) addAccountSummaryRange(current, 'month', account);
+            accounts.set(accountKey, current);
+        }
+    }
+
+    const accountList = [...accounts.values()]
+        .map(account => ({
+            ...account,
+            today: cloneUsageBucket(account.today),
+            week: cloneUsageBucket(account.week),
+            month: cloneUsageBucket(account.month)
+        }))
+        .sort((a, b) => (
+            b.month.totalTokens - a.month.totalTokens ||
+            b.week.totalTokens - a.week.totalTokens ||
+            b.today.totalTokens - a.today.totalTokens ||
+            (a.providerName || a.providerUuid || '').localeCompare(b.providerName || b.providerUuid || '')
+        ));
+
+    return {
+        source: 'potluck/model-usage-stats',
+        timezone: 'Asia/Shanghai',
+        periods: starts,
+        updatedAt: new Date().toISOString(),
+        accounts: accountList
     };
 }
 

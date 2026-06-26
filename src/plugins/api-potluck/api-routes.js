@@ -15,6 +15,7 @@ import {
     updateKeyName,
     regenerateKey,
     getStats,
+    getAccountUsageSummary,
     validateKey,
     KEY_PREFIX,
     applyDailyLimitToAllKeys,
@@ -106,6 +107,13 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         if (method === 'GET' && path === '/api/potluck/stats') {
             const stats = await getStats();
             sendJson(res, 200, { success: true, data: stats });
+            return true;
+        }
+
+        // GET /api/potluck/account-usage-summary - 获取账号维度真实用量摘要
+        if (method === 'GET' && path === '/api/potluck/account-usage-summary') {
+            const summary = await getAccountUsageSummary();
+            sendJson(res, 200, { success: true, data: summary });
             return true;
         }
 

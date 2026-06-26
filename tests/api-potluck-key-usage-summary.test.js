@@ -172,6 +172,66 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('getAccountUsageSummary returns account ranges for usage page data source', async () => {
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-06-20T02:00:00.000Z'));
+        const key = await createKey('Codex Client', 1000);
+
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 1,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-month-only', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+
+        jest.setSystemTime(new Date('2026-06-23T02:00:00.000Z'));
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 2,
+            promptTokens: 2000,
+            completionTokens: 200,
+            totalTokens: 2200
+        }, 'req-week', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+
+        jest.setSystemTime(new Date('2026-06-26T02:00:00.000Z'));
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 3,
+            promptTokens: 3000,
+            completionTokens: 300,
+            totalTokens: 3300
+        }, 'req-today', {
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-06-26T03:00:00.000Z'));
+        const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:codex-account-a');
+
+        expect(summary).toMatchObject({
+            source: 'potluck/model-usage-stats',
+            timezone: 'Asia/Shanghai',
+            periods: {
+                today: '2026-06-26',
+                week: '2026-06-22',
+                month: '2026-06-01'
+            }
+        });
+        expect(account).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'Codex Account A'
+        });
+        expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
+        expect(account.week).toMatchObject({ requestCount: 5, totalTokens: 5500 });
+        expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
+    });
+
     test('listKeys exposes sanitized related account names for audit key selectors', async () => {
         const { createKey, incrementUsage, listKeys } = await loadKeyManager();
 

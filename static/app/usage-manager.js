@@ -1,12 +1,14 @@
 // 用量管理模块
 
-import { showToast, bindOnce } from './utils.js';
+import { showToast, bindOnce, escapeHtml } from './utils.js';
 import { getAuthHeaders } from './auth.js';
 import { t, getCurrentLanguage } from './i18n.js';
 
 // 提供商配置缓存
 let currentProviderConfigs = null;
 let usagePageDataPromise = null;
+let accountUsageSummaryByKey = new Map();
+let accountUsageSummaryMeta = null;
 
 /**
  * 更新提供商配置
@@ -93,9 +95,13 @@ export async function loadUsage() {
     if (errorEl) errorEl.style.display = 'none';
 
     try {
-        const response = await fetch('/api/usage', { method: 'GET', headers: getAuthHeaders() });
+        const [response, accountUsageSummary] = await Promise.all([
+            fetch('/api/usage', { method: 'GET', headers: getAuthHeaders() }),
+            loadAccountUsageSummary()
+        ]);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
+        updateAccountUsageSummaryCache(accountUsageSummary);
         
         if (loadingEl) loadingEl.style.display = 'none';
         renderUsageData(data, contentEl);
@@ -121,13 +127,17 @@ export async function refreshUsage() {
         // 使用更明显的反馈：显示加载中的 Toast
         showToast(t('usage.loading'), 'info');
         
-        const response = await fetch('/api/usage?refresh=true', { method: 'GET', headers: getAuthHeaders() });
+        const [response, accountUsageSummary] = await Promise.all([
+            fetch('/api/usage?refresh=true', { method: 'GET', headers: getAuthHeaders() }),
+            loadAccountUsageSummary()
+        ]);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.error?.message || `HTTP ${response.status}`);
         }
         
         const data = await response.json();
+        updateAccountUsageSummaryCache(accountUsageSummary);
         
         // 渲染数据
         renderUsageData(data, document.getElementById('usageContent'));
@@ -255,12 +265,16 @@ function updateSingleInstanceCard(providerType, instanceData) {
 export async function refreshProviderUsage(providerType) {
     try {
         showToast(t('usage.refreshingProvider', { name: getProviderDisplayName(providerType) }), 'info');
-        const response = await fetch(`/api/usage/${providerType}?refresh=true`, { method: 'GET', headers: getAuthHeaders() });
+        const [response, accountUsageSummary] = await Promise.all([
+            fetch(`/api/usage/${providerType}?refresh=true`, { method: 'GET', headers: getAuthHeaders() }),
+            loadAccountUsageSummary()
+        ]);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.error?.message || `HTTP ${response.status}`);
         }
         const data = await response.json();
+        updateAccountUsageSummaryCache(accountUsageSummary);
         
         // 如果返回了全量数据或该提供商的数据，尝试局部更新
         if (data.providers && data.providers[providerType]) {
@@ -280,6 +294,46 @@ export async function refreshProviderUsage(providerType) {
 function getCodexResetAvailableCount(rateLimitResetCredits) {
     const availableCount = Number(rateLimitResetCredits?.availableCount ?? 0);
     return Number.isFinite(availableCount) ? availableCount : 0;
+}
+
+async function loadAccountUsageSummary() {
+    try {
+        const response = await fetch('/api/potluck/account-usage-summary', {
+            method: 'GET',
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) return null;
+        const result = await response.json();
+        return result?.success ? result.data : null;
+    } catch (error) {
+        console.debug('Potluck account usage summary unavailable:', error?.message || error);
+        return null;
+    }
+}
+
+function getAccountUsageKey(providerType, uuid) {
+    if (!providerType || !uuid) return null;
+    return `${providerType}:${uuid}`;
+}
+
+function updateAccountUsageSummaryCache(summary) {
+    if (!summary?.accounts) return;
+    const next = new Map();
+    summary.accounts.forEach(account => {
+        const key = account.accountKey || getAccountUsageKey(account.provider, account.providerUuid);
+        if (key) next.set(key, account);
+    });
+    accountUsageSummaryByKey = next;
+    accountUsageSummaryMeta = {
+        source: summary.source || 'potluck/model-usage-stats',
+        timezone: summary.timezone || 'Asia/Shanghai',
+        updatedAt: summary.updatedAt || null
+    };
+}
+
+function getAccountUsageSummary(providerType, uuid) {
+    const key = getAccountUsageKey(providerType, uuid);
+    return key ? accountUsageSummaryByKey.get(key) || null : null;
 }
 
 function canUseCodexRateLimitReset(rateLimitResetCredits) {
@@ -480,6 +534,7 @@ function createInstanceUsageCard(instance, providerType) {
     card.setAttribute('data-uuid', instance.uuid);
 
     const usage = instance.usage || {};
+    const accountUsageSummary = getAccountUsageSummary(providerType, instance.uuid);
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
     const displayName = user.email || instance.name || instance.uuid;
@@ -550,7 +605,7 @@ function createInstanceUsageCard(instance, providerType) {
     if (instance.error) {
         contentArea.innerHTML = `<div class="usage-error-message"><i class="fas fa-exclamation-triangle"></i> <span>${instance.error}</span></div>`;
     } else if (instance.usage) {
-        contentArea.appendChild(renderUsageDetails(instance.usage));
+        contentArea.appendChild(renderUsageDetails(instance.usage, accountUsageSummary));
     }
 
     card.querySelectorAll('.btn-reset-codex-usage-inline').forEach(resetButton => {
@@ -566,11 +621,15 @@ function createInstanceUsageCard(instance, providerType) {
 /**
  * 渲染用量详情 (全面适配新结构)
  */
-function renderUsageDetails(usage) {
+function renderUsageDetails(usage, accountSummary = null) {
     const container = document.createElement('div');
     container.className = 'usage-details';
 
     const { summary, items } = usage;
+
+    if (accountSummary) {
+        container.appendChild(renderAccountUsageSummary(accountSummary));
+    }
     
     if (summary?.usedPercent !== undefined) {
         const total = document.createElement('div');
@@ -655,6 +714,45 @@ function renderUsageDetails(usage) {
     return container;
 }
 
+function renderAccountUsageSummary(accountSummary) {
+    const section = document.createElement('div');
+    section.className = 'usage-section account-usage-summary';
+    const source = accountUsageSummaryMeta?.source || 'potluck/model-usage-stats';
+    const updatedAt = accountUsageSummaryMeta?.updatedAt ? formatDate(accountUsageSummaryMeta.updatedAt) : '--';
+    section.innerHTML = `
+        <div class="account-usage-source-row">
+            <div class="account-usage-source">
+                <span class="source-dot"></span>
+                <span>本地统计源</span>
+                <strong>${escapeHtml(source)}</strong>
+            </div>
+            <span class="account-usage-updated">更新 ${updatedAt}</span>
+        </div>
+        <div class="account-usage-summary-title">
+            <span><i class="fas fa-database"></i> 真实使用</span>
+            <small>tokens / requests</small>
+        </div>
+        <div class="account-usage-period-grid">
+            ${renderAccountUsagePeriod('今日', accountSummary.today)}
+            ${renderAccountUsagePeriod('本周', accountSummary.week)}
+            ${renderAccountUsagePeriod('本月', accountSummary.month)}
+        </div>
+    `;
+    return section;
+}
+
+function renderAccountUsagePeriod(label, usage = {}) {
+    const tokens = formatTokenCompact(usage.totalTokens || 0);
+    const requests = formatInteger(usage.requestCount || 0);
+    return `
+        <div class="account-usage-period">
+            <div class="account-usage-period-label">${label}</div>
+            <div class="account-usage-period-value">${tokens}</div>
+            <div class="account-usage-period-sub">${requests} req</div>
+        </div>
+    `;
+}
+
 function getProviderDisplayName(type) {
     if (currentProviderConfigs) {
         const config = currentProviderConfigs.find(c => c.id === type);
@@ -705,6 +803,20 @@ async function downloadConfigFile(path) {
 function formatNumber(num) {
     if (num === null || num === undefined) return '0.00';
     return (Math.ceil(num * 100) / 100).toFixed(2);
+}
+
+function formatInteger(num) {
+    const value = Number(num);
+    if (!Number.isFinite(value)) return '0';
+    return Math.round(value).toLocaleString(getCurrentLanguage());
+}
+
+function formatTokenCompact(num) {
+    const value = Number(num);
+    if (!Number.isFinite(value) || value <= 0) return '0';
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)}k`;
+    return Math.round(value).toLocaleString(getCurrentLanguage());
 }
 
 function formatDate(str) {
