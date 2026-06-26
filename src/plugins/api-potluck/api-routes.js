@@ -36,23 +36,41 @@ function sendJson(res, statusCode, data) {
 }
 
 function loadProviderEmailIndex() {
-    const filePath = path.join(process.cwd(), 'configs', 'provider_pools.json');
-    if (!fs.existsSync(filePath)) return new Map();
+    const index = new Map();
+
     try {
-        const providerPools = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        const index = new Map();
-        for (const [providerType, providers] of Object.entries(providerPools || {})) {
-            if (!Array.isArray(providers)) continue;
-            for (const provider of providers) {
-                if (!provider?.uuid || !provider?.codexEmail) continue;
-                index.set(`${providerType}:${provider.uuid}`, provider.codexEmail);
+        const filePath = path.join(process.cwd(), 'configs', 'provider_pools.json');
+        if (fs.existsSync(filePath)) {
+            const providerPools = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            for (const [providerType, providers] of Object.entries(providerPools || {})) {
+                if (!Array.isArray(providers)) continue;
+                for (const provider of providers) {
+                    if (!provider?.uuid || !provider?.codexEmail) continue;
+                    index.set(`${providerType}:${provider.uuid}`, provider.codexEmail);
+                }
             }
         }
-        return index;
     } catch (error) {
-        logger.warn('[API Potluck] Failed to load provider email index:', error.message);
-        return new Map();
+        logger.warn('[API Potluck] Failed to load provider pool email index:', error.message);
     }
+
+    try {
+        const cachePath = path.join(process.cwd(), 'configs', 'usage-cache.json');
+        if (!fs.existsSync(cachePath)) return index;
+        const usageCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        for (const [providerType, providerUsage] of Object.entries(usageCache?.providers || {})) {
+            const instances = Array.isArray(providerUsage?.instances) ? providerUsage.instances : [];
+            for (const instance of instances) {
+                const email = instance?.usage?.user?.email || instance?.usage?.user?.label || instance?.codexEmail;
+                if (!instance?.uuid || !email) continue;
+                index.set(`${providerType}:${instance.uuid}`, email);
+            }
+        }
+    } catch (error) {
+        logger.warn('[API Potluck] Failed to load usage cache email index:', error.message);
+    }
+
+    return index;
 }
 
 function enrichAccountWithEmail(account, providerEmailIndex) {
