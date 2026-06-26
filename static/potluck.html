@@ -166,7 +166,7 @@
             border-left: none;
             display: grid;
             gap: 10px;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
         }
         .provider-account-child {
             padding: 9px 10px 8px;
@@ -1473,6 +1473,11 @@
             return account?.providerName || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
         }
 
+        function truncateAccountName(name, maxLength = 10) {
+            const value = String(name || '');
+            return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+        }
+
         function buildProviderAccountTokenTree(providers, accounts) {
             const providerMap = new Map();
             Object.entries(providers || {}).forEach(([name, usage]) => {
@@ -1522,13 +1527,14 @@
                 const percentText = formatPercentShare(tokens, providerTokens);
                 const barWidth = Math.max(1, Math.min(100, (tokens / providerTokens) * 100));
                 const displayName = getAccountDisplayName(account, account.key);
+                const shortName = truncateAccountName(displayName);
                 const uuid = account.providerUuid || account.key;
                 return `
                     <div class="provider-account-child">
                         <div class="dist-info">
                             <span class="account-title">
                                 <span class="account-dot"></span>
-                                <span class="dist-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
+                                <span class="dist-name" title="${escapeHtml(displayName)}">${escapeHtml(shortName)}</span>
                             </span>
                             <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
                         </div>
