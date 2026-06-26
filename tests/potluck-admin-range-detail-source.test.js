@@ -63,8 +63,9 @@ describe('API Potluck admin range and key detail UI source', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('accountIdentity: account.accountIdentity ||');
+        expect(source).toContain('accountEmail: account.accountEmail ||');
         expect(source).toContain('providerUuids: Array.isArray(account.providerUuids)');
-        expect(source).toContain('account?.providerName || account?.accountIdentity');
+        expect(source).toContain('account?.accountEmail || account?.providerName');
         expect(source).toContain('const providerCount = Array.isArray(account.providerUuids) ? account.providerUuids.length : 0');
         expect(source).toContain('providers`');
     });

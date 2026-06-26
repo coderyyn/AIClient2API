@@ -254,6 +254,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     let slotUuid = null;
     let slotCustomName = null;
     let slotAccountIdentity = null;
+    let slotAccountEmail = null;
     let model, n, response_format, size, quality, prompt, imageToolOptions, codexRequestBody, virtualOpenAIRequest;
 
     try {
@@ -334,6 +335,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             slotUuid = result.uuid;
             slotCustomName = result.serviceConfig?.customName || null;
             slotAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || null;
+            slotAccountEmail = result.serviceConfig?.codexEmail || null;
         }
         
         const finalProviderProtocol = getProtocolPrefix(slotProviderType || CONFIG.MODEL_PROVIDER);
@@ -396,6 +398,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                         providerUuid: slotUuid || currentConfig.uuid,
                         providerName: slotCustomName || currentConfig.customName,
                         accountIdentity: slotAccountIdentity || currentConfig.codexAccountKey || currentConfig.codexAccountId || null,
+                        accountEmail: slotAccountEmail || currentConfig.codexEmail || null,
                         model,
                         requestId: currentConfig._monitorRequestId
                     });
@@ -409,6 +412,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                         providerUuid: slotUuid || currentConfig.uuid,
                         providerName: slotCustomName || currentConfig.customName,
                         accountIdentity: slotAccountIdentity || currentConfig.codexAccountKey || currentConfig.codexAccountId || null,
+                        accountEmail: slotAccountEmail || currentConfig.codexEmail || null,
                         model,
                         isStream: false
                     });
@@ -636,6 +640,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
     let slotUuid = null;
     let slotCustomName = null;
     let slotAccountIdentity = null;
+    let slotAccountEmail = null;
 
     try {
         const form = await parseMultipartForm(req);
@@ -726,6 +731,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             slotUuid = result.uuid;
             slotCustomName = result.serviceConfig?.customName || null;
             slotAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || null;
+            slotAccountEmail = result.serviceConfig?.codexEmail || null;
         }
 
         const finalProviderProtocol = getProtocolPrefix(slotProviderType || currentConfig.MODEL_PROVIDER);
@@ -790,6 +796,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
                         providerUuid: slotUuid || currentConfig.uuid,
                         providerName: slotCustomName || currentConfig.customName,
                         accountIdentity: slotAccountIdentity || currentConfig.codexAccountKey || currentConfig.codexAccountId || null,
+                        accountEmail: slotAccountEmail || currentConfig.codexEmail || null,
                         model,
                         requestId: currentConfig._monitorRequestId
                     });
@@ -803,6 +810,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
                         providerUuid: slotUuid || currentConfig.uuid,
                         providerName: slotCustomName || currentConfig.customName,
                         accountIdentity: slotAccountIdentity || currentConfig.codexAccountKey || currentConfig.codexAccountId || null,
+                        accountEmail: slotAccountEmail || currentConfig.codexEmail || null,
                         model,
                         isStream: false
                     });

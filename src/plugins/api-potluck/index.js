@@ -292,6 +292,8 @@ const apiPotluckPlugin = {
                         {
                             providerUuid: hookContext.providerUuid,
                             providerName: hookContext.providerName,
+                            accountEmail: hookContext.accountEmail,
+                            accountIdentity: hookContext.accountIdentity,
                             timestamp: new Date().toISOString()
                         }
                     );

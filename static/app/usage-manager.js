@@ -740,7 +740,7 @@ function renderAccountUsageSummary(accountSummary) {
     const providerCount = Array.isArray(accountSummary.providerUuids)
         ? accountSummary.providerUuids.filter(Boolean).length
         : 0;
-    const identityLabel = accountSummary.accountIdentity || accountSummary.providerUuid || '';
+    const identityLabel = accountSummary.accountEmail || accountSummary.accountIdentity || accountSummary.providerUuid || '';
     section.innerHTML = `
         <div class="account-usage-source-row">
             <div class="account-usage-source">

@@ -1727,6 +1727,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
 
     let actualCustomName = CONFIG.customName;
     let actualAccountIdentity = CONFIG.codexAccountKey || CONFIG.codexAccountId || null;
+    let actualAccountEmail = CONFIG.codexEmail || null;
 
     // 2.5. 根据模型选择服务适配器：
     // - service 缺失时（例如上游未预先注入）进行兜底选择
@@ -1742,6 +1743,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         actualUuid = result.uuid || pooluuid;
         actualCustomName = result.serviceConfig?.customName || CONFIG.customName;
         actualAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || actualAccountIdentity;
+        actualAccountEmail = result.serviceConfig?.codexEmail || actualAccountEmail;
 
         // 如果发生了模型级别的 fallback，需要更新请求使用的模型
         if (result.actualModel && result.actualModel !== model) {
@@ -1839,6 +1841,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             providerUuid: actualUuid,
             providerName: actualCustomName,
             accountIdentity: actualAccountIdentity,
+            accountEmail: actualAccountEmail,
             model,
             isStream
         });

@@ -116,6 +116,7 @@ function normalizeAccountUsageMap(map = {}) {
             provider: account?.provider || accountKey.split(':')[0] || 'unknown',
             providerUuid,
             accountIdentity: account?.accountIdentity || null,
+            accountEmail: account?.accountEmail || null,
             providerUuids: Array.isArray(account?.providerUuids)
                 ? [...new Set(account.providerUuids.filter(Boolean))]
                 : (providerUuid ? [providerUuid] : []),
@@ -267,6 +268,7 @@ function ensureAccountUsage(map, provider, providerUuid, providerName, accountId
             provider,
             providerUuid: accountIdentity || providerUuid,
             accountIdentity: accountIdentity || null,
+            accountEmail: null,
             providerUuids: providerUuid ? [providerUuid] : [],
             providerName: providerName || null,
             summary: createUsageBucket(),
@@ -313,6 +315,9 @@ function addAccountUsage(targetMap, account = {}) {
     const providerUuid = account.providerUuid || null;
     const accountUsage = ensureAccountUsage(targetMap, provider, providerUuid, account.providerName, account.accountIdentity || null);
     if (!accountUsage) return;
+    if (account.accountEmail && !accountUsage.accountEmail) {
+        accountUsage.accountEmail = account.accountEmail;
+    }
 
     addUsage(accountUsage.summary, account.summary);
     for (const [model, usage] of Object.entries(account.models || {})) {
@@ -924,8 +929,10 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     const providerUuid = context.providerUuid || usage.providerUuid || null;
     const providerName = context.providerName || usage.providerName || null;
     const accountIdentity = context.accountIdentity || usage.accountIdentity || null;
+    const accountEmail = context.accountEmail || usage.accountEmail || null;
     const accountUsage = ensureAccountUsage(dayHistory.accounts, pName, providerUuid, providerName, accountIdentity);
     if (accountUsage) {
+        if (accountEmail && !accountUsage.accountEmail) accountUsage.accountEmail = accountEmail;
         addUsage(accountUsage.summary, usage);
         updatePeaks(accountUsage.summary);
         if (!accountUsage.models[mName]) accountUsage.models[mName] = createUsageBucket();
@@ -945,6 +952,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     updatePeaks(hourUsage.models[mName]);
     const hourAccountUsage = ensureAccountUsage(hourUsage.accounts, pName, providerUuid, providerName, accountIdentity);
     if (hourAccountUsage) {
+        if (accountEmail && !hourAccountUsage.accountEmail) hourAccountUsage.accountEmail = accountEmail;
         addUsage(hourAccountUsage.summary, usage);
         updatePeaks(hourAccountUsage.summary);
         if (!hourAccountUsage.models[mName]) hourAccountUsage.models[mName] = createUsageBucket();
@@ -1101,6 +1109,7 @@ export async function getAccountUsageSummary(now = new Date()) {
                 provider: account.provider || accountKey.split(':')[0] || 'unknown',
                 providerUuid: account.providerUuid || accountKey.split(':').slice(1).join(':') || null,
                 accountIdentity: account.accountIdentity || null,
+                accountEmail: account.accountEmail || null,
                 providerUuids: Array.isArray(account.providerUuids)
                     ? [...new Set(account.providerUuids.filter(Boolean))]
                     : (account.providerUuid ? [account.providerUuid] : []),
@@ -1111,6 +1120,9 @@ export async function getAccountUsageSummary(now = new Date()) {
             };
             if (account.providerName && !current.providerName) {
                 current.providerName = account.providerName;
+            }
+            if (account.accountEmail && !current.accountEmail) {
+                current.accountEmail = account.accountEmail;
             }
             if (inToday) addAccountSummaryRange(current, 'today', account);
             if (inWeek) addAccountSummaryRange(current, 'week', account);

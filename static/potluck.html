@@ -1228,6 +1228,7 @@
                     provider: account.provider || name.split(':')[0] || 'unknown',
                     providerUuid: account.providerUuid || name.split(':').slice(1).join(':') || '',
                     accountIdentity: account.accountIdentity || '',
+                    accountEmail: account.accountEmail || '',
                     providerUuids: Array.isArray(account.providerUuids)
                         ? [...new Set(account.providerUuids.filter(Boolean))]
                         : (account.providerUuid ? [account.providerUuid] : []),
@@ -1239,6 +1240,9 @@
                 if (account.accountIdentity && !target[name].accountIdentity) {
                     target[name].accountIdentity = account.accountIdentity;
                     target[name].providerUuid = account.accountIdentity;
+                }
+                if (account.accountEmail && !target[name].accountEmail) {
+                    target[name].accountEmail = account.accountEmail;
                 }
                 if (Array.isArray(account.providerUuids)) {
                     target[name].providerUuids = [...new Set([
@@ -1488,7 +1492,7 @@
         }
 
         function getAccountDisplayName(account, fallbackKey) {
-            return account?.providerName || account?.accountIdentity || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
+            return account?.accountEmail || account?.providerName || account?.accountIdentity || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
         }
 
         function truncateAccountName(name, maxLength = 10) {

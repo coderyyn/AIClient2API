@@ -24,6 +24,8 @@ import {
 } from './key-manager.js';
 import { getRequestBody } from '../../utils/common.js';
 import logger from '../../utils/logger.js';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * 发送 JSON 响应
@@ -31,6 +33,68 @@ import logger from '../../utils/logger.js';
 function sendJson(res, statusCode, data) {
     res.writeHead(statusCode, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));
+}
+
+function loadProviderEmailIndex() {
+    const filePath = path.join(process.cwd(), 'configs', 'provider_pools.json');
+    if (!fs.existsSync(filePath)) return new Map();
+    try {
+        const providerPools = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const index = new Map();
+        for (const [providerType, providers] of Object.entries(providerPools || {})) {
+            if (!Array.isArray(providers)) continue;
+            for (const provider of providers) {
+                if (!provider?.uuid || !provider?.codexEmail) continue;
+                index.set(`${providerType}:${provider.uuid}`, provider.codexEmail);
+            }
+        }
+        return index;
+    } catch (error) {
+        logger.warn('[API Potluck] Failed to load provider email index:', error.message);
+        return new Map();
+    }
+}
+
+function enrichAccountWithEmail(account, providerEmailIndex) {
+    if (!account || account.accountEmail) return account;
+    const provider = account.provider || null;
+    const candidates = Array.isArray(account.providerUuids) && account.providerUuids.length > 0
+        ? account.providerUuids
+        : [account.providerUuid].filter(Boolean);
+    for (const uuid of candidates) {
+        const email = providerEmailIndex.get(`${provider}:${uuid}`);
+        if (email) {
+            account.accountEmail = email;
+            break;
+        }
+    }
+    return account;
+}
+
+function enrichPotluckStatsAccountEmails(stats) {
+    const providerEmailIndex = loadProviderEmailIndex();
+    if (providerEmailIndex.size === 0) return stats;
+
+    for (const day of Object.values(stats?.usageHistory || {})) {
+        for (const account of Object.values(day?.accounts || {})) {
+            enrichAccountWithEmail(account, providerEmailIndex);
+        }
+        for (const hour of Object.values(day?.hours || {})) {
+            for (const account of Object.values(hour?.accounts || {})) {
+                enrichAccountWithEmail(account, providerEmailIndex);
+            }
+        }
+    }
+    return stats;
+}
+
+function enrichAccountUsageSummaryEmails(summary) {
+    const providerEmailIndex = loadProviderEmailIndex();
+    if (providerEmailIndex.size === 0) return summary;
+    for (const account of summary?.accounts || []) {
+        enrichAccountWithEmail(account, providerEmailIndex);
+    }
+    return summary;
 }
 
 /**
@@ -105,14 +169,14 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
     try {
         // GET /api/potluck/stats - 获取统计信息
         if (method === 'GET' && path === '/api/potluck/stats') {
-            const stats = await getStats();
+            const stats = enrichPotluckStatsAccountEmails(await getStats());
             sendJson(res, 200, { success: true, data: stats });
             return true;
         }
 
         // GET /api/potluck/account-usage-summary - 获取账号维度真实用量摘要
         if (method === 'GET' && path === '/api/potluck/account-usage-summary') {
-            const summary = await getAccountUsageSummary();
+            const summary = enrichAccountUsageSummaryEmails(await getAccountUsageSummary());
             sendJson(res, 200, { success: true, data: summary });
             return true;
         }
@@ -120,7 +184,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // POST /api/potluck/stats/reset-tokens - 重置全部 Key 的 Token 统计
         if (method === 'POST' && path === '/api/potluck/stats/reset-tokens') {
             const result = await resetAllTokenStats();
-            const stats = await getStats();
+            const stats = enrichPotluckStatsAccountEmails(await getStats());
             sendJson(res, 200, {
                 success: true,
                 message: `已重置 ${result.updated}/${result.total} 个 Key 的 Token 统计`,
@@ -132,7 +196,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // GET /api/potluck/keys - 获取所有 Key 列表
         if (method === 'GET' && path === '/api/potluck/keys') {
             const keys = await listKeys();
-            const stats = await getStats();
+            const stats = enrichPotluckStatsAccountEmails(await getStats());
             sendJson(res, 200, { 
                 success: true, 
                 data: { keys, stats } 

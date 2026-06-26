@@ -49,6 +49,7 @@ describe('api potluck key usage summary', () => {
                 providerUuid,
                 providerName: 'user@example.com',
                 accountIdentity: 'acct-chatgpt-123',
+                accountEmail: 'user@example.com',
                 timestamp: '2026-06-22T02:15:30.000Z'
             });
         }
@@ -63,6 +64,7 @@ describe('api potluck key usage summary', () => {
             provider: 'openai-codex-oauth',
             providerUuid: 'acct-chatgpt-123',
             accountIdentity: 'acct-chatgpt-123',
+            accountEmail: 'user@example.com',
             providerName: 'user@example.com',
             providerUuids: ['old-provider-uuid', 'new-provider-uuid']
         });
