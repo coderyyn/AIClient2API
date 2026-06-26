@@ -1227,12 +1227,30 @@
                 target[name] = {
                     provider: account.provider || name.split(':')[0] || 'unknown',
                     providerUuid: account.providerUuid || name.split(':').slice(1).join(':') || '',
+                    accountIdentity: account.accountIdentity || '',
+                    providerUuids: Array.isArray(account.providerUuids)
+                        ? [...new Set(account.providerUuids.filter(Boolean))]
+                        : (account.providerUuid ? [account.providerUuid] : []),
                     providerName: account.providerName || '',
                     summary: createUsageSummaryBucket(),
                     models: {}
                 };
-            } else if (account.providerName && !target[name].providerName) {
-                target[name].providerName = account.providerName;
+            } else {
+                if (account.accountIdentity && !target[name].accountIdentity) {
+                    target[name].accountIdentity = account.accountIdentity;
+                    target[name].providerUuid = account.accountIdentity;
+                }
+                if (Array.isArray(account.providerUuids)) {
+                    target[name].providerUuids = [...new Set([
+                        ...(target[name].providerUuids || []),
+                        ...account.providerUuids
+                    ].filter(Boolean))];
+                } else if (account.providerUuid) {
+                    target[name].providerUuids = [...new Set([...(target[name].providerUuids || []), account.providerUuid].filter(Boolean))];
+                }
+                if (account.providerName && !target[name].providerName) {
+                    target[name].providerName = account.providerName;
+                }
             }
 
             addUsageBucket(target[name].summary, account.summary || {});
@@ -1470,7 +1488,7 @@
         }
 
         function getAccountDisplayName(account, fallbackKey) {
-            return account?.providerName || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
+            return account?.providerName || account?.accountIdentity || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
         }
 
         function truncateAccountName(name, maxLength = 10) {
@@ -1528,7 +1546,9 @@
                 const barWidth = Math.max(1, Math.min(100, (tokens / providerTokens) * 100));
                 const displayName = getAccountDisplayName(account, account.key);
                 const shortName = truncateAccountName(displayName);
-                const uuid = account.providerUuid || account.key;
+                const providerCount = Array.isArray(account.providerUuids) ? account.providerUuids.length : 0;
+                const uuid = account.accountIdentity || account.providerUuid || account.key;
+                const uuidSuffix = providerCount > 1 ? ` · ${providerCount} providers` : '';
                 return `
                     <div class="provider-account-child">
                         <div class="dist-info">
@@ -1538,7 +1558,7 @@
                             </span>
                             <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
                         </div>
-                        <span class="account-sub" title="${escapeHtml(uuid)}">${escapeHtml(uuid)}</span>
+                        <span class="account-sub" title="${escapeHtml(uuid)}">${escapeHtml(uuid)}${escapeHtml(uuidSuffix)}</span>
                         <div class="dist-info" style="margin-top: -2px;">
                             <span class="dist-count">${formatNumber(calls)} 次</span>
                         </div>

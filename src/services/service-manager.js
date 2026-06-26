@@ -14,7 +14,7 @@ import {
     getFileName,
     formatSystemPath
 } from '../utils/provider-utils.js';
-import { readCodexCredentialDisplayName } from '../utils/codex-utils.js';
+import { readCodexCredentialDisplayName, readCodexCredentialIdentity } from '../utils/codex-utils.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 
@@ -191,6 +191,10 @@ export async function replaceProviderCredentialPath(config, options = {}) {
 
     const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
     let updatedProvider = null;
+    const absoluteCredPath = path.isAbsolute(credPath) ? credPath : path.join(process.cwd(), credPath);
+    const codexIdentity = isCodexProviderType(providerType)
+        ? await readCodexCredentialIdentity(absoluteCredPath)
+        : null;
 
     await withFileLock(filePath, async () => {
         const providerPools = fs.existsSync(filePath)
@@ -203,7 +207,7 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             throw new Error(`Provider not found: ${providerType}/${providerUuid}`);
         }
 
-        updatedProvider = {
+        updatedProvider = applyCodexIdentityToProvider({
             ...providers[providerIndex],
             [mapping.credPathKey]: formatSystemPath(credPath),
             isHealthy: true,
@@ -211,7 +215,7 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             errorCount: 0,
             lastErrorTime: null,
             lastErrorMessage: null
-        };
+        }, codexIdentity);
 
         providerPools[providerType][providerIndex] = updatedProvider;
         await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
@@ -246,6 +250,59 @@ function pickProviderDefaults(providerDefaults = {}) {
         defaults.PROXY_ID = providerDefaults.PROXY_ID.trim();
     }
     return defaults;
+}
+
+function applyCodexIdentityToProvider(providerConfig, identity = {}) {
+    if (!providerConfig || !identity?.codexAccountKey) return providerConfig;
+    providerConfig.codexAccountKey = identity.codexAccountKey;
+    providerConfig.codexAccountId = identity.codexAccountId || '';
+    providerConfig.codexEmail = identity.codexEmail || '';
+    return providerConfig;
+}
+
+function findProviderIndexByCodexIdentity(providers = [], identity = {}) {
+    if (!identity?.codexAccountKey) return -1;
+    const identityKey = String(identity.codexAccountKey).toLowerCase();
+    const identityEmail = String(identity.codexEmail || '').toLowerCase();
+    return providers.findIndex(provider => {
+        const providerKey = String(provider.codexAccountKey || provider.codexAccountId || '').toLowerCase();
+        const providerEmail = String(provider.codexEmail || provider.customName || '').toLowerCase();
+        return providerKey === identityKey || (identityEmail && providerEmail === identityEmail);
+    });
+}
+
+async function ensureCodexIdentityForServiceConfig(serviceConfig, providerType) {
+    if (!isCodexProviderType(providerType) || serviceConfig?.codexAccountKey) {
+        return serviceConfig;
+    }
+
+    const credPath = serviceConfig?.CODEX_OAUTH_CREDS_FILE_PATH;
+    if (!credPath) return serviceConfig;
+
+    const absolutePath = path.isAbsolute(credPath) ? credPath : path.join(process.cwd(), credPath);
+    const identity = await readCodexCredentialIdentity(absolutePath);
+    applyCodexIdentityToProvider(serviceConfig, identity);
+    return serviceConfig;
+}
+
+async function persistCodexIdentityToProviderPool(config, providerType, providerUuid, identity = {}) {
+    if (!providerUuid || !identity?.codexAccountKey || !isCodexProviderType(providerType)) return;
+    const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+    if (!fs.existsSync(filePath)) return;
+
+    await withFileLock(filePath, async () => {
+        const providerPools = JSON.parse(await pfs.readFile(filePath, 'utf8'));
+        const providers = providerPools[providerType] || [];
+        const index = providers.findIndex(provider => provider.uuid === providerUuid);
+        if (index === -1 || providers[index].codexAccountKey) return;
+        providerPools[providerType][index] = applyCodexIdentityToProvider({ ...providers[index] }, identity);
+        await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
+        if (config) config.providerPools = providerPools;
+        if (providerPoolManager) {
+            providerPoolManager.providerPools = providerPools;
+            providerPoolManager.initializeProviderStatus();
+        }
+    });
 }
 
 async function linkSingleCredential(config, credPath, providerDefaults = {}) {
@@ -287,6 +344,9 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
         const customName = isCodexProviderType(providerType)
             ? await readCodexCredentialDisplayName(absolutePath)
             : '';
+        const codexIdentity = isCodexProviderType(providerType)
+            ? await readCodexCredentialIdentity(absolutePath)
+            : null;
         
         // 确保提供商类型数组存在
         if (!config.providerPools[providerType]) {
@@ -308,6 +368,32 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
             logger.info(`[Auto-Link] Credential already linked: ${relativePath}`);
             return null;
         }
+
+        if (isCodexProviderType(providerType)) {
+            const existingIdentityIndex = findProviderIndexByCodexIdentity(config.providerPools[providerType], codexIdentity);
+            if (existingIdentityIndex >= 0) {
+                const existingProvider = config.providerPools[providerType][existingIdentityIndex];
+                const updatedProvider = applyCodexIdentityToProvider({
+                    ...existingProvider,
+                    [credPathKey]: formatSystemPath(relativePath),
+                    customName: customName || existingProvider.customName || '',
+                    isHealthy: true,
+                    needsRefresh: false,
+                    errorCount: 0,
+                    lastErrorTime: null,
+                    lastErrorMessage: null,
+                    ...pickProviderDefaults(providerDefaults)
+                }, codexIdentity);
+                config.providerPools[providerType][existingIdentityIndex] = updatedProvider;
+                logger.info(`[Auto-Link] Updated existing Codex provider by account identity: ${updatedProvider.uuid}`);
+                return {
+                    provider: updatedProvider,
+                    displayName,
+                    providerType,
+                    updatedExisting: true
+                };
+            }
+        }
         
         // 创建新的提供商配置
         const newProvider = {
@@ -320,6 +406,9 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
             }),
             ...pickProviderDefaults(providerDefaults)
         };
+        if (isCodexProviderType(providerType)) {
+            applyCodexIdentityToProvider(newProvider, codexIdentity);
+        }
         
         // 添加到配置
         config.providerPools[providerType].push(newProvider);
@@ -365,6 +454,9 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                     const customName = isCodexProviderType(providerType)
                         ? await readCodexCredentialDisplayName(fullPath)
                         : '';
+                    const codexIdentity = isCodexProviderType(providerType)
+                        ? await readCodexCredentialIdentity(fullPath)
+                        : null;
                     
                     // 使用与 ui-manager.js 相同的 isPathUsed 函数检查是否已关联
                     const isLinked = isPathUsed(relativePath, fileName, linkedPaths);
@@ -378,6 +470,9 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                             needsProjectId,
                             customName
                         });
+                        if (isCodexProviderType(providerType)) {
+                            applyCodexIdentityToProvider(newProvider, codexIdentity);
+                        }
                         
                         newProviders.push(newProvider);
                     }
@@ -574,6 +669,7 @@ export async function getApiService(config, requestedModel = null, options = {})
         // 如果在 AUTO 模式下依然没能解析出具体提供商，则报错
         throw new Error(`[API Service] Auto-routing failed: Model name must include a provider prefix (e.g., 'provider:model'). Received: '${actualModelName}'`);
     }
+    await ensureCodexIdentityForServiceConfig(serviceConfig, config.MODEL_PROVIDER);
     return getServiceAdapter(serviceConfig);
 }
 
@@ -648,6 +744,15 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     } else if (effectiveProvider === MODEL_PROVIDER.AUTO && actualModelName) {
         // 如果在 AUTO 模式下依然没能解析出具体提供商，则报错
         throw new Error(`[API Service] Auto-routing failed: Model name must include a provider prefix (e.g., 'provider:model'). Received: '${actualModelName}'`);
+    }
+
+    await ensureCodexIdentityForServiceConfig(serviceConfig, actualProviderType);
+    if (selectedUuid && serviceConfig.codexAccountKey) {
+        await persistCodexIdentityToProviderPool(config, actualProviderType, selectedUuid, {
+            codexAccountKey: serviceConfig.codexAccountKey,
+            codexAccountId: serviceConfig.codexAccountId,
+            codexEmail: serviceConfig.codexEmail
+        });
     }
     
     const service = getServiceAdapter(serviceConfig);

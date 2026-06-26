@@ -927,7 +927,7 @@ function getPluginHookRequestId(config) {
     return config?._monitorRequestId || null;
 }
 
-export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
+export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null, accountIdentity = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
     let fullOldResponseJson = '';
@@ -1018,6 +1018,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         toProvider,
                         providerUuid: pooluuid,
                         providerName: customName,
+                        accountIdentity,
                         model,
                         requestId: hookRequestId
                     });
@@ -1250,7 +1251,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         providerPoolManager,
                         result.uuid,
                         result.serviceConfig?.customName || customName,
-                        newRetryContext
+                        newRetryContext,
+                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || accountIdentity
                     );
                 } else {
                     logger.info(`[Stream Retry] No healthy credential available for retry.`);
@@ -1327,7 +1329,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
 }
 
 
-export async function handleUnaryRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
+export async function handleUnaryRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null, accountIdentity = null) {
     // 重试上下文：包含 CONFIG 和重试计数
     // maxRetries: 凭证切换最大次数（跨凭证），默认 5 次
     const maxRetries = retryContext?.maxRetries ?? 5;
@@ -1368,6 +1370,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     toProvider,
                     providerUuid: pooluuid,
                     providerName: customName,
+                    accountIdentity,
                     model,
                     requestId: hookRequestId
                 });
@@ -1490,7 +1493,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         providerPoolManager,
                         result.uuid,
                         result.serviceConfig?.customName || customName,
-                        newRetryContext
+                        newRetryContext,
+                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || accountIdentity
                     );
                 } else {
                     logger.info(`[Unary Retry] No healthy credential available for retry.`);
@@ -1722,6 +1726,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     logger.info(`[Content Generation] Model: ${model}, Stream: ${isStream}`);
 
     let actualCustomName = CONFIG.customName;
+    let actualAccountIdentity = CONFIG.codexAccountKey || CONFIG.codexAccountId || null;
 
     // 2.5. 根据模型选择服务适配器：
     // - service 缺失时（例如上游未预先注入）进行兜底选择
@@ -1736,6 +1741,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         toProvider = result.actualProviderType;
         actualUuid = result.uuid || pooluuid;
         actualCustomName = result.serviceConfig?.customName || CONFIG.customName;
+        actualAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || actualAccountIdentity;
 
         // 如果发生了模型级别的 fallback，需要更新请求使用的模型
         if (result.actualModel && result.actualModel !== model) {
@@ -1811,9 +1817,9 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     const retryContext = { CONFIG, currentRetry: 0, maxRetries: credentialSwitchMaxRetries };
     
     if (isStream) {
-        await handleStreamRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);
+        await handleStreamRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext, actualAccountIdentity);
     } else {
-        await handleUnaryRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);
+        await handleUnaryRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext, actualAccountIdentity);
     }
 
     // 同步更新模型名称（如果处理器内部或提供者发生了回退）
@@ -1832,6 +1838,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             toProvider,
             providerUuid: actualUuid,
             providerName: actualCustomName,
+            accountIdentity: actualAccountIdentity,
             model,
             isStream
         });

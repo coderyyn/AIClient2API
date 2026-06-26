@@ -1491,6 +1491,11 @@ function getFieldOrder(provider) {
     const hiddenProviderConfigFields = [
         'codexMax5hTokens',
         'codexMaxWeeklyTokens',
+        'codexAccountKey',
+        'codexAccountId',
+        'codexEmail',
+        'accountIdentity',
+        'providerUuids',
         'weight'
     ];
 

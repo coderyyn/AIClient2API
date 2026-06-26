@@ -437,6 +437,25 @@
     font-weight: 500;
 }
 
+.account-usage-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin: -0.2rem 0 0.625rem;
+    max-width: 100%;
+    color: var(--text-tertiary);
+    font-family: monospace;
+    font-size: 0.66rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.account-usage-identity i {
+    color: var(--primary-color);
+    flex: 0 0 auto;
+}
+
 .account-usage-period-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

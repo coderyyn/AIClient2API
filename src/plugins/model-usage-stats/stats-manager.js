@@ -71,10 +71,12 @@ function createDailyUsage() {
     };
 }
 
-function createAccountStore(provider, providerUuid, providerName = null) {
+function createAccountStore(provider, providerUuid, providerName = null, accountIdentity = null) {
     return {
         provider,
-        providerUuid,
+        providerUuid: accountIdentity || providerUuid,
+        accountIdentity: accountIdentity || null,
+        providerUuids: providerUuid ? [providerUuid] : [],
         providerName,
         summary: createEmptyUsage(),
         models: {}
@@ -121,9 +123,15 @@ function normalizeStore(store) {
 
     for (const [accountKey, accountStore] of Object.entries(store?.accounts || {})) {
         const [providerFromKey, uuidFromKey] = accountKey.split(':');
+        const accountIdentity = accountStore?.accountIdentity || null;
+        const providerUuid = accountStore?.providerUuid || uuidFromKey || 'unknown';
         normalizedStore.accounts[accountKey] = {
             provider: accountStore?.provider || providerFromKey || 'unknown',
-            providerUuid: accountStore?.providerUuid || uuidFromKey || 'unknown',
+            providerUuid,
+            accountIdentity,
+            providerUuids: Array.isArray(accountStore?.providerUuids)
+                ? [...new Set(accountStore.providerUuids.filter(Boolean))]
+                : (providerUuid ? [providerUuid] : []),
             providerName: accountStore?.providerName || null,
             summary: normalizeUsageBlock(accountStore?.summary),
             models: {}
@@ -158,9 +166,15 @@ function normalizeStore(store) {
 
             for (const [accountKey, accountStore] of Object.entries(dailyStore?.accounts || {})) {
                 const [providerFromKey, uuidFromKey] = accountKey.split(':');
+                const accountIdentity = accountStore?.accountIdentity || null;
+                const providerUuid = accountStore?.providerUuid || uuidFromKey || 'unknown';
                 normalizedStore.daily[date].accounts[accountKey] = {
                     provider: accountStore?.provider || providerFromKey || 'unknown',
-                    providerUuid: accountStore?.providerUuid || uuidFromKey || 'unknown',
+                    providerUuid,
+                    accountIdentity,
+                    providerUuids: Array.isArray(accountStore?.providerUuids)
+                        ? [...new Set(accountStore.providerUuids.filter(Boolean))]
+                        : (providerUuid ? [providerUuid] : []),
                     providerName: accountStore?.providerName || null,
                     summary: normalizeUsageBlock(accountStore?.summary),
                     models: {}
@@ -202,19 +216,32 @@ function ensureModelStore(provider, model) {
     return providerStore.models[model];
 }
 
-function getAccountKey(provider, providerUuid) {
-    if (!provider || !providerUuid) return null;
-    return `${provider}:${providerUuid}`;
+function getAccountKey(provider, providerUuid, accountIdentity = null) {
+    const identity = accountIdentity || providerUuid;
+    if (!provider || !identity) return null;
+    return `${provider}:${identity}`;
 }
 
-function ensureAccountStore(provider, providerUuid, providerName = null) {
+function addProviderUuidToAccount(accountStore, providerUuid) {
+    if (!accountStore || !providerUuid) return;
+    const existing = Array.isArray(accountStore.providerUuids) ? accountStore.providerUuids : [];
+    accountStore.providerUuids = [...new Set([...existing, providerUuid].filter(Boolean))];
+}
+
+function ensureAccountStore(provider, providerUuid, providerName = null, accountIdentity = null) {
     ensureLoaded();
-    const accountKey = getAccountKey(provider, providerUuid);
+    const accountKey = getAccountKey(provider, providerUuid, accountIdentity);
     if (!accountKey) return null;
 
     if (!statsStore.accounts[accountKey]) {
-        statsStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName);
+        statsStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName, accountIdentity);
     }
+
+    if (accountIdentity && !statsStore.accounts[accountKey].accountIdentity) {
+        statsStore.accounts[accountKey].accountIdentity = accountIdentity;
+        statsStore.accounts[accountKey].providerUuid = accountIdentity;
+    }
+    addProviderUuidToAccount(statsStore.accounts[accountKey], providerUuid);
 
     if (providerName && !statsStore.accounts[accountKey].providerName) {
         statsStore.accounts[accountKey].providerName = providerName;
@@ -223,8 +250,8 @@ function ensureAccountStore(provider, providerUuid, providerName = null) {
     return statsStore.accounts[accountKey];
 }
 
-function ensureAccountModelStore(provider, providerUuid, providerName, model) {
-    const accountStore = ensureAccountStore(provider, providerUuid, providerName);
+function ensureAccountModelStore(provider, providerUuid, providerName, model, accountIdentity = null) {
+    const accountStore = ensureAccountStore(provider, providerUuid, providerName, accountIdentity);
     if (!accountStore) return null;
 
     if (!accountStore.models[model]) {
@@ -253,14 +280,20 @@ function ensureDailyModelStore(dateKey, model) {
     return dailyStore.models[model];
 }
 
-function ensureDailyAccountStore(dateKey, provider, providerUuid, providerName = null) {
-    const accountKey = getAccountKey(provider, providerUuid);
+function ensureDailyAccountStore(dateKey, provider, providerUuid, providerName = null, accountIdentity = null) {
+    const accountKey = getAccountKey(provider, providerUuid, accountIdentity);
     if (!accountKey) return null;
 
     const dailyStore = ensureDailyStore(dateKey);
     if (!dailyStore.accounts[accountKey]) {
-        dailyStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName);
+        dailyStore.accounts[accountKey] = createAccountStore(provider, providerUuid, providerName, accountIdentity);
     }
+
+    if (accountIdentity && !dailyStore.accounts[accountKey].accountIdentity) {
+        dailyStore.accounts[accountKey].accountIdentity = accountIdentity;
+        dailyStore.accounts[accountKey].providerUuid = accountIdentity;
+    }
+    addProviderUuidToAccount(dailyStore.accounts[accountKey], providerUuid);
 
     if (providerName && !dailyStore.accounts[accountKey].providerName) {
         dailyStore.accounts[accountKey].providerName = providerName;
@@ -269,8 +302,8 @@ function ensureDailyAccountStore(dateKey, provider, providerUuid, providerName =
     return dailyStore.accounts[accountKey];
 }
 
-function ensureDailyAccountModelStore(dateKey, provider, providerUuid, providerName, model) {
-    const dailyAccountStore = ensureDailyAccountStore(dateKey, provider, providerUuid, providerName);
+function ensureDailyAccountModelStore(dateKey, provider, providerUuid, providerName, model, accountIdentity = null) {
+    const dailyAccountStore = ensureDailyAccountStore(dateKey, provider, providerUuid, providerName, accountIdentity);
     if (!dailyAccountStore) return null;
 
     if (!dailyAccountStore.models[model]) {
@@ -585,6 +618,7 @@ function getPendingRequest(requestId, meta = {}) {
             model: meta.model || 'unknown',
             provider: meta.provider || 'unknown',
             providerUuid: meta.providerUuid || null,
+            accountIdentity: meta.accountIdentity || null,
             providerName: meta.providerName || null,
             fromProvider: meta.fromProvider || null,
             isStream: Boolean(meta.isStream),
@@ -604,6 +638,7 @@ function getPendingRequest(requestId, meta = {}) {
     state.model = meta.model || state.model;
     state.provider = meta.provider || state.provider;
     state.providerUuid = state.providerUuid || meta.providerUuid || null;
+    state.accountIdentity = state.accountIdentity || meta.accountIdentity || null;
     state.providerName = state.providerName || meta.providerName || null;
     state.fromProvider = meta.fromProvider || state.fromProvider;
     state.isStream = meta.isStream ?? state.isStream;
@@ -709,8 +744,8 @@ function cleanupAccountUsageEvents(nowMs = Date.now()) {
     }
 }
 
-function recordAccountUsageEvent(provider, providerUuid, usage, timestamp) {
-    const accountKey = getAccountKey(provider, providerUuid);
+function recordAccountUsageEvent(provider, providerUuid, usage, timestamp, accountIdentity = null) {
+    const accountKey = getAccountKey(provider, providerUuid, accountIdentity);
     if (!accountKey) return;
     statsStore.accountUsageEvents = statsStore.accountUsageEvents || {};
     if (!statsStore.accountUsageEvents[accountKey]) {
@@ -767,9 +802,9 @@ export function setConfigGetter(getter) {
     configGetter = getter;
 }
 
-export function recordUnaryUsage({ requestId, model, provider, providerUuid, providerName, fromProvider, nativeResponse, clientResponse }) {
+export function recordUnaryUsage({ requestId, model, provider, providerUuid, providerName, accountIdentity, fromProvider, nativeResponse, clientResponse }) {
     if (!requestId) return;
-    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream: false });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, accountIdentity, fromProvider, isStream: false });
     const prevTotalTokens = state.usage.totalTokens;
     const prevCachedTokens = state.usage.cachedTokens;
     state.hasResponse = true;
@@ -779,9 +814,9 @@ export function recordUnaryUsage({ requestId, model, provider, providerUuid, pro
     }
 }
 
-export function recordStreamChunkUsage({ requestId, model, provider, providerUuid, providerName, fromProvider, nativeChunk, clientChunk }) {
+export function recordStreamChunkUsage({ requestId, model, provider, providerUuid, providerName, accountIdentity, fromProvider, nativeChunk, clientChunk }) {
     if (!requestId) return;
-    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream: true });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, accountIdentity, fromProvider, isStream: true });
     const prevTotalTokens = state.usage.totalTokens;
     const prevCachedTokens = state.usage.cachedTokens;
     state.hasResponse = true;
@@ -791,13 +826,13 @@ export function recordStreamChunkUsage({ requestId, model, provider, providerUui
     }
 }
 
-export async function finalizeRequest({ requestId, model, provider, providerUuid, providerName, fromProvider, isStream }) {
+export async function finalizeRequest({ requestId, model, provider, providerUuid, providerName, accountIdentity, fromProvider, isStream }) {
     if (!requestId) {
         logger.warn(`${getTracePrefix(null)} Skip finalize: missing requestId`);
         return false;
     }
 
-    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, fromProvider, isStream });
+    const state = getPendingRequest(requestId, { model, provider, providerUuid, providerName, accountIdentity, fromProvider, isStream });
     
     // 防重逻辑：如果该请求已经处理过速率统计，则直接删除并返回
     if (state.rateRecorded) {
@@ -819,6 +854,7 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     const normalizedProvider = state.provider || provider || 'unknown';
     const normalizedModel = state.model || model || 'unknown';
     const normalizedProviderUuid = state.providerUuid || providerUuid || null;
+    const normalizedAccountIdentity = state.accountIdentity || accountIdentity || null;
     const normalizedProviderName = state.providerName || providerName || null;
     
     const usage = {
@@ -833,18 +869,18 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     applyUsage(ensureProviderStore(normalizedProvider).summary, usage, timestamp);
     applyUsage(ensureModelStore(normalizedProvider, normalizedModel), usage, timestamp);
 
-    const accountStore = ensureAccountStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName);
+    const accountStore = ensureAccountStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedAccountIdentity);
     if (accountStore) {
         applyUsage(accountStore.summary, usage, timestamp);
-        applyUsage(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel), usage, timestamp);
-        recordAccountUsageEvent(normalizedProvider, normalizedProviderUuid, usage, timestamp);
+        applyUsage(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel, normalizedAccountIdentity), usage, timestamp);
+        recordAccountUsageEvent(normalizedProvider, normalizedProviderUuid, usage, timestamp, normalizedAccountIdentity);
     }
 
     // 记录速率统计
     rateManager.record(`provider:${normalizedProvider}`, usage.totalTokens);
     rateManager.record(`model:${normalizedModel}`, usage.totalTokens);
     if (normalizedProviderUuid) {
-        rateManager.record(`account:${normalizedProvider}:${normalizedProviderUuid}`, usage.totalTokens);
+        rateManager.record(`account:${getAccountKey(normalizedProvider, normalizedProviderUuid, normalizedAccountIdentity)}`, usage.totalTokens);
     }
 
     const globalRates = rateManager.getGlobalStats();
@@ -862,7 +898,7 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     updatePeaks(ensureModelStore(normalizedProvider, normalizedModel));
     if (accountStore) {
         updatePeaks(accountStore.summary);
-        updatePeaks(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
+        updatePeaks(ensureAccountModelStore(normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel, normalizedAccountIdentity));
     }
 
     const dailyBlock = ensureDailyStore(dateKey);
@@ -871,12 +907,12 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     updatePeaks(dailyBlock);
     updatePeaks(ensureDailyModelStore(dateKey, normalizedModel));
 
-    const dailyAccountStore = ensureDailyAccountStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName);
+    const dailyAccountStore = ensureDailyAccountStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedAccountIdentity);
     if (dailyAccountStore) {
         applyUsage(dailyAccountStore.summary, usage, timestamp);
-        applyUsage(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel), usage, timestamp);
+        applyUsage(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel, normalizedAccountIdentity), usage, timestamp);
         updatePeaks(dailyAccountStore.summary);
-        updatePeaks(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel));
+        updatePeaks(ensureDailyAccountModelStore(dateKey, normalizedProvider, normalizedProviderUuid, normalizedProviderName, normalizedModel, normalizedAccountIdentity));
     }
 
     logger.info(`[Request Audit][${requestId}] Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | ${formatUsageWindow('5h', usageSnapshot.fiveHourPercent)} | ${formatUsageWindow('Weekly', usageSnapshot.weeklyPercent)} | UsageCacheAgeMs: ${usageSnapshot.cacheAgeMs ?? 'unavailable'} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Reasoning: ${usage.reasoningTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)}`);

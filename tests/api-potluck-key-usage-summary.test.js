@@ -34,6 +34,48 @@ afterEach(() => {
 });
 
 describe('api potluck key usage summary', () => {
+    test('aggregates Codex account buckets by account identity across provider UUIDs', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
+
+        const key = await createKey('Codex Client', 1000);
+        for (const [providerUuid, totalTokens] of [['old-provider-uuid', 1100], ['new-provider-uuid', 2200]]) {
+            await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+                requestCount: 1,
+                promptTokens: totalTokens - 100,
+                completionTokens: 100,
+                totalTokens
+            }, `req-${providerUuid}`, {
+                providerUuid,
+                providerName: 'user@example.com',
+                accountIdentity: 'acct-chatgpt-123',
+                timestamp: '2026-06-22T02:15:30.000Z'
+            });
+        }
+
+        const [listedKey] = await listKeys();
+        const stats = await getStats();
+        const accountKey = 'openai-codex-oauth:acct-chatgpt-123';
+        const dayAccounts = listedKey.usageHistory['2026-06-22'].accounts;
+
+        expect(Object.keys(dayAccounts)).toEqual([accountKey]);
+        expect(dayAccounts[accountKey]).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'acct-chatgpt-123',
+            accountIdentity: 'acct-chatgpt-123',
+            providerName: 'user@example.com',
+            providerUuids: ['old-provider-uuid', 'new-provider-uuid']
+        });
+        expect(dayAccounts[accountKey].summary).toMatchObject({
+            requestCount: 2,
+            totalTokens: 3300
+        });
+        expect(stats.usageHistory['2026-06-22'].accounts[accountKey].summary).toMatchObject({
+            requestCount: 2,
+            totalTokens: 3300
+        });
+    });
+
     test('listKeys weekly usage only includes the latest seven calendar days', async () => {
         jest.setSystemTime(new Date('2026-06-16T11:04:05.689Z'));
         const { createKey, incrementUsage, listKeys } = await loadKeyManager();

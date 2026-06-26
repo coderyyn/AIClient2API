@@ -319,9 +319,18 @@ function getAccountUsageKey(providerType, uuid) {
 function updateAccountUsageSummaryCache(summary) {
     if (!summary?.accounts) return;
     const next = new Map();
+    const addIndex = (key, account) => {
+        if (key && !next.has(key)) next.set(key, account);
+    };
     summary.accounts.forEach(account => {
-        const key = account.accountKey || getAccountUsageKey(account.provider, account.providerUuid);
-        if (key) next.set(key, account);
+        addIndex(account.accountKey, account);
+        addIndex(getAccountUsageKey(account.provider, account.providerUuid), account);
+        if (account.accountIdentity) {
+            addIndex(getAccountUsageKey(account.provider, account.accountIdentity), account);
+        }
+        (account.providerUuids || []).forEach(uuid => {
+            addIndex(getAccountUsageKey(account.provider, uuid), account);
+        });
     });
     accountUsageSummaryByKey = next;
     accountUsageSummaryMeta = {
@@ -331,9 +340,18 @@ function updateAccountUsageSummaryCache(summary) {
     };
 }
 
-function getAccountUsageSummary(providerType, uuid) {
-    const key = getAccountUsageKey(providerType, uuid);
-    return key ? accountUsageSummaryByKey.get(key) || null : null;
+function getAccountUsageSummary(providerType, instance = {}) {
+    const candidates = [
+        instance.codexAccountKey,
+        instance.codexAccountId,
+        instance.uuid
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+        const key = getAccountUsageKey(providerType, candidate);
+        const summary = key ? accountUsageSummaryByKey.get(key) : null;
+        if (summary) return summary;
+    }
+    return null;
 }
 
 function canUseCodexRateLimitReset(rateLimitResetCredits) {
@@ -534,7 +552,7 @@ function createInstanceUsageCard(instance, providerType) {
     card.setAttribute('data-uuid', instance.uuid);
 
     const usage = instance.usage || {};
-    const accountUsageSummary = getAccountUsageSummary(providerType, instance.uuid);
+    const accountUsageSummary = getAccountUsageSummary(providerType, instance);
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
     const displayName = user.email || instance.name || instance.uuid;
@@ -719,6 +737,10 @@ function renderAccountUsageSummary(accountSummary) {
     section.className = 'usage-section account-usage-summary';
     const source = accountUsageSummaryMeta?.source || 'potluck/model-usage-stats';
     const updatedAt = accountUsageSummaryMeta?.updatedAt ? formatDate(accountUsageSummaryMeta.updatedAt) : '--';
+    const providerCount = Array.isArray(accountSummary.providerUuids)
+        ? accountSummary.providerUuids.filter(Boolean).length
+        : 0;
+    const identityLabel = accountSummary.accountIdentity || accountSummary.providerUuid || '';
     section.innerHTML = `
         <div class="account-usage-source-row">
             <div class="account-usage-source">
@@ -730,8 +752,9 @@ function renderAccountUsageSummary(accountSummary) {
         </div>
         <div class="account-usage-summary-title">
             <span><i class="fas fa-database"></i> 真实使用</span>
-            <small>tokens / requests</small>
+            <small>${providerCount > 1 ? `${providerCount} providers · ` : ''}tokens / requests</small>
         </div>
+        ${identityLabel ? `<div class="account-usage-identity" title="${escapeHtml(identityLabel)}"><i class="fas fa-fingerprint"></i> ${escapeHtml(identityLabel)}</div>` : ''}
         <div class="account-usage-period-grid">
             ${renderAccountUsagePeriod('今日', accountSummary.today)}
             ${renderAccountUsagePeriod('本周', accountSummary.week)}

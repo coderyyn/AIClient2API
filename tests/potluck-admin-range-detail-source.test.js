@@ -58,4 +58,14 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('isCodexOauthAccount(account)');
         expect(source).toContain('Object.entries(day.accounts || {})');
     });
+
+    test('admin provider account tree preserves Codex account identity metadata', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('accountIdentity: account.accountIdentity ||');
+        expect(source).toContain('providerUuids: Array.isArray(account.providerUuids)');
+        expect(source).toContain('account?.providerName || account?.accountIdentity');
+        expect(source).toContain('const providerCount = Array.isArray(account.providerUuids) ? account.providerUuids.length : 0');
+        expect(source).toContain('providers`');
+    });
 });

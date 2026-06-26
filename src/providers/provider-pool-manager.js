@@ -243,7 +243,8 @@ function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = nul
     }
 
     try {
-        const usage = getAccountTokenUsageSummary(providerType, uuid, {
+        const tokenUsageIdentity = config.codexAccountKey || config.codexAccountId || uuid;
+        const usage = getAccountTokenUsageSummary(providerType, tokenUsageIdentity, {
             rolling5hTokenLimit: max5hTokens,
             weeklyTokenLimit: maxWeeklyTokens
         });

@@ -32,6 +32,41 @@ export function extractCodexCredentialDisplayName(credentialData, fallback = '')
     return cleanString(fallback);
 }
 
+export function extractCodexCredentialIdentity(credentialData) {
+    if (!credentialData || typeof credentialData !== 'object') {
+        return {
+            codexAccountKey: '',
+            codexAccountId: '',
+            codexEmail: ''
+        };
+    }
+
+    const authClaims = credentialData?.claims?.['https://api.openai.com/auth']
+        || credentialData?.id_token_claims?.['https://api.openai.com/auth']
+        || credentialData?.auth?.['https://api.openai.com/auth']
+        || {};
+    const codexAccountId = cleanString(
+        credentialData.account_id
+        || credentialData.chatgpt_account_id
+        || authClaims.chatgpt_account_id
+        || credentialData?.profile?.account_id
+        || credentialData?.user?.account_id
+    );
+    const codexEmail = cleanString(
+        credentialData.email
+        || credentialData?.profile?.email
+        || credentialData?.extra?.email
+        || credentialData?.user?.email
+        || credentialData.name
+    ).toLowerCase();
+
+    return {
+        codexAccountKey: codexAccountId || codexEmail,
+        codexAccountId,
+        codexEmail
+    };
+}
+
 export async function readCodexCredentialDisplayName(filePath, fallback = '') {
     const resolvedPath = cleanString(filePath);
     if (!resolvedPath) {
@@ -44,5 +79,20 @@ export async function readCodexCredentialDisplayName(filePath, fallback = '') {
         return extractCodexCredentialDisplayName(data, fallback);
     } catch {
         return cleanString(fallback);
+    }
+}
+
+export async function readCodexCredentialIdentity(filePath) {
+    const resolvedPath = cleanString(filePath);
+    if (!resolvedPath) {
+        return extractCodexCredentialIdentity(null);
+    }
+
+    try {
+        const content = await fs.readFile(resolvedPath, 'utf8');
+        const data = JSON.parse(content);
+        return extractCodexCredentialIdentity(data);
+    } catch {
+        return extractCodexCredentialIdentity(null);
     }
 }

@@ -140,6 +140,9 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
         const instanceResult = {
             uuid: provider.uuid || 'unknown',
             name: getProviderDisplayName(provider, providerType),
+            codexAccountKey: provider.codexAccountKey || null,
+            codexAccountId: provider.codexAccountId || null,
+            codexEmail: provider.codexEmail || null,
             configFilePath: getProviderConfigFilePath(provider, providerType),
             isHealthy: provider.isHealthy !== false,
             isDisabled: provider.isDisabled === true,
@@ -282,6 +285,9 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
     const instanceResult = {
         uuid: provider.uuid || 'unknown',
         name: getProviderDisplayName(provider, providerType),
+        codexAccountKey: provider.codexAccountKey || null,
+        codexAccountId: provider.codexAccountId || null,
+        codexEmail: provider.codexEmail || null,
         configFilePath: getProviderConfigFilePath(provider, providerType),
         isHealthy: provider.isHealthy !== false,
         isDisabled: provider.isDisabled === true,

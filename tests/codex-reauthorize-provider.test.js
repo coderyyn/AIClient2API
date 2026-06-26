@@ -28,6 +28,7 @@ beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiclient2api-reauth-'));
     process.chdir(tempDir);
     fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'configs', 'codex'), { recursive: true });
 });
 
 afterEach(() => {
@@ -53,6 +54,12 @@ describe('Codex provider reauthorization', () => {
                 }
             ]
         }, null, 2));
+        fs.writeFileSync(path.join(tempDir, 'configs', 'codex', 'new.json'), JSON.stringify({
+            account_id: 'account-new',
+            email: 'primary@example.com',
+            access_token: 'access',
+            refresh_token: 'refresh'
+        }, null, 2));
 
         const config = { PROVIDER_POOLS_FILE_PATH: poolsPath };
 
@@ -70,6 +77,9 @@ describe('Codex provider reauthorization', () => {
         expect(provider).toMatchObject({
             uuid: 'codex-1',
             customName: 'primary@example.com',
+            codexAccountKey: 'account-new',
+            codexAccountId: 'account-new',
+            codexEmail: 'primary@example.com',
             providerWeight: 7,
             concurrencyLimit: 3,
             queueLimit: 11,

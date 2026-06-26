@@ -26,6 +26,57 @@ afterEach(() => {
 });
 
 describe('model usage account statistics', () => {
+    test('aggregates Codex account stats by account identity across provider reauthorization UUIDs', async () => {
+        const statsManager = await loadStatsManager();
+
+        for (const providerUuid of ['old-provider-uuid', 'new-provider-uuid']) {
+            const requestId = `req-${providerUuid}`;
+            statsManager.recordUnaryUsage({
+                requestId,
+                model: 'gpt-5.5',
+                provider: 'openai-codex-oauth',
+                providerUuid,
+                providerName: 'user@example.com',
+                accountIdentity: 'acct-chatgpt-123',
+                fromProvider: 'openai',
+                nativeResponse: {
+                    usage: {
+                        prompt_tokens: 1000,
+                        completion_tokens: 100,
+                        total_tokens: 1100
+                    }
+                }
+            });
+
+            await statsManager.finalizeRequest({
+                requestId,
+                model: 'gpt-5.5',
+                provider: 'openai-codex-oauth',
+                providerUuid,
+                providerName: 'user@example.com',
+                accountIdentity: 'acct-chatgpt-123',
+                fromProvider: 'openai',
+                isStream: false
+            });
+        }
+
+        const stats = await statsManager.getStats();
+        const accountKey = 'openai-codex-oauth:acct-chatgpt-123';
+
+        expect(Object.keys(stats.accounts).filter(key => key.startsWith('openai-codex-oauth:'))).toEqual([accountKey]);
+        expect(stats.accounts[accountKey]).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'acct-chatgpt-123',
+            accountIdentity: 'acct-chatgpt-123',
+            providerName: 'user@example.com',
+            providerUuids: ['old-provider-uuid', 'new-provider-uuid']
+        });
+        expect(stats.accounts[accountKey].summary).toMatchObject({
+            requestCount: 2,
+            totalTokens: 2200
+        });
+    });
+
     test('records account, model, date, and cache hit ratio for a Codex provider instance', async () => {
         const statsManager = await loadStatsManager();
 

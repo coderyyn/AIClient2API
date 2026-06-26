@@ -53,26 +53,28 @@ const modelUsageStatsPlugin = {
     staticPaths: ['model-usage-stats.html'],
 
     hooks: {
-        async onUnaryResponse({ requestId, model, fromProvider, toProvider, providerUuid, providerName, nativeResponse, clientResponse }) {
+        async onUnaryResponse({ requestId, model, fromProvider, toProvider, providerUuid, providerName, accountIdentity, nativeResponse, clientResponse }) {
             recordUnaryUsage({
                 requestId,
                 model,
                 provider: toProvider,
                 providerUuid,
                 providerName,
+                accountIdentity,
                 fromProvider,
                 nativeResponse,
                 clientResponse
             });
         },
 
-        async onStreamChunk({ requestId, model, fromProvider, toProvider, providerUuid, providerName, nativeChunk, chunkToSend }) {
+        async onStreamChunk({ requestId, model, fromProvider, toProvider, providerUuid, providerName, accountIdentity, nativeChunk, chunkToSend }) {
             recordStreamChunkUsage({
                 requestId,
                 model,
                 provider: toProvider,
                 providerUuid,
                 providerName,
+                accountIdentity,
                 fromProvider,
                 nativeChunk,
                 clientChunk: chunkToSend
@@ -86,6 +88,7 @@ const modelUsageStatsPlugin = {
                 provider: config.toProvider,
                 providerUuid: config.providerUuid,
                 providerName: config.providerName,
+                accountIdentity: config.accountIdentity,
                 fromProvider: config.fromProvider,
                 isStream: config.isStream
             });
