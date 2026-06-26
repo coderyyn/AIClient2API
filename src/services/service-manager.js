@@ -191,10 +191,6 @@ export async function replaceProviderCredentialPath(config, options = {}) {
 
     const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
     let updatedProvider = null;
-    let previousCredentialPath = null;
-    let nextCredentialPath = null;
-
-    logger.info(`[Auto-Link] Reauthorization path replace requested: provider=${providerType}/${providerUuid}, newPath=${formatSystemPath(credPath)}, poolsFile=${filePath}`);
 
     await withFileLock(filePath, async () => {
         const providerPools = fs.existsSync(filePath)
@@ -204,15 +200,12 @@ export async function replaceProviderCredentialPath(config, options = {}) {
         const providerIndex = providers.findIndex(provider => provider.uuid === providerUuid);
 
         if (providerIndex === -1) {
-            logger.error(`[Auto-Link] Reauthorization target provider not found: provider=${providerType}/${providerUuid}, providersInType=${providers.length}`);
             throw new Error(`Provider not found: ${providerType}/${providerUuid}`);
         }
 
-        previousCredentialPath = providers[providerIndex][mapping.credPathKey] || null;
-        nextCredentialPath = formatSystemPath(credPath);
         updatedProvider = {
             ...providers[providerIndex],
-            [mapping.credPathKey]: nextCredentialPath,
+            [mapping.credPathKey]: formatSystemPath(credPath),
             isHealthy: true,
             needsRefresh: false,
             errorCount: 0,
@@ -232,13 +225,11 @@ export async function replaceProviderCredentialPath(config, options = {}) {
         }
     });
 
-    logger.info(`[Auto-Link] Reauthorized provider ${providerType}/${providerUuid} with new credential path: oldPath=${previousCredentialPath || 'none'}, newPath=${nextCredentialPath || 'none'}, customName=${updatedProvider?.customName || 'none'}`);
+    logger.info(`[Auto-Link] Reauthorized provider ${providerType}/${providerUuid} with new credential path`);
     return {
         updated: true,
         providerType,
         providerUuid,
-        oldCredentialPath: previousCredentialPath,
-        newCredentialPath: nextCredentialPath,
         provider: updatedProvider
     };
 }

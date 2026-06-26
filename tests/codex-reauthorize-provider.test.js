@@ -66,8 +66,6 @@ describe('Codex provider reauthorization', () => {
         const provider = saved['openai-codex-oauth'][0];
 
         expect(result.updated).toBe(true);
-        expect(result.oldCredentialPath.replace(/\\/g, '/').replace(/^\.\//, '')).toBe('configs/codex/old.json');
-        expect(result.newCredentialPath.replace(/\\/g, '/').replace(/^\.\//, '')).toBe('configs/codex/new.json');
         expect(provider.CODEX_OAUTH_CREDS_FILE_PATH.replace(/\\/g, '/').replace(/^\.\//, '')).toBe('configs/codex/new.json');
         expect(provider).toMatchObject({
             uuid: 'codex-1',

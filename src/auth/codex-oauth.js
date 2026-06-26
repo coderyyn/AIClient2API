@@ -39,17 +39,6 @@ function sanitizeCodexCredentialFilenamePart(value) {
     return sanitized || 'default';
 }
 
-function maskOAuthState(state) {
-    if (!state || typeof state !== 'string') return 'none';
-    if (state.length <= 8) return `${state.slice(0, 2)}...`;
-    return `${state.slice(0, 6)}...${state.slice(-4)}`;
-}
-
-function safePathForLog(filePath) {
-    if (!filePath || typeof filePath !== 'string') return '';
-    return filePath.replace(/\\/g, '/').replace(process.cwd().replace(/\\/g, '/'), '').replace(/^\/+/, '');
-}
-
 /**
  * 关闭指定端口的活动服务器
  */
@@ -551,8 +540,6 @@ class CodexAuth {
             credsPath = path.join(targetDir, filename);
         }
 
-        logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Preparing to save credentials: email=${email}, targetPath=${safePathForLog(credsPath)}, usingConfiguredPath=${Boolean(this.config.CODEX_OAUTH_CREDS_FILE_PATH)}`);
-
         try {
             const credsDir = path.dirname(credsPath);
             await fs.promises.mkdir(credsDir, { recursive: true });
@@ -918,24 +905,19 @@ export async function refreshCodexTokensWithRetry(refreshToken, config = {}, max
 }
 
 async function persistCodexOAuthCredentials(credentials, targetProviderUuid = null, providerDefaults = {}) {
-    logger.info(`[Codex Auth] Persisting OAuth credentials: email=${credentials.email || 'unknown'}, relativePath=${credentials.relativePath || 'unknown'}, targetProviderUuid=${targetProviderUuid || 'none'}, hasProviderDefaults=${Object.keys(providerDefaults || {}).length > 0}`);
     if (targetProviderUuid) {
-        const result = await replaceProviderCredentialPath(CONFIG, {
+        return replaceProviderCredentialPath(CONFIG, {
             providerType: 'openai-codex-oauth',
             providerUuid: targetProviderUuid,
             credPath: credentials.relativePath
         });
-        logger.info(`[Codex Auth] Reauthorization persisted to provider: targetProviderUuid=${targetProviderUuid}, relativePath=${credentials.relativePath || 'unknown'}, updated=${Boolean(result?.updated)}`);
-        return result;
     }
 
-    const result = await autoLinkProviderConfigs(CONFIG, {
+    return autoLinkProviderConfigs(CONFIG, {
         onlyCurrentCred: true,
         credPath: credentials.relativePath,
         providerDefaults
     });
-    logger.info(`[Codex Auth] OAuth credentials auto-link completed: relativePath=${credentials.relativePath || 'unknown'}`);
-    return result;
 }
 
 function resolveTargetProviderConfig(currentConfig, targetProviderUuid) {
@@ -974,7 +956,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
     });
 
     try {
-        logger.info(`[Codex Auth] Generating OAuth URL: targetProviderUuid=${targetProviderUuid || 'none'}, targetFound=${Boolean(targetProviderConfig?.uuid)}, selectedProxyId=${selectedProxyId || 'none'}, requestHost=${options.requestHost || 'none'}`);
+        logger.info('[Codex Auth] Generating OAuth URL...');
 
         // 清理所有旧的会话和服务器
         if (global.codexOAuthSessions && global.codexOAuthSessions.size > 0) {
@@ -1025,7 +1007,6 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
         };
         
         global.codexOAuthSessions.set(sessionId, session);
-        logger.info(`[Codex Auth] OAuth session stored: state=${maskOAuthState(sessionId)}, targetProviderUuid=${targetProviderUuid || 'none'}, proxyId=${selectedProxyId || 'none'}, redirectUri=${auth.redirectUri || auth.getRedirectUri()}`);
 
         // 启动轮询日志
         pollTimer = setInterval(() => {
@@ -1057,11 +1038,11 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
             }
             
             try {
-                logger.info(`[Codex Auth] Received auth callback event: state=${maskOAuthState(result.state)}, expectedState=${maskOAuthState(sessionId)}, targetProviderUuid=${targetProviderUuid || 'none'}`);
+                logger.info('[Codex Auth] Received auth callback, completing OAuth flow...');
                 
                 const session = global.codexOAuthSessions.get(sessionId);
                 if (!session) {
-                    logger.error(`[Codex Auth] Session not found for callback event: state=${maskOAuthState(sessionId)}`);
+                    logger.error('[Codex Auth] Session not found');
                     return;
                 }
 
@@ -1084,9 +1065,9 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
 
                 await persistCodexOAuthCredentials(credentials, targetProviderUuid, providerDefaults);
 
-                logger.info(`[Codex Auth] OAuth flow completed successfully: targetProviderUuid=${targetProviderUuid || 'none'}, email=${credentials.email || 'unknown'}, relativePath=${credentials.relativePath || 'unknown'}`);
+                logger.info('[Codex Auth] OAuth flow completed successfully');
             } catch (error) {
-                logger.error(`[Codex Auth] Failed to complete OAuth flow: targetProviderUuid=${targetProviderUuid || 'none'}, state=${maskOAuthState(sessionId)}, error=${error.message}`);
+                logger.error('[Codex Auth] Failed to complete OAuth flow:', error.message);
                 
                 // 广播认证失败事件
                 broadcastEvent('oauth_error', {
@@ -1163,15 +1144,13 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
 export async function handleCodexOAuthCallback(code, state) {
     try {
         if (!global.codexOAuthSessions || !global.codexOAuthSessions.has(state)) {
-            const activeSessions = global.codexOAuthSessions ? global.codexOAuthSessions.size : 0;
-            logger.warn(`[Codex Auth] OAuth callback session miss: state=${maskOAuthState(state)}, activeSessions=${activeSessions}. Refusing credential fallback because OAuth code requires the original PKCE verifier and is one-time use.`);
             throw new Error('Invalid or expired OAuth session');
         }
 
         const session = global.codexOAuthSessions.get(state);
         const { auth, state: expectedState, pkce, targetProviderUuid = null, proxyId = null } = session;
 
-        logger.info(`[Codex Auth] Processing OAuth callback: state=${maskOAuthState(state)}, targetProviderUuid=${targetProviderUuid || 'none'}, proxyId=${proxyId || 'none'}, hasPkce=${Boolean(pkce?.verifier)}`);
+        logger.info('[Codex Auth] Processing OAuth callback...');
 
         // 完成 OAuth 流程
         const result = await auth.completeOAuthFlow(code, state, expectedState, pkce);
@@ -1192,7 +1171,7 @@ export async function handleCodexOAuthCallback(code, state) {
 
         await persistCodexOAuthCredentials(result, targetProviderUuid, proxyId ? { PROXY_ID: proxyId } : {});
 
-        logger.info(`[Codex Auth] OAuth callback processed successfully: targetProviderUuid=${targetProviderUuid || 'none'}, email=${result.email || 'unknown'}, relativePath=${result.relativePath || 'unknown'}`);
+        logger.info('[Codex Auth] OAuth callback processed successfully');
 
         return {
             success: true,
