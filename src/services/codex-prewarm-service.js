@@ -3,6 +3,10 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { MODEL_PROVIDER } from '../utils/common.js';
 import { atomicWriteFile } from '../utils/file-lock.js';
+import {
+    getCodexPlanStatusForProvider,
+    readFreshUsageCacheSync
+} from '../utils/codex-plan.js';
 import logger from '../utils/logger.js';
 
 const DEFAULT_PREWARM_TIMES = ['06:30', '11:30'];
@@ -169,12 +173,18 @@ export class CodexPrewarmService {
 
     getEnabledCodexProviders() {
         const providerStatus = this.providerPoolManager?.providerStatus || {};
+        const usageCache = readFreshUsageCacheSync();
         const providers = [];
         for (const [providerType, pool] of Object.entries(providerStatus)) {
             if (!isCodexProviderType(providerType) || !Array.isArray(pool)) continue;
             for (const providerStatusItem of pool) {
                 const provider = providerStatusItem.config || providerStatusItem;
                 if (!provider || provider.isDisabled === true) continue;
+                const planStatus = getCodexPlanStatusForProvider(providerType, provider.uuid, usageCache);
+                if (!planStatus.allowed) {
+                    this.log.info(`[CodexPrewarm] Skipping ${provider.customName || provider.uuid || 'unknown'}: plan ${planStatus.plan} is not eligible`);
+                    continue;
+                }
                 providers.push({
                     providerType,
                     provider

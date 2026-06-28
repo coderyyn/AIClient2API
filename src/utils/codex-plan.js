@@ -1,0 +1,81 @@
+import fs from 'fs';
+import path from 'path';
+import { MODEL_PROVIDER } from './constants.js';
+
+const DEFAULT_USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const ALLOWED_CODEX_PLANS = new Set(['pro', 'plus']);
+
+function isCodexProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function isUsageCacheFresh(cache, maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS) {
+    const cachedAt = Date.parse(cache?.timestamp || '');
+    return Number.isFinite(cachedAt) && Date.now() - cachedAt <= maxAgeMs;
+}
+
+export function readFreshUsageCacheSync(maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS) {
+    const usageCachePath = path.join(process.cwd(), 'configs', 'usage-cache.json');
+    try {
+        if (!fs.existsSync(usageCachePath)) return null;
+        const cache = JSON.parse(fs.readFileSync(usageCachePath, 'utf8'));
+        return isUsageCacheFresh(cache, maxAgeMs) ? cache : null;
+    } catch {
+        return null;
+    }
+}
+
+export function normalizeCodexPlan(plan) {
+    if (plan === undefined || plan === null || plan === '') return 'unknown';
+    const value = String(plan).trim().toLowerCase();
+    if (!value) return 'unknown';
+    if (/\bfree\b/.test(value)) return 'free';
+    if (/\bplus\b/.test(value) || value === '+') return 'plus';
+    if (/\bpro\b/.test(value) || value.includes('pro+')) return 'pro';
+    return 'unknown';
+}
+
+export function isCodexPlanAllowed(plan) {
+    return ALLOWED_CODEX_PLANS.has(normalizeCodexPlan(plan));
+}
+
+export function getCachedCodexUsageInstance(providerType, uuid, usageCache) {
+    if (!uuid || !usageCache?.providers) return null;
+
+    const providerCache = usageCache.providers[providerType]
+        || (isCodexProviderType(providerType) ? usageCache.providers[MODEL_PROVIDER.CODEX_API] : null);
+    const instances = Array.isArray(providerCache?.instances) ? providerCache.instances : [];
+    return instances.find(instance => {
+        const instanceUuid = instance?.uuid || instance?.config?.uuid || instance?.providerUuid;
+        return instanceUuid === uuid;
+    }) || null;
+}
+
+export function getCodexPlanFromUsage(usage) {
+    const candidates = [
+        usage?.summary?.plan,
+        usage?.summary?.planType,
+        usage?.plan_type,
+        usage?.planType,
+        usage?.raw?.plan_type,
+        usage?.raw?.planType
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizeCodexPlan(candidate);
+        if (normalized !== 'unknown') {
+            return normalized;
+        }
+    }
+    return 'unknown';
+}
+
+export function getCodexPlanStatusForProvider(providerType, uuid, usageCache) {
+    const instance = getCachedCodexUsageInstance(providerType, uuid, usageCache);
+    const plan = getCodexPlanFromUsage(instance?.usage);
+    return {
+        plan,
+        allowed: isCodexPlanAllowed(plan),
+        hasUsage: Boolean(instance?.usage)
+    };
+}

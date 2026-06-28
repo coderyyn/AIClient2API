@@ -15,6 +15,11 @@ import {
 } from './provider-models.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
+import {
+    getCachedCodexUsageInstance,
+    getCodexPlanStatusForProvider,
+    readFreshUsageCacheSync
+} from '../utils/codex-plan.js';
 
 function getCustomModelAliasesForProvider(config, providerType) {
     const customModels = Array.isArray(config?.customModels) ? config.customModels : [];
@@ -107,7 +112,6 @@ function modelMatchesAnyPattern(model, patterns) {
     return patterns.some(pattern => globPatternToRegExp(pattern).test(model));
 }
 
-const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const CODEX_QUOTA_BUCKET = {
     GENERAL: 'general',
     CODEX_53: 'codex53'
@@ -136,34 +140,8 @@ function normalizePercentValue(value) {
     return Math.min(parsed, 100);
 }
 
-function isUsageCacheFresh(cache, maxAgeMs = USAGE_CACHE_TTL_MS) {
-    const cachedAt = Date.parse(cache?.timestamp || '');
-    return Number.isFinite(cachedAt) && Date.now() - cachedAt <= maxAgeMs;
-}
-
-function readUsageCacheSync() {
-    const usageCachePath = path.join(process.cwd(), 'configs', 'usage-cache.json');
-    try {
-        if (!fs.existsSync(usageCachePath)) return null;
-        const cache = JSON.parse(fs.readFileSync(usageCachePath, 'utf8'));
-        return isUsageCacheFresh(cache) ? cache : null;
-    } catch {
-        return null;
-    }
-}
-
 function getCachedCodexUsageForProvider(providerType, uuid, usageCache) {
-    if (!uuid || !usageCache?.providers) return null;
-
-    const providerCache = usageCache.providers[providerType]
-        || (isCodexProviderType(providerType) ? usageCache.providers[MODEL_PROVIDER.CODEX_API] : null);
-    const instances = Array.isArray(providerCache?.instances) ? providerCache.instances : [];
-    const matched = instances.find(instance => {
-        const instanceUuid = instance?.uuid || instance?.config?.uuid || instance?.providerUuid;
-        return instanceUuid === uuid;
-    });
-
-    return matched?.usage || null;
+    return getCachedCodexUsageInstance(providerType, uuid, usageCache)?.usage || null;
 }
 
 function getUsageItemPercent(usage, itemId) {
@@ -1674,7 +1652,7 @@ export class ProviderPoolManager {
     _filterCodexProvidersByTokenQuota(providerType, providers, requestedModel = null) {
         let limitedCount = 0;
         const allowed = [];
-        const usageCache = readUsageCacheSync();
+        const usageCache = readFreshUsageCacheSync();
         const bucket = resolveCodexQuotaBucket(
             requestedModel,
             toStringArray(this.globalConfig?.CODEX_53_QUOTA_MODEL_PATTERNS || this.globalConfig?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS)
@@ -1682,6 +1660,14 @@ export class ProviderPoolManager {
         const now = Date.now();
 
         for (const provider of providers) {
+            const uuid = provider.config?.uuid || provider.uuid;
+            const planStatus = getCodexPlanStatusForProvider(providerType, uuid, usageCache);
+            if (!planStatus.allowed) {
+                limitedCount += 1;
+                this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: plan ${planStatus.plan} is not eligible for routing`);
+                continue;
+            }
+
             if (isCodexQuotaBucketCoolingDown(provider.config, bucket, now)) {
                 limitedCount += 1;
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${bucket} quota bucket is cooling down`);

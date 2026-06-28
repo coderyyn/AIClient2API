@@ -93,12 +93,89 @@ afterEach(() => {
 });
 
 describe('provider pool Codex token quota', () => {
+    test('only selects Codex providers with Pro or Plus plan from usage cache', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'FREE' },
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    summary: { plan: 'ChatGPT Plus' },
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager();
+
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
+
+        expect(selected.uuid).toBe('zzz-codex-ok');
+    });
+
+    test('does not select Codex providers without a trusted Pro or Plus usage plan', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'FREE' },
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({ ok: { uuid: 'zzz-codex-unknown' } });
+
+        await expect(manager.selectProvider('openai-codex-oauth', 'gpt-5.5'))
+            .rejects.toMatchObject({ status: 429 });
+    });
+
+    test('allows Codex Pro plan accounts', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({ ok: { isDisabled: true } });
+
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
+
+        expect(selected.uuid).toBe('aaa-codex-over');
+    });
+
     test('skips Codex accounts whose general official 5h quota exceeds the general percent limit without marking provider globally unhealthy', async () => {
         writeCodexUsageCache([
             {
                 uuid: 'aaa-codex-over',
                 success: true,
                 usage: {
+                    summary: { plan: 'Pro' },
                     items: [
                         { id: 'primary_window', percent: 81, unit: 'percent' },
                         { id: 'secondary_window', percent: 20, unit: 'percent' },
@@ -111,6 +188,7 @@ describe('provider pool Codex token quota', () => {
                 uuid: 'zzz-codex-ok',
                 success: true,
                 usage: {
+                    summary: { plan: 'Plus' },
                     items: [
                         { id: 'primary_window', percent: 40, unit: 'percent' },
                         { id: 'secondary_window', percent: 20, unit: 'percent' }
@@ -137,6 +215,7 @@ describe('provider pool Codex token quota', () => {
                 uuid: 'aaa-codex-over',
                 success: true,
                 usage: {
+                    summary: { plan: 'Pro' },
                     items: [
                         { id: 'primary_window', percent: 81, unit: 'percent' },
                         { id: 'secondary_window', percent: 20, unit: 'percent' },
@@ -149,6 +228,7 @@ describe('provider pool Codex token quota', () => {
                 uuid: 'zzz-codex-ok',
                 success: true,
                 usage: {
+                    summary: { plan: 'Plus' },
                     items: [
                         { id: 'primary_window', percent: 20, unit: 'percent' },
                         { id: 'secondary_window', percent: 70, unit: 'percent' },
@@ -172,6 +252,7 @@ describe('provider pool Codex token quota', () => {
                 uuid: 'aaa-codex-over',
                 success: true,
                 usage: {
+                    summary: { plan: 'Pro' },
                     items: [
                         { id: 'primary_window', percent: 20, unit: 'percent' },
                         { id: 'secondary_window', percent: 20, unit: 'percent' },
@@ -184,6 +265,7 @@ describe('provider pool Codex token quota', () => {
                 uuid: 'zzz-codex-ok',
                 success: true,
                 usage: {
+                    summary: { plan: 'Plus' },
                     items: [
                         { id: 'primary_window', percent: 85, unit: 'percent' },
                         { id: 'secondary_window', percent: 20, unit: 'percent' },

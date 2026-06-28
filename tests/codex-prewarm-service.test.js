@@ -27,6 +27,18 @@ function createPoolManager() {
     };
 }
 
+function writeUsageCache(instances) {
+    fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'configs', 'usage-cache.json'), JSON.stringify({
+        timestamp: new Date().toISOString(),
+        providers: {
+            'openai-codex-oauth': {
+                instances
+            }
+        }
+    }, null, 2), 'utf8');
+}
+
 beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiclient2api-codex-prewarm-'));
     process.chdir(tempDir);
@@ -42,6 +54,10 @@ afterEach(() => {
 
 describe('codex prewarm service', () => {
     test('defaults to 06:30 and 11:30 Asia/Shanghai with two attempts per enabled Codex account', async () => {
+        writeUsageCache([
+            { uuid: 'codex-a', success: true, usage: { summary: { plan: 'Pro' } } },
+            { uuid: 'codex-b', success: true, usage: { summary: { plan: 'Plus' } } }
+        ]);
         const { CodexPrewarmService, normalizePrewarmConfig } = await loadPrewarmService();
         const prewarmAccount = jest.fn().mockResolvedValue({ ok: true });
         const service = new CodexPrewarmService({
@@ -62,6 +78,10 @@ describe('codex prewarm service', () => {
     });
 
     test('deduplicates the same account schedule slot after restart', async () => {
+        writeUsageCache([
+            { uuid: 'codex-a', success: true, usage: { summary: { plan: 'Pro' } } },
+            { uuid: 'codex-b', success: true, usage: { summary: { plan: 'Plus' } } }
+        ]);
         const { CodexPrewarmService, normalizePrewarmConfig } = await loadPrewarmService();
         const firstPrewarm = jest.fn().mockResolvedValue({ ok: true });
         const config = normalizePrewarmConfig({ CODEX_PREWARM_ENABLED: true });
@@ -100,5 +120,32 @@ describe('codex prewarm service', () => {
             reasoning: { effort: 'low' },
             store: false
         });
+    });
+
+    test('prewarms only Codex accounts with Pro or Plus plan from usage cache', async () => {
+        writeUsageCache([
+            {
+                uuid: 'codex-a',
+                success: true,
+                usage: { summary: { plan: 'Pro' } }
+            },
+            {
+                uuid: 'codex-b',
+                success: true,
+                usage: { summary: { plan: 'FREE' } }
+            }
+        ]);
+        const { CodexPrewarmService, normalizePrewarmConfig } = await loadPrewarmService();
+        const prewarmAccount = jest.fn().mockResolvedValue({ ok: true });
+        const service = new CodexPrewarmService({
+            config: normalizePrewarmConfig({ CODEX_PREWARM_ENABLED: true }),
+            providerPoolManager: createPoolManager(),
+            prewarmAccount
+        });
+
+        await service.runDuePrewarm(new Date('2026-06-15T22:31:00.000Z'));
+
+        expect(prewarmAccount).toHaveBeenCalledTimes(2);
+        expect(prewarmAccount.mock.calls.map(([job]) => job.provider.uuid)).toEqual(['codex-a', 'codex-a']);
     });
 });
