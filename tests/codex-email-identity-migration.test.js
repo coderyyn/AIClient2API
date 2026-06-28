@@ -263,4 +263,62 @@ describe('Codex email identity migration', () => {
             eventCount: 0
         });
     });
+
+    test('uses explicit email identity overrides for historical orphan UUIDs', async () => {
+        writeJson('provider_pools.json', {});
+        writeJson('codex-email-identity-overrides.json', {
+            'openai-codex-oauth:orphan-uuid': 'User@Example.com',
+            'responses-uuid': 'user@example.com'
+        });
+        writeJson('model-usage-stats.json', {
+            updatedAt: '2026-06-28T10:00:00.000Z',
+            summary: { requestCount: 2, totalTokens: 300 },
+            providers: {},
+            accounts: {
+                'openai-codex-oauth:orphan-uuid': {
+                    provider: 'openai-codex-oauth',
+                    providerUuid: 'orphan-uuid',
+                    providerUuids: ['orphan-uuid'],
+                    summary: { requestCount: 1, totalTokens: 100 },
+                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 100 } }
+                },
+                'openaiResponses-custom:responses-uuid': {
+                    provider: 'openaiResponses-custom',
+                    providerUuid: 'responses-uuid',
+                    providerUuids: ['responses-uuid'],
+                    summary: { requestCount: 1, totalTokens: 200 },
+                    models: { 'gpt-5.4': { requestCount: 1, totalTokens: 200 } }
+                }
+            },
+            accountUsageEvents: {},
+            daily: {}
+        });
+
+        const { migrateCodexEmailIdentity } = await import('../src/scripts/migrate-codex-email-identity.js');
+        const result = await migrateCodexEmailIdentity({
+            configDir: tempDir,
+            now: new Date('2026-06-28T10:30:00.000Z')
+        });
+
+        const stats = readJson('model-usage-stats.json');
+        const accountKey = 'openai-codex-oauth:user@example.com';
+
+        expect(Object.keys(stats.accounts)).toEqual([accountKey]);
+        expect(stats.accounts[accountKey]).toMatchObject({
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
+            accountEmail: 'user@example.com',
+            providerUuids: ['orphan-uuid', 'responses-uuid']
+        });
+        expect(stats.accounts[accountKey].summary).toMatchObject({
+            requestCount: 2,
+            totalTokens: 300
+        });
+        expect(result.droppedUnmappedStats).toMatchObject({
+            accountKeys: [],
+            totalTokens: 0,
+            eventCount: 0
+        });
+        expect(fs.existsSync(path.join(result.backupDir, 'codex-email-identity-overrides.json'))).toBe(true);
+    });
 });

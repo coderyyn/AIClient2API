@@ -4,6 +4,7 @@ import path from 'path';
 
 const BACKUP_FILES = [
     'provider_pools.json',
+    'codex-email-identity-overrides.json',
     'model-usage-stats.json',
     'usage-cache.json',
     'api-potluck-data.json',
@@ -79,8 +80,14 @@ function createPermanentBackup(configDir, now) {
     return backupDir;
 }
 
-function buildProviderEmailIndex(providerPools = {}) {
+function buildProviderEmailIndex(providerPools = {}, emailOverrides = {}) {
     const index = new Map();
+    for (const [key, value] of Object.entries(emailOverrides || {})) {
+        const email = normalizeEmail(value);
+        if (!email) continue;
+        index.set(key, email);
+    }
+
     for (const [providerType, providers] of Object.entries(providerPools || {})) {
         if (!Array.isArray(providers)) continue;
         for (const provider of providers) {
@@ -370,6 +377,7 @@ function getPotluckTotals(potluckKeys = {}) {
 
 export async function migrateCodexEmailIdentity({ configDir = path.join(process.cwd(), 'configs'), now = new Date(), dryRun = false } = {}) {
     const providerPools = readJson(path.join(configDir, 'provider_pools.json'), {});
+    const emailOverrides = readJson(path.join(configDir, 'codex-email-identity-overrides.json'), {});
     const statsPath = path.join(configDir, 'model-usage-stats.json');
     const potluckKeysPath = path.join(configDir, 'api-potluck-keys.json');
     const stats = readJson(statsPath);
@@ -378,7 +386,7 @@ export async function migrateCodexEmailIdentity({ configDir = path.join(process.
     }
     const potluckKeys = readJson(potluckKeysPath, { keys: {} });
 
-    const providerEmailIndex = buildProviderEmailIndex(providerPools);
+    const providerEmailIndex = buildProviderEmailIndex(providerPools, emailOverrides);
     const totalsBefore = getTotals(stats);
     const statsMigration = migrateStats(stats, providerEmailIndex);
     const migratedStats = statsMigration.migrated;
