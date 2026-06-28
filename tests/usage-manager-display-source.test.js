@@ -91,4 +91,12 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('return provider.codexEmail || provider.CODEX_EMAIL || provider.email || null;');
         expect(source).toContain('codexEmail: getProviderCodexEmail(provider)');
     });
+    test('cached usage responses are enriched from current provider config metadata', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function enrichUsageResultsWithProviderConfig(results, currentConfig, providerPoolManager)');
+        expect(source).toContain('function enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager)');
+        expect(source).toContain('enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);');
+        expect(source).toContain('enrichProviderDataWithProviderConfig(providerType, usageResults, currentConfig, providerPoolManager);');
+    });
 });

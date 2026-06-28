@@ -444,6 +444,45 @@ function getProviderConfigFilePath(provider, providerType) {
     return null;
 }
 
+function enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager) {
+    if (!providerData?.instances || !Array.isArray(providerData.instances)) return providerData;
+
+    const providersByUuid = new Map(
+        loadProviderList(providerType, currentConfig, providerPoolManager)
+            .filter(provider => provider?.uuid)
+            .map(provider => [provider.uuid, provider])
+    );
+
+    providerData.instances = providerData.instances.map(instance => {
+        const provider = providersByUuid.get(instance?.uuid);
+        if (!provider) return instance;
+
+        return {
+            ...instance,
+            name: instance.name || getProviderDisplayName(provider, providerType),
+            codexAccountKey: instance.codexAccountKey || provider.codexAccountKey || null,
+            codexAccountId: instance.codexAccountId || provider.codexAccountId || null,
+            codexEmail: instance.codexEmail || getProviderCodexEmail(provider),
+            codexQuotaHealth: instance.codexQuotaHealth || provider.codexQuotaHealth || null,
+            configFilePath: instance.configFilePath || getProviderConfigFilePath(provider, providerType),
+            isHealthy: provider.isHealthy !== false,
+            isDisabled: provider.isDisabled === true
+        };
+    });
+
+    return providerData;
+}
+
+function enrichUsageResultsWithProviderConfig(results, currentConfig, providerPoolManager) {
+    if (!results?.providers) return results;
+
+    for (const [providerType, providerData] of Object.entries(results.providers)) {
+        enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager);
+    }
+
+    return results;
+}
+
 /**
  * 重新格式化用量结果（基于保存的原始数据）
  * 确保即使格式化逻辑改变，缓存数据也能以最新格式返回
@@ -586,11 +625,12 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
             const cachedData = await readUsageCache();
             if (cachedData) {
                 logger.info('[Usage API] Returning cached usage data');
-                usageResults = { ...cachedData, fromCache: true };
-                // 使用最新的格式化逻辑处理缓存的原始数据
-                reformatUsageResults(usageResults);
+                    usageResults = { ...cachedData, fromCache: true };
+                    // 使用最新的格式化逻辑处理缓存的原始数据
+                    reformatUsageResults(usageResults);
+                    enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);
+                }
             }
-        }
 
         if (!usageResults) {
             // 缓存不存在或需要刷新，重新查询
@@ -841,6 +881,7 @@ export async function handleGetProviderUsage(req, res, currentConfig, providerPo
                 const tempResults = { providers: { [providerType]: usageResults } };
                 reformatUsageResults(tempResults);
                 usageResults = tempResults.providers[providerType];
+                enrichProviderDataWithProviderConfig(providerType, usageResults, currentConfig, providerPoolManager);
             }
         }
         
