@@ -55,6 +55,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function renderProviderAccountRows(provider)');
         expect(source).toContain('provider-account-children');
         expect(source).toContain('account-sub');
+        expect(source).toContain('.account-sub {\n            display: none;');
         expect(source).toContain('isCodexOauthAccount(account)');
         expect(source).toContain('Object.entries(day.accounts || {})');
     });
@@ -66,7 +67,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('accountEmail: account.accountEmail ||');
         expect(source).toContain('providerUuids: Array.isArray(account.providerUuids)');
         expect(source).toContain('account?.accountEmail || account?.providerName');
-        expect(source).toContain('const providerCount = Array.isArray(account.providerUuids) ? account.providerUuids.length : 0');
-        expect(source).toContain('providers`');
+        expect(source).toContain('function isEmailLike(value)');
+        expect(source).toContain("return `${value.slice(0, 5)}...`;");
     });
 });

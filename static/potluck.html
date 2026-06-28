@@ -175,11 +175,16 @@
             border-radius: 14px;
             box-shadow: var(--shadow-sm);
         }
+        .provider-account-child .dist-info {
+            align-items: flex-start;
+            gap: 8px;
+        }
         .account-title {
             display: flex;
             align-items: center;
             min-width: 0;
             gap: 8px;
+            flex: 1 1 auto;
         }
         .account-dot {
             width: 8px;
@@ -189,7 +194,7 @@
             flex-shrink: 0;
         }
         .account-sub {
-            display: block;
+            display: none;
             margin: 0 0 6px 16px;
             color: var(--text-tertiary);
             font-size: 11px;
@@ -1495,8 +1500,15 @@
             return account?.accountEmail || account?.providerName || account?.accountIdentity || account?.providerUuid || fallbackKey.split(':').slice(1).join(':') || fallbackKey;
         }
 
+        function isEmailLike(value) {
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ''));
+        }
+
         function truncateAccountName(name, maxLength = 10) {
             const value = String(name || '');
+            if (isEmailLike(value)) {
+                return `${value.slice(0, 5)}...`;
+            }
             return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
         }
 
@@ -1550,9 +1562,6 @@
                 const barWidth = Math.max(1, Math.min(100, (tokens / providerTokens) * 100));
                 const displayName = getAccountDisplayName(account, account.key);
                 const shortName = truncateAccountName(displayName);
-                const providerCount = Array.isArray(account.providerUuids) ? account.providerUuids.length : 0;
-                const uuid = account.accountIdentity || account.providerUuid || account.key;
-                const uuidSuffix = providerCount > 1 ? ` · ${providerCount} providers` : '';
                 return `
                     <div class="provider-account-child">
                         <div class="dist-info">
@@ -1562,7 +1571,6 @@
                             </span>
                             <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
                         </div>
-                        <span class="account-sub" title="${escapeHtml(uuid)}">${escapeHtml(uuid)}${escapeHtml(uuidSuffix)}</span>
                         <div class="dist-info" style="margin-top: -2px;">
                             <span class="dist-count">${formatNumber(calls)} 次</span>
                         </div>

@@ -23,6 +23,7 @@ import {
     resetAllTokenStats
 } from './key-manager.js';
 import { getRequestBody } from '../../utils/common.js';
+import { extractCodexCredentialIdentity } from '../../utils/codex-utils.js';
 import logger from '../../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
@@ -35,6 +36,19 @@ function sendJson(res, statusCode, data) {
     res.end(JSON.stringify(data));
 }
 
+function readProviderCredentialEmail(provider) {
+    const credPath = provider?.CODEX_OAUTH_CREDS_FILE_PATH;
+    if (!credPath) return '';
+    const resolvedPath = path.isAbsolute(credPath) ? credPath : path.join(process.cwd(), credPath);
+    if (!fs.existsSync(resolvedPath)) return '';
+    try {
+        const data = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+        return extractCodexCredentialIdentity(data).codexEmail || '';
+    } catch {
+        return '';
+    }
+}
+
 function loadProviderEmailIndex() {
     const index = new Map();
 
@@ -45,8 +59,10 @@ function loadProviderEmailIndex() {
             for (const [providerType, providers] of Object.entries(providerPools || {})) {
                 if (!Array.isArray(providers)) continue;
                 for (const provider of providers) {
-                    if (!provider?.uuid || !provider?.codexEmail) continue;
-                    index.set(`${providerType}:${provider.uuid}`, provider.codexEmail);
+                    if (!provider?.uuid) continue;
+                    const email = provider.codexEmail || readProviderCredentialEmail(provider);
+                    if (!email) continue;
+                    index.set(`${providerType}:${provider.uuid}`, email);
                 }
             }
         }
