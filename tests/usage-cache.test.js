@@ -81,4 +81,28 @@ describe('usage cache TTL', () => {
             }
         });
     });
+
+    test('can read stale cache explicitly as last-known usage fallback', async () => {
+        const now = new Date('2026-06-16T12:00:00.000Z');
+        writeCache({
+            timestamp: '2026-06-16T00:00:00.000Z',
+            providers: {
+                'openai-codex-oauth': {
+                    totalCount: 1,
+                    instances: [{ uuid: 'codex-a', success: true, usage: { summary: { usedPercent: 99 } } }]
+                }
+            }
+        });
+
+        const { readUsageCache } = await loadUsageCacheModule();
+
+        await expect(readUsageCache({ now, allowStale: true })).resolves.toMatchObject({
+            stale: true,
+            providers: {
+                'openai-codex-oauth': {
+                    instances: [{ uuid: 'codex-a', success: true }]
+                }
+            }
+        });
+    });
 });

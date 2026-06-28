@@ -39,6 +39,10 @@ export async function readUsageCache(options = {}) {
             const content = await fs.readFile(USAGE_CACHE_FILE, 'utf8');
             const cache = JSON.parse(content);
             if (!isUsageCacheFresh(cache, options)) {
+                if (options.allowStale) {
+                    logger.info('[Usage Cache] Returning stale usage data as last-known fallback');
+                    return { ...cache, stale: true };
+                }
                 logger.info('[Usage Cache] Cached usage data is stale, ignoring cache');
                 return null;
             }
@@ -69,13 +73,14 @@ export async function writeUsageCache(usageData) {
  * @param {string} providerType - 提供商类型
  * @returns {Promise<Object|null>} 缓存的用量数据
  */
-export async function readProviderUsageCache(providerType) {
-    const cache = await readUsageCache();
+export async function readProviderUsageCache(providerType, options = {}) {
+    const cache = await readUsageCache(options);
     if (cache && cache.providers && cache.providers[providerType]) {
         return {
             ...cache.providers[providerType],
             cachedAt: cache.timestamp,
-            fromCache: true
+            fromCache: true,
+            stale: cache.stale === true
         };
     }
     return null;

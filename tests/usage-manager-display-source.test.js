@@ -29,9 +29,23 @@ describe('usage manager display source regressions', () => {
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
 
         expect(usageApiSource).toContain('codexQuotaHealth: provider.codexQuotaHealth || null');
+        expect(usageApiSource).toContain('deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage)');
         expect(usageManagerSource).toContain('function renderCodexQuotaHealthBadges(instance, providerType)');
-        expect(usageManagerSource).toContain('通用额度');
-        expect(usageManagerSource).toContain('5.3额度');
+        expect(usageManagerSource).toContain("renderBadge('通用', quotaHealth.general)");
+        expect(usageManagerSource).toContain("renderBadge('5.3', quotaHealth.codex53)");
+        expect(usageManagerSource).not.toContain("renderBadge('通用额度'");
+        expect(usageManagerSource).not.toContain("renderBadge('5.3额度'");
         expect(usageManagerSource).toContain('renderCodexQuotaHealthBadges(instance, providerType)');
+    });
+
+    test('usage refresh failures keep last successful cached data visible', () => {
+        const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
+        const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(usageApiSource).toContain('mergeUsageResultsWithLastSuccessfulCache');
+        expect(usageApiSource).toContain('lastRefreshError');
+        expect(usageApiSource).toContain('refreshErrors');
+        expect(usageApiSource).toContain('readUsageCache({ maxAgeMs: null, allowStale: true })');
+        expect(usageManagerSource).toContain('showUsageRefreshErrors(data.refreshErrors)');
     });
 });

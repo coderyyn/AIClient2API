@@ -138,6 +138,7 @@ export async function refreshUsage() {
         
         const data = await response.json();
         updateAccountUsageSummaryCache(accountUsageSummary);
+        showUsageRefreshErrors(data.refreshErrors);
         
         // 渲染数据
         renderUsageData(data, document.getElementById('usageContent'));
@@ -170,6 +171,7 @@ export async function refreshSingleInstanceUsage(providerType, uuid, displayName
         }
         
         const data = await response.json();
+        showUsageRefreshErrors(data.refreshErrors);
         
         // 局部更新该实例的卡片
         if (data && data.uuid) {
@@ -275,6 +277,7 @@ export async function refreshProviderUsage(providerType) {
         }
         const data = await response.json();
         updateAccountUsageSummaryCache(accountUsageSummary);
+        showUsageRefreshErrors(data.refreshErrors);
         
         // 如果返回了全量数据或该提供商的数据，尝试局部更新
         if (data.providers && data.providers[providerType]) {
@@ -294,6 +297,15 @@ export async function refreshProviderUsage(providerType) {
 function getCodexResetAvailableCount(rateLimitResetCredits) {
     const availableCount = Number(rateLimitResetCredits?.availableCount ?? 0);
     return Number.isFinite(availableCount) ? availableCount : 0;
+}
+
+function showUsageRefreshErrors(refreshErrors = []) {
+    if (!Array.isArray(refreshErrors) || refreshErrors.length === 0) return;
+
+    const firstError = refreshErrors[0];
+    const label = firstError?.name || firstError?.uuid || firstError?.providerType || '用量刷新';
+    const suffix = refreshErrors.length > 1 ? `，另有 ${refreshErrors.length - 1} 个异常` : '';
+    showToast(t('common.error'), `${label}: ${firstError?.error || t('common.requestFailed')}${suffix}`, 'error');
 }
 
 async function loadAccountUsageSummary() {
@@ -368,12 +380,12 @@ function renderCodexQuotaHealthBadges(instance, providerType) {
         if (state.lastErrorMessage) titleParts.push(state.lastErrorMessage);
         if (state.scheduledRecoveryTime) titleParts.push(`恢复时间: ${formatDate(state.scheduledRecoveryTime)}`);
         const title = titleParts.length > 0 ? ` title="${escapeHtml(titleParts.join('；'))}"` : '';
-        return `<span class="badge ${isHealthy ? 'badge-healthy' : 'badge-unhealthy'}"${title}>${label}: ${isHealthy ? '正常' : '受限'}</span>`;
+        return `<span class="badge ${isHealthy ? 'badge-healthy' : 'badge-unhealthy'}"${title}>${label}：${isHealthy ? '正常' : '受限'}</span>`;
     };
 
     return [
-        renderBadge('通用额度', quotaHealth.general),
-        renderBadge('5.3额度', quotaHealth.codex53)
+        renderBadge('通用', quotaHealth.general),
+        renderBadge('5.3', quotaHealth.codex53)
     ].join('');
 }
 

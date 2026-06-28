@@ -111,6 +111,197 @@ function getScheduledRecoveryError(provider, now = Date.now()) {
     return `Provider is waiting for scheduled recovery until ${new Date(recoveryMs).toISOString()}`;
 }
 
+function getUsageItemMaxPercent(usage, predicate) {
+    const values = (usage?.items || [])
+        .filter(predicate)
+        .map(item => Number(item.percent ?? item.used))
+        .filter(value => Number.isFinite(value));
+    return values.length > 0 ? Math.max(...values) : null;
+}
+
+function mergeQuotaHealthState(existingState = {}, usedPercent, label) {
+    if (!Number.isFinite(usedPercent)) {
+        return existingState;
+    }
+
+    const usageState = usedPercent >= 100
+        ? {
+            isHealthy: false,
+            lastErrorMessage: `${label} 已用 ${usedPercent.toFixed(1)}%`
+        }
+        : { isHealthy: true };
+
+    if (existingState?.isHealthy === false) {
+        return {
+            ...usageState,
+            ...existingState
+        };
+    }
+
+    return {
+        ...existingState,
+        ...usageState
+    };
+}
+
+function deriveCodexQuotaHealthFromUsage(currentHealth, usage) {
+    if (!usage) return currentHealth || null;
+
+    const quotaHealth = currentHealth && typeof currentHealth === 'object'
+        ? { ...currentHealth }
+        : {};
+    const generalUsedPercent = getUsageItemMaxPercent(usage, item =>
+        item.id === 'primary_window' || item.id === 'secondary_window'
+    );
+    const codex53UsedPercent = getUsageItemMaxPercent(usage, item => {
+        const id = String(item.id || '').toLowerCase();
+        const label = String(item.label || '').toLowerCase();
+        return id.includes('gpt_5_3') || id.includes('codex_5_3') || label.includes('5.3');
+    });
+
+    quotaHealth.general = mergeQuotaHealthState(quotaHealth.general, generalUsedPercent, '通用额度');
+    quotaHealth.codex53 = mergeQuotaHealthState(quotaHealth.codex53, codex53UsedPercent, '5.3 额度');
+
+    return quotaHealth;
+}
+
+function getCachedInstancesByUuid(providerCache = {}) {
+    const instances = Array.isArray(providerCache.instances) ? providerCache.instances : [];
+    return new Map(instances.filter(inst => inst?.uuid).map(inst => [inst.uuid, inst]));
+}
+
+function collectRefreshError(providerType, instance) {
+    if (!instance?.error) return null;
+    return {
+        providerType,
+        uuid: instance.uuid || null,
+        name: instance.name || instance.uuid || providerType,
+        error: instance.error
+    };
+}
+
+function recalculateProviderUsageCounts(providerData) {
+    const instances = Array.isArray(providerData.instances) ? providerData.instances : [];
+    providerData.totalCount = instances.length;
+    providerData.successCount = instances.filter(inst => inst.success).length;
+    providerData.errorCount = instances.filter(inst => !inst.success).length;
+    return providerData;
+}
+
+function mergeProviderUsageWithLastSuccessfulCache(providerType, freshProviderData = {}, cachedProviderData = {}, cachedAt = null) {
+    const refreshErrors = [];
+    if (freshProviderData.error && cachedProviderData?.instances?.length) {
+        refreshErrors.push({
+            providerType,
+            uuid: null,
+            name: providerType,
+            error: freshProviderData.error
+        });
+        return {
+            providerData: {
+                ...cachedProviderData,
+                providerType,
+                fromCache: true,
+                stale: true,
+                lastRefreshError: freshProviderData.error,
+                lastSuccessfulUsageAt: cachedAt
+            },
+            refreshErrors
+        };
+    }
+
+    const cachedByUuid = getCachedInstancesByUuid(cachedProviderData);
+    const instances = (freshProviderData.instances || []).map(instance => {
+        if (instance.success) {
+            return { ...instance, lastRefreshError: null };
+        }
+
+        const refreshError = collectRefreshError(providerType, instance);
+        if (refreshError) refreshErrors.push(refreshError);
+
+        const cachedInstance = cachedByUuid.get(instance.uuid);
+        if (!cachedInstance?.success || !cachedInstance.usage) {
+            return instance;
+        }
+
+        return {
+            ...cachedInstance,
+            name: instance.name || cachedInstance.name,
+            codexAccountKey: instance.codexAccountKey || cachedInstance.codexAccountKey || null,
+            codexAccountId: instance.codexAccountId || cachedInstance.codexAccountId || null,
+            codexEmail: instance.codexEmail || cachedInstance.codexEmail || null,
+            codexQuotaHealth: instance.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+            configFilePath: instance.configFilePath || cachedInstance.configFilePath || null,
+            isHealthy: instance.isHealthy,
+            isDisabled: instance.isDisabled,
+            success: true,
+            error: null,
+            staleUsage: true,
+            lastRefreshError: instance.error,
+            lastSuccessfulUsageAt: cachedAt
+        };
+    });
+
+    return {
+        providerData: recalculateProviderUsageCounts({
+            ...freshProviderData,
+            instances,
+            refreshErrors
+        }),
+        refreshErrors
+    };
+}
+
+function mergeUsageResultsWithLastSuccessfulCache(freshResults, cachedData) {
+    if (!cachedData?.providers) {
+        return freshResults;
+    }
+
+    const merged = {
+        ...freshResults,
+        providers: {},
+        refreshErrors: []
+    };
+
+    for (const [providerType, providerData] of Object.entries(freshResults.providers || {})) {
+        const { providerData: mergedProviderData, refreshErrors } = mergeProviderUsageWithLastSuccessfulCache(
+            providerType,
+            providerData,
+            cachedData.providers?.[providerType],
+            cachedData.timestamp || null
+        );
+        merged.providers[providerType] = mergedProviderData;
+        merged.refreshErrors.push(...refreshErrors);
+    }
+
+    return merged;
+}
+
+function getCachedInstanceUsageFallback(providerType, uuid, instanceResult, cachedData) {
+    const cachedInstance = getCachedInstancesByUuid(cachedData?.providers?.[providerType]).get(uuid);
+    if (!instanceResult?.error || !cachedInstance?.success || !cachedInstance.usage) {
+        return instanceResult;
+    }
+
+    return {
+        ...cachedInstance,
+        name: instanceResult.name || cachedInstance.name,
+        codexAccountKey: instanceResult.codexAccountKey || cachedInstance.codexAccountKey || null,
+        codexAccountId: instanceResult.codexAccountId || cachedInstance.codexAccountId || null,
+        codexEmail: instanceResult.codexEmail || cachedInstance.codexEmail || null,
+        codexQuotaHealth: instanceResult.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+        configFilePath: instanceResult.configFilePath || cachedInstance.configFilePath || null,
+        isHealthy: instanceResult.isHealthy,
+        isDisabled: instanceResult.isDisabled,
+        success: true,
+        error: null,
+        staleUsage: true,
+        lastRefreshError: instanceResult.error,
+        lastSuccessfulUsageAt: cachedData?.timestamp || null,
+        refreshErrors: [collectRefreshError(providerType, instanceResult)].filter(Boolean)
+    };
+}
+
 /**
  * 获取指定提供商类型的用量信息
  * @param {string} providerType - 提供商类型
@@ -185,6 +376,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
                 const usage = await usageService.getFormattedUsage(providerType, provider.uuid);
                 instanceResult.success = true;
                 instanceResult.usage = usage;
+                instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
                 result.successCount++;
             } catch (error) {
                 instanceResult.error = error.message;
@@ -263,9 +455,12 @@ function reformatUsageResults(results) {
                 if (instance.success && instance.usage && instance.usage.raw) {
                     try {
                         instance.usage = usageService.formatUsage(providerType, instance.usage.raw);
+                        instance.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instance.codexQuotaHealth, instance.usage);
                     } catch (err) {
                         logger.error(`[Usage API] Failed to re-format cached data for ${providerType}:`, err.message);
                     }
+                } else if (instance.success && instance.usage) {
+                    instance.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instance.codexQuotaHealth, instance.usage);
                 }
             }
         }
@@ -317,7 +512,7 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
 
 async function updateSingleInstanceInCache(providerType, uuid, instanceResult) {
     try {
-        const cache = await readUsageCache();
+        const cache = await readUsageCache({ maxAgeMs: null });
         if (!cache?.providers?.[providerType]?.instances || !Array.isArray(cache.providers[providerType].instances)) {
             return;
         }
@@ -392,13 +587,18 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
                 reformatUsageResults(usageResults);
             }
         }
-        
+
         if (!usageResults) {
             // 缓存不存在或需要刷新，重新查询
             logger.info('[Usage API] Fetching fresh usage data');
-            usageResults = await getAllProvidersUsage(currentConfig, providerPoolManager);
-            // 写入缓存
-            await writeUsageCache(usageResults);
+            const lastKnownUsage = await readUsageCache({ maxAgeMs: null, allowStale: true });
+            const freshUsageResults = await getAllProvidersUsage(currentConfig, providerPoolManager);
+            usageResults = mergeUsageResultsWithLastSuccessfulCache(freshUsageResults, lastKnownUsage);
+            if (!usageResults.refreshErrors || usageResults.refreshErrors.length === 0) {
+                await writeUsageCache(usageResults);
+            } else {
+                logger.warn(`[Usage API] Fresh usage refresh had ${usageResults.refreshErrors.length} errors; keeping last successful usage visible`);
+            }
         }
         
         // Always include current server time
@@ -451,12 +651,17 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
                 const usage = await usageService.getFormattedUsage(providerType, provider.uuid);
                 instanceResult.success = true;
                 instanceResult.usage = usage;
+                instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
             } catch (error) {
                 instanceResult.error = error.message;
             }
         }
 
-        await updateSingleInstanceInCache(providerType, uuid, instanceResult);
+        const lastKnownUsage = await readUsageCache({ maxAgeMs: null, allowStale: true });
+        instanceResult = getCachedInstanceUsageFallback(providerType, uuid, instanceResult, lastKnownUsage);
+        if (instanceResult.success && !instanceResult.staleUsage) {
+            await updateSingleInstanceInCache(providerType, uuid, instanceResult);
+        }
         
         const finalResults = {
             ...instanceResult,
@@ -503,6 +708,7 @@ export async function handleResetSingleInstanceUsage(req, res, currentConfig, pr
             ...baseInstanceResult,
             success: true,
             usage,
+            codexQuotaHealth: deriveCodexQuotaHealthFromUsage(baseInstanceResult.codexQuotaHealth, usage),
             error: null
         };
 
@@ -638,8 +844,20 @@ export async function handleGetProviderUsage(req, res, currentConfig, providerPo
             // Cache does not exist or refresh required, re-query
             logger.info(`[Usage API] Fetching fresh usage data for ${providerType}`);
             usageResults = await getProviderTypeUsage(providerType, currentConfig, providerPoolManager);
-            // 更新缓存
-            await updateProviderUsageCache(providerType, usageResults);
+            const lastKnownUsage = await readUsageCache({ maxAgeMs: null, allowStale: true });
+            const { providerData, refreshErrors } = mergeProviderUsageWithLastSuccessfulCache(
+                providerType,
+                usageResults,
+                lastKnownUsage?.providers?.[providerType],
+                lastKnownUsage?.timestamp || null
+            );
+            usageResults = providerData;
+            if (!refreshErrors || refreshErrors.length === 0) {
+                await updateProviderUsageCache(providerType, usageResults);
+            } else {
+                usageResults.refreshErrors = refreshErrors;
+                logger.warn(`[Usage API] Fresh usage refresh for ${providerType} had ${refreshErrors.length} errors; keeping last successful usage visible`);
+            }
         }
         
         // Always include current server time
