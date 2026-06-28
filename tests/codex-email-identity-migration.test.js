@@ -188,4 +188,79 @@ describe('Codex email identity migration', () => {
         expect(result.totalsBefore.eventCount).toBe(result.totalsAfter.eventCount);
         expect(result.potluckTotalsBefore.totalAccountTokens).toBe(result.potluckTotalsAfter.totalAccountTokens);
     });
+
+    test('drops Codex account buckets that cannot be mapped to an email and reports them', async () => {
+        writeJson('provider_pools.json', {
+            'openai-codex-oauth': [
+                { uuid: 'known-uuid', codexEmail: 'user@example.com' }
+            ]
+        });
+        writeJson('model-usage-stats.json', {
+            updatedAt: '2026-06-28T10:00:00.000Z',
+            summary: { requestCount: 2, totalTokens: 300 },
+            providers: {},
+            accounts: {
+                'openai-codex-oauth:known-uuid': {
+                    provider: 'openai-codex-oauth',
+                    providerUuid: 'known-uuid',
+                    providerUuids: ['known-uuid'],
+                    summary: { requestCount: 1, totalTokens: 100 },
+                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 100 } }
+                },
+                'openai-codex-oauth:orphan-uuid': {
+                    provider: 'openai-codex-oauth',
+                    providerUuid: 'orphan-uuid',
+                    providerUuids: ['orphan-uuid'],
+                    summary: { requestCount: 1, totalTokens: 200 },
+                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 200 } }
+                }
+            },
+            accountUsageEvents: {
+                'openai-codex-oauth:known-uuid': [{ timestamp: '2026-06-24T10:00:00.000Z', totalTokens: 100 }],
+                'openai-codex-oauth:orphan-uuid': [{ timestamp: '2026-06-24T11:00:00.000Z', totalTokens: 200 }]
+            },
+            daily: {}
+        });
+        writeJson('api-potluck-keys.json', {
+            keys: {
+                maki_test: {
+                    usageHistory: {
+                        '2026-06-24': {
+                            accounts: {
+                                'openai-codex-oauth:orphan-uuid': {
+                                    provider: 'openai-codex-oauth',
+                                    providerUuid: 'orphan-uuid',
+                                    providerUuids: ['orphan-uuid'],
+                                    summary: { requestCount: 1, totalTokens: 200 },
+                                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 200 } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        const { migrateCodexEmailIdentity } = await import('../src/scripts/migrate-codex-email-identity.js');
+        const result = await migrateCodexEmailIdentity({
+            configDir: tempDir,
+            now: new Date('2026-06-28T10:30:00.000Z'),
+            dryRun: true
+        });
+
+        expect(result.accountCountBefore).toBe(2);
+        expect(result.accountCountAfter).toBe(1);
+        expect(result.totalsAfter.totalAccountTokens).toBe(100);
+        expect(result.totalsAfter.eventCount).toBe(1);
+        expect(result.droppedUnmappedStats).toMatchObject({
+            accountKeys: ['openai-codex-oauth:orphan-uuid'],
+            totalTokens: 200,
+            eventCount: 1
+        });
+        expect(result.droppedUnmappedPotluck).toMatchObject({
+            accountKeys: ['openai-codex-oauth:orphan-uuid'],
+            totalTokens: 200,
+            eventCount: 0
+        });
+    });
 });

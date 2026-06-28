@@ -72,7 +72,7 @@ function createPermanentBackup(configDir, now) {
         'Do not delete unless the user explicitly says so.',
         `Created at: ${now.toISOString()}`,
         `Source dir: ${configDir}`,
-        'Migration target: model-usage-stats email identity migration',
+        'Migration target: Codex email identity migration for model usage stats and Potluck key history.',
         ''
     ].join('\n'), 'utf8');
 
@@ -196,7 +196,7 @@ function mergeAccountInto(target, source = {}, email) {
     }
 }
 
-function migrateAccountMap(accounts = {}, providerEmailIndex, unmapped) {
+function migrateAccountMap(accounts = {}, providerEmailIndex, dropReport) {
     const migrated = {};
     for (const [accountKey, account] of Object.entries(accounts || {})) {
         const provider = account.provider || getProviderFromAccountKey(accountKey);
@@ -207,7 +207,7 @@ function migrateAccountMap(accounts = {}, providerEmailIndex, unmapped) {
 
         const email = resolveAccountEmail(accountKey, account, providerEmailIndex);
         if (!email) {
-            unmapped.push(accountKey);
+            addDroppedAccount(dropReport, accountKey, account);
             continue;
         }
 
@@ -218,12 +218,17 @@ function migrateAccountMap(accounts = {}, providerEmailIndex, unmapped) {
     return migrated;
 }
 
-function migrateEventMap(accountUsageEvents = {}, accountLookup) {
+function migrateEventMap(accountUsageEvents = {}, accountLookup, dropReport) {
     const migrated = {};
     for (const [accountKey, events] of Object.entries(accountUsageEvents || {})) {
+        const provider = getProviderFromAccountKey(accountKey);
         const targetKey = accountLookup.get(accountKey);
         if (!targetKey) {
-            migrated[accountKey] = events;
+            if (CODEX_ACCOUNT_PROVIDERS.has(provider)) {
+                addDroppedEvents(dropReport, accountKey, events);
+            } else {
+                migrated[accountKey] = events;
+            }
             continue;
         }
         migrated[targetKey] = [...(migrated[targetKey] || []), ...(Array.isArray(events) ? events : [])];
@@ -236,14 +241,13 @@ function migrateEventMap(accountUsageEvents = {}, accountLookup) {
     return migrated;
 }
 
-function buildAccountLookup(accounts = {}, providerEmailIndex, unmapped) {
+function buildAccountLookup(accounts = {}, providerEmailIndex) {
     const lookup = new Map();
     for (const [accountKey, account] of Object.entries(accounts || {})) {
         const provider = account.provider || getProviderFromAccountKey(accountKey);
         if (!CODEX_ACCOUNT_PROVIDERS.has(provider)) continue;
         const email = resolveAccountEmail(accountKey, account, providerEmailIndex);
         if (!email) {
-            unmapped.push(accountKey);
             continue;
         }
         lookup.set(accountKey, `openai-codex-oauth:${email}`);
@@ -267,6 +271,34 @@ function countEvents(accountUsageEvents = {}) {
     return Object.values(accountUsageEvents || {}).reduce((sum, events) => sum + (Array.isArray(events) ? events.length : 0), 0);
 }
 
+function createDropReport() {
+    return {
+        accountKeys: [],
+        totalTokens: 0,
+        eventCount: 0
+    };
+}
+
+function addDroppedAccount(report, accountKey, account = {}) {
+    if (!report || !accountKey) return;
+    report.accountKeys.push(accountKey);
+    report.totalTokens += toNumber(account?.summary?.totalTokens);
+}
+
+function addDroppedEvents(report, accountKey, events = []) {
+    if (!report || !accountKey) return;
+    report.accountKeys.push(accountKey);
+    report.eventCount += Array.isArray(events) ? events.length : 0;
+}
+
+function mergeDropReport(target, source) {
+    if (!target || !source) return target;
+    target.accountKeys = [...new Set([...(target.accountKeys || []), ...(source.accountKeys || [])])];
+    target.totalTokens += toNumber(source.totalTokens);
+    target.eventCount += toNumber(source.eventCount);
+    return target;
+}
+
 function getTotals(stats = {}) {
     return {
         totalAccountTokens: sumAccountTokens(stats.accounts),
@@ -276,49 +308,45 @@ function getTotals(stats = {}) {
 }
 
 function migrateStats(stats, providerEmailIndex) {
-    const unmapped = [];
-    const topLevelLookup = buildAccountLookup(stats.accounts || {}, providerEmailIndex, unmapped);
+    const dropReport = createDropReport();
+    const topLevelLookup = buildAccountLookup(stats.accounts || {}, providerEmailIndex);
     const migrated = JSON.parse(JSON.stringify(stats));
-    migrated.accounts = migrateAccountMap(stats.accounts || {}, providerEmailIndex, unmapped);
-    migrated.accountUsageEvents = migrateEventMap(stats.accountUsageEvents || {}, topLevelLookup);
+    migrated.accounts = migrateAccountMap(stats.accounts || {}, providerEmailIndex, dropReport);
+    migrated.accountUsageEvents = migrateEventMap(stats.accountUsageEvents || {}, topLevelLookup, dropReport);
 
     for (const day of Object.values(migrated.daily || {})) {
-        day.accounts = migrateAccountMap(day.accounts || {}, providerEmailIndex, unmapped);
+        day.accounts = migrateAccountMap(day.accounts || {}, providerEmailIndex, dropReport);
     }
 
-    const uniqueUnmapped = [...new Set(unmapped)];
-    if (uniqueUnmapped.length > 0) {
-        throw new Error(`Cannot migrate Codex accounts without email identity: ${uniqueUnmapped.join(', ')}`);
-    }
-
-    return migrated;
+    dropReport.accountKeys = [...new Set(dropReport.accountKeys)];
+    return { migrated, dropReport };
 }
 
 function migratePotluckUsageHistory(usageHistory = {}, providerEmailIndex) {
     const migrated = JSON.parse(JSON.stringify(usageHistory || {}));
-    const unmapped = [];
+    const dropReport = createDropReport();
 
     for (const day of Object.values(migrated)) {
-        day.accounts = migrateAccountMap(day.accounts || {}, providerEmailIndex, unmapped);
+        day.accounts = migrateAccountMap(day.accounts || {}, providerEmailIndex, dropReport);
         for (const hour of Object.values(day.hours || {})) {
-            hour.accounts = migrateAccountMap(hour.accounts || {}, providerEmailIndex, unmapped);
+            hour.accounts = migrateAccountMap(hour.accounts || {}, providerEmailIndex, dropReport);
         }
     }
 
-    const uniqueUnmapped = [...new Set(unmapped)];
-    if (uniqueUnmapped.length > 0) {
-        throw new Error(`Cannot migrate Potluck Codex accounts without email identity: ${uniqueUnmapped.join(', ')}`);
-    }
-
-    return migrated;
+    dropReport.accountKeys = [...new Set(dropReport.accountKeys)];
+    return { migrated, dropReport };
 }
 
 function migratePotluckKeys(potluckKeys, providerEmailIndex) {
     const migrated = JSON.parse(JSON.stringify(potluckKeys || { keys: {} }));
+    const dropReport = createDropReport();
     for (const keyData of Object.values(migrated.keys || {})) {
-        keyData.usageHistory = migratePotluckUsageHistory(keyData.usageHistory || {}, providerEmailIndex);
+        const result = migratePotluckUsageHistory(keyData.usageHistory || {}, providerEmailIndex);
+        keyData.usageHistory = result.migrated;
+        mergeDropReport(dropReport, result.dropReport);
     }
-    return migrated;
+    dropReport.accountKeys = [...new Set(dropReport.accountKeys)];
+    return { migrated, dropReport };
 }
 
 function sumUsageHistoryAccountTokens(usageHistory = {}) {
@@ -352,10 +380,12 @@ export async function migrateCodexEmailIdentity({ configDir = path.join(process.
 
     const providerEmailIndex = buildProviderEmailIndex(providerPools);
     const totalsBefore = getTotals(stats);
-    const migratedStats = migrateStats(stats, providerEmailIndex);
+    const statsMigration = migrateStats(stats, providerEmailIndex);
+    const migratedStats = statsMigration.migrated;
     const totalsAfter = getTotals(migratedStats);
     const potluckTotalsBefore = getPotluckTotals(potluckKeys);
-    const migratedPotluckKeys = migratePotluckKeys(potluckKeys, providerEmailIndex);
+    const potluckMigration = migratePotluckKeys(potluckKeys, providerEmailIndex);
+    const migratedPotluckKeys = potluckMigration.migrated;
     const potluckTotalsAfter = getPotluckTotals(migratedPotluckKeys);
 
     let backupDir = null;
@@ -374,6 +404,8 @@ export async function migrateCodexEmailIdentity({ configDir = path.join(process.
         totalsAfter,
         potluckTotalsBefore,
         potluckTotalsAfter,
+        droppedUnmappedStats: statsMigration.dropReport,
+        droppedUnmappedPotluck: potluckMigration.dropReport,
         accountCountBefore: Object.keys(stats.accounts || {}).length,
         accountCountAfter: Object.keys(migratedStats.accounts || {}).length
     };
