@@ -8,6 +8,99 @@ import path from 'path';
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
 export const DEFAULT_USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 
+function getCachedInstancesByUuid(providerCache = {}) {
+    const instances = Array.isArray(providerCache.instances) ? providerCache.instances : [];
+    return new Map(instances.filter(inst => inst?.uuid).map(inst => [inst.uuid, inst]));
+}
+
+function recalculateProviderCounts(providerData = {}) {
+    const instances = Array.isArray(providerData.instances) ? providerData.instances : [];
+    providerData.totalCount = instances.length;
+    providerData.successCount = instances.filter(inst => inst?.success).length;
+    providerData.errorCount = instances.filter(inst => !inst?.success).length;
+    return providerData;
+}
+
+function mergeInstanceWithLastSuccessfulUsage(incomingInstance, cachedByUuid, cachedAt) {
+    if (incomingInstance?.success || !incomingInstance?.error) {
+        return incomingInstance;
+    }
+
+    const cachedInstance = cachedByUuid.get(incomingInstance.uuid);
+    if (!cachedInstance?.success || !cachedInstance.usage) {
+        return incomingInstance;
+    }
+
+    return {
+        ...cachedInstance,
+        name: incomingInstance.name || cachedInstance.name,
+        codexAccountKey: incomingInstance.codexAccountKey || cachedInstance.codexAccountKey || null,
+        codexAccountId: incomingInstance.codexAccountId || cachedInstance.codexAccountId || null,
+        codexEmail: incomingInstance.codexEmail || cachedInstance.codexEmail || null,
+        codexQuotaHealth: incomingInstance.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+        configFilePath: incomingInstance.configFilePath || cachedInstance.configFilePath || null,
+        isHealthy: incomingInstance.isHealthy,
+        isDisabled: incomingInstance.isDisabled,
+        success: true,
+        error: null,
+        staleUsage: true,
+        lastRefreshError: incomingInstance.error,
+        lastSuccessfulUsageAt: cachedAt || null
+    };
+}
+
+function mergeProviderWithLastSuccessfulUsage(providerType, incomingProviderData = {}, cachedProviderData = {}, cachedAt) {
+    if (incomingProviderData.error && Array.isArray(cachedProviderData?.instances) && cachedProviderData.instances.length > 0) {
+        return {
+            ...cachedProviderData,
+            providerType,
+            fromCache: true,
+            stale: true,
+            lastRefreshError: incomingProviderData.error,
+            lastSuccessfulUsageAt: cachedAt || null
+        };
+    }
+
+    if (!Array.isArray(incomingProviderData.instances)) {
+        return incomingProviderData;
+    }
+
+    const cachedByUuid = getCachedInstancesByUuid(cachedProviderData);
+    const instances = incomingProviderData.instances.map(instance =>
+        mergeInstanceWithLastSuccessfulUsage(instance, cachedByUuid, cachedAt)
+    );
+
+    return recalculateProviderCounts({
+        ...incomingProviderData,
+        instances
+    });
+}
+
+async function mergeUsageDataWithExistingLastSuccessfulUsage(usageData) {
+    const existingCache = await readUsageCache({ maxAgeMs: null, allowStale: true });
+    if (!existingCache?.providers || !usageData?.providers) {
+        return usageData;
+    }
+
+    const mergedProviders = {};
+    for (const [providerType, incomingProviderData] of Object.entries(usageData.providers)) {
+        mergedProviders[providerType] = mergeProviderWithLastSuccessfulUsage(
+            providerType,
+            incomingProviderData,
+            existingCache.providers?.[providerType],
+            existingCache.timestamp || null
+        );
+    }
+
+    return {
+        ...usageData,
+        providers: {
+            ...usageData.providers,
+            ...mergedProviders
+        }
+    };
+}
+
 function isUsageCacheFresh(cache, { maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS, now = new Date() } = {}) {
     if (maxAgeMs === null || maxAgeMs === undefined) {
         return true;
@@ -61,7 +154,8 @@ export async function readUsageCache(options = {}) {
  */
 export async function writeUsageCache(usageData) {
     try {
-        await atomicWriteFile(USAGE_CACHE_FILE, JSON.stringify(usageData, null, 2), { encoding: 'utf8', mode: 0o600 });
+        const safeUsageData = await mergeUsageDataWithExistingLastSuccessfulUsage(usageData);
+        await atomicWriteFile(USAGE_CACHE_FILE, JSON.stringify(safeUsageData, null, 2), { encoding: 'utf8', mode: 0o600 });
         logger.info('[Usage Cache] Usage data cached to', USAGE_CACHE_FILE);
     } catch (error) {
         logger.error('[Usage Cache] Failed to write usage cache:', error.message);

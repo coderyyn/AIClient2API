@@ -105,4 +105,59 @@ describe('usage cache TTL', () => {
             }
         });
     });
+
+    test('write keeps last successful instance usage when a refresh returns an error', async () => {
+        writeCache({
+            timestamp: '2026-06-16T11:50:00.000Z',
+            providers: {
+                'openai-codex-oauth': {
+                    providerType: 'openai-codex-oauth',
+                    totalCount: 1,
+                    successCount: 1,
+                    errorCount: 0,
+                    instances: [{
+                        uuid: 'codex-a',
+                        name: '蜂智pro1',
+                        success: true,
+                        error: null,
+                        usage: {
+                            user: { email: 'account@example.com' },
+                            summary: { usedPercent: 42.5, status: 'normal' }
+                        }
+                    }]
+                }
+            }
+        });
+
+        const { writeUsageCache, readUsageCache } = await loadUsageCacheModule();
+
+        await writeUsageCache({
+            timestamp: '2026-06-16T12:00:00.000Z',
+            providers: {
+                'openai-codex-oauth': {
+                    providerType: 'openai-codex-oauth',
+                    totalCount: 1,
+                    successCount: 0,
+                    errorCount: 1,
+                    instances: [{
+                        uuid: 'codex-a',
+                        name: '蜂智pro1',
+                        success: false,
+                        error: '401 Unauthorized',
+                        usage: null
+                    }]
+                }
+            }
+        });
+
+        const cache = await readUsageCache({ maxAgeMs: null });
+        const instance = cache.providers['openai-codex-oauth'].instances[0];
+        expect(instance.success).toBe(true);
+        expect(instance.error).toBeNull();
+        expect(instance.staleUsage).toBe(true);
+        expect(instance.lastRefreshError).toBe('401 Unauthorized');
+        expect(instance.usage.summary.usedPercent).toBe(42.5);
+        expect(cache.providers['openai-codex-oauth'].successCount).toBe(1);
+        expect(cache.providers['openai-codex-oauth'].errorCount).toBe(0);
+    });
 });

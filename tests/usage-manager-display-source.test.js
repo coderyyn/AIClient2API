@@ -71,11 +71,17 @@ describe('usage manager display source regressions', () => {
     test('usage refresh failures keep last successful cached data visible', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+        const usageCacheSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-cache.js'), 'utf8').replace(/\r\n/g, '\n');
 
         expect(usageApiSource).toContain('mergeUsageResultsWithLastSuccessfulCache');
         expect(usageApiSource).toContain('lastRefreshError');
         expect(usageApiSource).toContain('refreshErrors');
         expect(usageApiSource).toContain('readUsageCache({ maxAgeMs: null, allowStale: true })');
+        expect(usageCacheSource).toContain('mergeUsageDataWithExistingLastSuccessfulUsage');
+        expect(usageCacheSource).toContain('lastRefreshError: incomingInstance.error');
+        expect(usageManagerSource).toContain('const hasVisibleUsage = Boolean(instance.usage);');
+        expect(usageManagerSource).toContain('contentArea.appendChild(renderUsageDetails(instance.usage, accountUsageSummary));');
+        expect(usageManagerSource).toContain('renderUsageRefreshWarning(instance)');
         expect(usageManagerSource).toContain('showUsageRefreshErrors(data.refreshErrors)');
     });
     test('Codex usage cards prefer backend codexEmail before provider display name', () => {

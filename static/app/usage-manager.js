@@ -458,6 +458,16 @@ function renderCodexQuotaHealthBadges(instance, providerType) {
     ].join('');
 }
 
+function renderUsageRefreshWarning(instance) {
+    const message = instance.lastRefreshError || instance.error;
+    if (!message) return null;
+
+    const warning = document.createElement('div');
+    warning.className = 'usage-error-message usage-stale-warning';
+    warning.innerHTML = `<i class="fas fa-exclamation-triangle"></i> <span>刷新异常，正在显示最后一次成功数据：${escapeHtml(message)}</span>`;
+    return warning;
+}
+
 function confirmCodexRateLimitReset(displayName, availableCount) {
     return window.confirm([
         `Use one Codex rate-limit reset for ${displayName}?`,
@@ -648,7 +658,8 @@ function createProviderGroup(providerType, instances) {
  */
 function createInstanceUsageCard(instance, providerType) {
     const card = document.createElement('div');
-    card.className = `usage-instance-card ${instance.success ? 'success' : 'error'} collapsed`;
+    const hasVisibleUsage = Boolean(instance.usage);
+    card.className = `usage-instance-card ${instance.success || hasVisibleUsage ? 'success' : 'error'} collapsed`;
     card.setAttribute('data-uuid', instance.uuid);
 
     const usage = instance.usage || {};
@@ -678,7 +689,7 @@ function createInstanceUsageCard(instance, providerType) {
                 ${summary.plan ? `<span class="collapsed-plan-badge ${planClass}">${summary.plan}</span>` : ''}
                 ${renderCollapsedStatusIcons(instance, providerType)}
             </div>
-            ${instance.success ? `
+            ${hasVisibleUsage ? `
             <div class="collapsed-summary-row collapsed-summary-usage-row">
                 <div class="collapsed-progress-bar ${summary.status}"><div class="progress-fill" style="width: ${summary.usedPercent}%"></div></div>
                 <span class="collapsed-percent">
@@ -721,10 +732,14 @@ function createInstanceUsageCard(instance, providerType) {
         refreshSingleInstanceUsage(providerType, instance.uuid, displayName); 
     };
     const contentArea = card.querySelector('.usage-instance-content');
-    if (instance.error) {
-        contentArea.innerHTML = `<div class="usage-error-message"><i class="fas fa-exclamation-triangle"></i> <span>${instance.error}</span></div>`;
-    } else if (instance.usage) {
+    const refreshWarning = renderUsageRefreshWarning(instance);
+    if (refreshWarning) {
+        contentArea.appendChild(refreshWarning);
+    }
+    if (instance.usage) {
         contentArea.appendChild(renderUsageDetails(instance.usage, accountUsageSummary));
+    } else if (instance.error) {
+        contentArea.innerHTML = `<div class="usage-error-message"><i class="fas fa-exclamation-triangle"></i> <span>${escapeHtml(instance.error)}</span></div>`;
     }
 
     card.querySelectorAll('.btn-reset-codex-usage-inline').forEach(resetButton => {
