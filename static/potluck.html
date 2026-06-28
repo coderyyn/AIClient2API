@@ -1591,8 +1591,7 @@
             const providerTokens = usageTokens(provider.summary);
             if (!provider.accounts || provider.accounts.length === 0 || providerTokens <= 0) return '';
 
-            const topAccounts = provider.accounts.slice(0, 5);
-            const rows = topAccounts.map(account => {
+            const rows = provider.accounts.map(account => {
                 const calls = usageCount(account.summary);
                 const tokens = usageTokens(account.summary);
                 const percentText = formatPercentShare(tokens, providerTokens);
@@ -1618,34 +1617,6 @@
                     </div>
                 `;
             });
-
-            if (provider.accounts.length > 5) {
-                const other = provider.accounts.slice(5).reduce((sum, account) => {
-                    sum.calls += usageCount(account.summary);
-                    sum.tokens += usageTokens(account.summary);
-                    return sum;
-                }, { calls: 0, tokens: 0 });
-                const percentText = formatPercentShare(other.tokens, providerTokens);
-                const barWidth = Math.max(1, Math.min(100, (other.tokens / providerTokens) * 100));
-                rows.push(`
-                    <div class="provider-account-child">
-                        <div class="account-main-row">
-                            <span class="account-title">
-                                <span class="account-dot" style="background: #94a3b8;"></span>
-                                <span class="account-name" title="其他账号 (${provider.accounts.length - 5} 个)" style="font-style: italic;">其他账号</span>
-                            </span>
-                            <span class="account-calls">${formatNumber(other.calls)} 次</span>
-                        </div>
-                        <div class="account-token-row">
-                            <span class="account-token-value">${formatTokenCompact(other.tokens)} Tokens</span>
-                            <span class="account-token-share">${percentText}</span>
-                        </div>
-                        <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${barWidth}%; background: #94a3b8;"></div>
-                        </div>
-                    </div>
-                `);
-            }
 
             return `<div class="provider-account-children">${rows.join('')}</div>`;
         }

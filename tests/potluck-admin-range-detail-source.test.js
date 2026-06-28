@@ -79,4 +79,18 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function isEmailLike(value)');
         expect(source).toContain("return `${value.slice(0, 5)}...`;");
     });
+
+    test('admin provider account tree renders every account without grouping into other accounts', () => {
+        const source = loadPotluckSource();
+        const start = source.indexOf('function renderProviderAccountRows(provider)');
+        expect(start).toBeGreaterThanOrEqual(0);
+        const end = source.indexOf('function renderProviderAccountTokenTree', start);
+        expect(end).toBeGreaterThan(start);
+        const block = source.slice(start, end);
+
+        expect(block).toContain('const rows = provider.accounts.map(account =>');
+        expect(block).not.toContain('provider.accounts.slice(0, 5)');
+        expect(block).not.toContain('provider.accounts.length > 5');
+        expect(block).not.toContain('其他账号');
+    });
 });
