@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe('api potluck key usage summary', () => {
-    test('aggregates Codex account buckets by account identity across provider UUIDs', async () => {
+    test('aggregates Codex account buckets by email across provider UUIDs', async () => {
         jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
         const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
 
@@ -56,14 +56,14 @@ describe('api potluck key usage summary', () => {
 
         const [listedKey] = await listKeys();
         const stats = await getStats();
-        const accountKey = 'openai-codex-oauth:acct-chatgpt-123';
+        const accountKey = 'openai-codex-oauth:user@example.com';
         const dayAccounts = listedKey.usageHistory['2026-06-22'].accounts;
 
         expect(Object.keys(dayAccounts)).toEqual([accountKey]);
         expect(dayAccounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'acct-chatgpt-123',
-            accountIdentity: 'acct-chatgpt-123',
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
             accountEmail: 'user@example.com',
             providerName: 'user@example.com',
             providerUuids: ['old-provider-uuid', 'new-provider-uuid']
@@ -150,12 +150,13 @@ describe('api potluck key usage summary', () => {
         }, 'req-image-1', {
             providerUuid: 'codex-account-a',
             providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com',
             timestamp: '2026-06-22T02:15:30.000Z'
         });
 
         const [listedKey] = await listKeys();
         const dayHistory = listedKey.usageHistory['2026-06-22'];
-        const accountKey = 'openai-codex-oauth:codex-account-a';
+        const accountKey = 'openai-codex-oauth:codex-a@example.com';
 
         expect(listedKey).toMatchObject({
             todayReasoningTokens: 516,
@@ -164,7 +165,9 @@ describe('api potluck key usage summary', () => {
         });
         expect(dayHistory.accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'codex-account-a',
+            providerUuid: 'codex-a@example.com',
+            accountIdentity: 'codex-a@example.com',
+            accountEmail: 'codex-a@example.com',
             providerName: 'Codex Account A'
         });
         expect(dayHistory.accounts[accountKey].summary).toMatchObject({
@@ -202,6 +205,7 @@ describe('api potluck key usage summary', () => {
         }, 'req-admin-account-1', {
             providerUuid: 'codex-account-a',
             providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com',
             timestamp: '2026-06-22T02:15:30.000Z'
         });
         await incrementUsage(keyB.id, 'openai-codex-oauth', 'gpt-5.5', {
@@ -213,15 +217,18 @@ describe('api potluck key usage summary', () => {
         }, 'req-admin-account-2', {
             providerUuid: 'codex-account-a',
             providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com',
             timestamp: '2026-06-22T02:20:30.000Z'
         });
 
         const stats = await getStats();
-        const accountKey = 'openai-codex-oauth:codex-account-a';
+        const accountKey = 'openai-codex-oauth:codex-a@example.com';
 
         expect(stats.usageHistory['2026-06-22'].accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'codex-account-a',
+            providerUuid: 'codex-a@example.com',
+            accountIdentity: 'codex-a@example.com',
+            accountEmail: 'codex-a@example.com',
             providerName: 'Codex Account A'
         });
         expect(stats.usageHistory['2026-06-22'].accounts[accountKey].summary).toMatchObject({
@@ -252,7 +259,8 @@ describe('api potluck key usage summary', () => {
             totalTokens: 1100
         }, 'req-month-only', {
             providerUuid: 'codex-account-a',
-            providerName: 'Codex Account A'
+            providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com'
         });
 
         jest.setSystemTime(new Date('2026-06-23T02:00:00.000Z'));
@@ -263,7 +271,8 @@ describe('api potluck key usage summary', () => {
             totalTokens: 2200
         }, 'req-week', {
             providerUuid: 'codex-account-a',
-            providerName: 'Codex Account A'
+            providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com'
         });
 
         jest.setSystemTime(new Date('2026-06-26T02:00:00.000Z'));
@@ -274,11 +283,12 @@ describe('api potluck key usage summary', () => {
             totalTokens: 3300
         }, 'req-today', {
             providerUuid: 'codex-account-a',
-            providerName: 'Codex Account A'
+            providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com'
         });
 
         const summary = await getAccountUsageSummary(new Date('2026-06-26T03:00:00.000Z'));
-        const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:codex-account-a');
+        const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:codex-a@example.com');
 
         expect(summary).toMatchObject({
             source: 'potluck/model-usage-stats',
@@ -291,7 +301,9 @@ describe('api potluck key usage summary', () => {
         });
         expect(account).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'codex-account-a',
+            providerUuid: 'codex-a@example.com',
+            accountIdentity: 'codex-a@example.com',
+            accountEmail: 'codex-a@example.com',
             providerName: 'Codex Account A'
         });
         expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
@@ -299,7 +311,7 @@ describe('api potluck key usage summary', () => {
         expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
     });
 
-    test('getAccountUsageSummary merges legacy provider UUID buckets with later account identity buckets', async () => {
+    test('getAccountUsageSummary merges Codex buckets by email across provider UUID and identity changes', async () => {
         const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
 
         jest.setSystemTime(new Date('2026-06-24T02:00:00.000Z'));
@@ -340,10 +352,10 @@ describe('api potluck key usage summary', () => {
 
         expect(matchingAccounts).toHaveLength(1);
         expect(matchingAccounts[0]).toMatchObject({
-            accountKey: 'openai-codex-oauth:acct-chatgpt-123',
+            accountKey: 'openai-codex-oauth:user@example.com',
             provider: 'openai-codex-oauth',
-            providerUuid: 'acct-chatgpt-123',
-            accountIdentity: 'acct-chatgpt-123',
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
             accountEmail: 'user@example.com',
             providerName: 'user@example.com',
             providerUuids: ['old-provider-uuid']
@@ -383,7 +395,6 @@ describe('api potluck key usage summary', () => {
         const [listedKey] = await listKeys();
 
         expect(listedKey.audit.relatedNames).toEqual([
-            'Codex Account A',
             expect.stringMatching(/^redacted-email:/)
         ]);
         expect(JSON.stringify(listedKey.audit.relatedNames)).not.toContain('user@example.com');
@@ -413,12 +424,13 @@ describe('api potluck key usage summary', () => {
             toProvider: 'openai-codex-oauth',
             model: 'gpt-5.5',
             providerUuid: 'codex-account-a',
-            providerName: 'Codex Account A'
+            providerName: 'Codex Account A',
+            accountEmail: 'codex-a@example.com'
         });
 
         const [listedKey] = await potluck.listKeys();
         const [dateKey] = Object.keys(listedKey.usageHistory);
-        const accountKey = 'openai-codex-oauth:codex-account-a';
+        const accountKey = 'openai-codex-oauth:codex-a@example.com';
 
         expect(listedKey.todayReasoningTokens).toBe(516);
         expect(listedKey.usageHistory[dateKey].accounts[accountKey].models['gpt-5.5']).toMatchObject({

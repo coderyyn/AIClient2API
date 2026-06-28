@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe('model usage account statistics', () => {
-    test('aggregates Codex account stats by account identity across provider reauthorization UUIDs', async () => {
+    test('aggregates Codex account stats by email across provider reauthorization UUIDs', async () => {
         const statsManager = await loadStatsManager();
 
         for (const providerUuid of ['old-provider-uuid', 'new-provider-uuid']) {
@@ -38,6 +38,7 @@ describe('model usage account statistics', () => {
                 providerUuid,
                 providerName: 'user@example.com',
                 accountIdentity: 'acct-chatgpt-123',
+                accountEmail: 'User@Example.com',
                 fromProvider: 'openai',
                 nativeResponse: {
                     usage: {
@@ -55,21 +56,74 @@ describe('model usage account statistics', () => {
                 providerUuid,
                 providerName: 'user@example.com',
                 accountIdentity: 'acct-chatgpt-123',
+                accountEmail: 'User@Example.com',
                 fromProvider: 'openai',
                 isStream: false
             });
         }
 
         const stats = await statsManager.getStats();
-        const accountKey = 'openai-codex-oauth:acct-chatgpt-123';
+        const accountKey = 'openai-codex-oauth:user@example.com';
 
         expect(Object.keys(stats.accounts).filter(key => key.startsWith('openai-codex-oauth:'))).toEqual([accountKey]);
         expect(stats.accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'acct-chatgpt-123',
-            accountIdentity: 'acct-chatgpt-123',
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
+            accountEmail: 'user@example.com',
             providerName: 'user@example.com',
             providerUuids: ['old-provider-uuid', 'new-provider-uuid']
+        });
+        expect(stats.accounts[accountKey].summary).toMatchObject({
+            requestCount: 2,
+            totalTokens: 2200
+        });
+    });
+
+    test('aggregates same Codex email across oauth and responses providers into one account', async () => {
+        const statsManager = await loadStatsManager();
+
+        for (const provider of ['openai-codex-oauth', 'openaiResponses-custom']) {
+            const requestId = `req-${provider}`;
+            statsManager.recordUnaryUsage({
+                requestId,
+                model: 'gpt-5.5',
+                provider,
+                providerUuid: 'same-provider-uuid',
+                providerName: 'User@Example.com',
+                accountEmail: 'User@Example.com',
+                fromProvider: 'openai',
+                nativeResponse: {
+                    usage: {
+                        prompt_tokens: 1000,
+                        completion_tokens: 100,
+                        total_tokens: 1100
+                    }
+                }
+            });
+
+            await statsManager.finalizeRequest({
+                requestId,
+                model: 'gpt-5.5',
+                provider,
+                providerUuid: 'same-provider-uuid',
+                providerName: 'User@Example.com',
+                accountEmail: 'User@Example.com',
+                fromProvider: 'openai',
+                isStream: false
+            });
+        }
+
+        const stats = await statsManager.getStats();
+        const accountKey = 'openai-codex-oauth:user@example.com';
+
+        expect(Object.keys(stats.accounts)).toEqual([accountKey]);
+        expect(stats.accounts[accountKey]).toMatchObject({
+            provider: 'openai-codex-oauth',
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
+            accountEmail: 'user@example.com',
+            providerUuids: ['same-provider-uuid']
         });
         expect(stats.accounts[accountKey].summary).toMatchObject({
             requestCount: 2,
@@ -85,7 +139,8 @@ describe('model usage account statistics', () => {
             model: 'gpt-5.5',
             provider: 'openai-codex-oauth',
             providerUuid: 'codex-account-a',
-            providerName: 'US Account A',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
             fromProvider: 'openai',
             nativeResponse: {
                 usage: {
@@ -107,13 +162,14 @@ describe('model usage account statistics', () => {
             model: 'gpt-5.5',
             provider: 'openai-codex-oauth',
             providerUuid: 'codex-account-a',
-            providerName: 'US Account A',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
             fromProvider: 'openai',
             isStream: false
         });
 
         const stats = await statsManager.getStats();
-        const accountKey = 'openai-codex-oauth:codex-account-a';
+        const accountKey = 'openai-codex-oauth:user@example.com';
         const [dateKey] = Object.keys(stats.daily);
 
         expect(stats.summary).toMatchObject({
@@ -125,8 +181,11 @@ describe('model usage account statistics', () => {
         });
         expect(stats.accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
-            providerUuid: 'codex-account-a',
-            providerName: 'US Account A'
+            providerUuid: 'user@example.com',
+            accountIdentity: 'user@example.com',
+            accountEmail: 'user@example.com',
+            providerName: 'user@example.com',
+            providerUuids: ['codex-account-a']
         });
         expect(stats.accounts[accountKey].summary).toMatchObject({
             requestCount: 1,

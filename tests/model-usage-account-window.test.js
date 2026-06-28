@@ -18,7 +18,8 @@ async function recordCodexUsage(statsManager, requestId, totalTokens) {
         model: 'gpt-5.5',
         provider: 'openai-codex-oauth',
         providerUuid: 'codex-account-a',
-        providerName: 'US Account A',
+        providerName: 'user@example.com',
+        accountEmail: 'user@example.com',
         nativeResponse: {
             usage: {
                 prompt_tokens: totalTokens,
@@ -33,7 +34,8 @@ async function recordCodexUsage(statsManager, requestId, totalTokens) {
         model: 'gpt-5.5',
         provider: 'openai-codex-oauth',
         providerUuid: 'codex-account-a',
-        providerName: 'US Account A',
+        providerName: 'user@example.com',
+        accountEmail: 'user@example.com',
         isStream: false
     });
 }
@@ -64,6 +66,7 @@ describe('model usage account token windows', () => {
         await recordCodexUsage(statsManager, 'req-window-2', 250);
 
         let summary = await statsManager.getAccountTokenUsageSummary('openai-codex-oauth', 'codex-account-a', {
+            accountEmail: 'user@example.com',
             now: new Date('2026-06-16T04:30:00.000Z')
         });
         expect(summary).toMatchObject({
@@ -73,6 +76,7 @@ describe('model usage account token windows', () => {
         });
 
         summary = await statsManager.getAccountTokenUsageSummary('openai-codex-oauth', 'codex-account-a', {
+            accountEmail: 'user@example.com',
             now: new Date('2026-06-16T06:30:00.000Z')
         });
         expect(summary).toMatchObject({
@@ -92,6 +96,7 @@ describe('model usage account token windows', () => {
         await recordCodexUsage(statsManager, 'req-recovery-2', 500);
 
         const summary = await statsManager.getAccountTokenUsageSummary('openai-codex-oauth', 'codex-account-a', {
+            accountEmail: 'user@example.com',
             now: new Date('2026-06-16T04:00:00.000Z'),
             rolling5hTokenLimit: 1000
         });

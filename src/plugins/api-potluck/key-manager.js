@@ -247,10 +247,34 @@ function addUsage(target, usage = {}) {
     target.maxTps = Math.max(target.maxTps || 0, toNumber(usage.maxTps));
 }
 
-function getAccountUsageKey(provider, providerUuid, accountIdentity = null) {
+function isCodexEmailAccountProvider(provider) {
+    return provider === 'openai-codex-oauth' || provider === 'openaiResponses-custom';
+}
+
+function getCanonicalAccountUsageIdentity(provider, providerUuid, accountIdentity = null, accountEmail = null, providerName = null) {
+    if (isCodexEmailAccountProvider(provider)) {
+        const email = normalizeEmailAlias(accountEmail) || normalizeEmailAlias(accountIdentity) || normalizeEmailAlias(providerName);
+        if (!email) return null;
+        return {
+            provider: 'openai-codex-oauth',
+            identity: email,
+            accountEmail: email
+        };
+    }
+
     const identity = accountIdentity || providerUuid;
     if (!provider || !identity) return null;
-    return `${provider}:${identity}`;
+    return {
+        provider,
+        identity,
+        accountEmail: normalizeEmailAlias(accountEmail)
+    };
+}
+
+function getAccountUsageKey(provider, providerUuid, accountIdentity = null, accountEmail = null, providerName = null) {
+    const canonical = getCanonicalAccountUsageIdentity(provider, providerUuid, accountIdentity, accountEmail, providerName);
+    if (!canonical?.provider || !canonical?.identity) return null;
+    return `${canonical.provider}:${canonical.identity}`;
 }
 
 function addProviderUuidToAccount(accountUsage, providerUuid) {
@@ -259,25 +283,30 @@ function addProviderUuidToAccount(accountUsage, providerUuid) {
     accountUsage.providerUuids = [...new Set([...existing, providerUuid].filter(Boolean))];
 }
 
-function ensureAccountUsage(map, provider, providerUuid, providerName, accountIdentity = null) {
-    const accountKey = getAccountUsageKey(provider, providerUuid, accountIdentity);
+function ensureAccountUsage(map, provider, providerUuid, providerName, accountIdentity = null, accountEmail = null) {
+    const accountKey = getAccountUsageKey(provider, providerUuid, accountIdentity, accountEmail, providerName);
     if (!accountKey) return null;
+    const canonical = getCanonicalAccountUsageIdentity(provider, providerUuid, accountIdentity, accountEmail, providerName);
 
     if (!map[accountKey]) {
         map[accountKey] = {
-            provider,
-            providerUuid: accountIdentity || providerUuid,
-            accountIdentity: accountIdentity || null,
-            accountEmail: null,
+            provider: canonical.provider,
+            providerUuid: canonical.identity,
+            accountIdentity: canonical.identity || null,
+            accountEmail: canonical.accountEmail || null,
             providerUuids: providerUuid ? [providerUuid] : [],
             providerName: providerName || null,
             summary: createUsageBucket(),
             models: {}
         };
     } else {
-        if (accountIdentity && !map[accountKey].accountIdentity) {
-            map[accountKey].accountIdentity = accountIdentity;
-            map[accountKey].providerUuid = accountIdentity;
+        if (canonical?.identity) {
+            map[accountKey].provider = canonical.provider;
+            map[accountKey].accountIdentity = canonical.identity;
+            map[accountKey].providerUuid = canonical.identity;
+        }
+        if (canonical?.accountEmail) {
+            map[accountKey].accountEmail = canonical.accountEmail;
         }
         addProviderUuidToAccount(map[accountKey], providerUuid);
         if (providerName && !map[accountKey].providerName) {
@@ -316,7 +345,7 @@ function addAccountUsage(targetMap, account = {}) {
         ? account.providerUuids.filter(Boolean)
         : [];
     const providerUuid = providerUuids[0] || account.providerUuid || null;
-    const accountUsage = ensureAccountUsage(targetMap, provider, providerUuid, account.providerName, account.accountIdentity || null);
+    const accountUsage = ensureAccountUsage(targetMap, provider, providerUuid, account.providerName, account.accountIdentity || null, account.accountEmail || null);
     if (!accountUsage) return;
     if (account.accountEmail && !accountUsage.accountEmail) {
         accountUsage.accountEmail = account.accountEmail;
@@ -403,10 +432,13 @@ function getAccountProvider(accountKey, account = {}) {
 
 function getSummaryCanonicalAccountKey(accountKey, account = {}) {
     const provider = getAccountProvider(accountKey, account);
-    if (account.accountIdentity) {
-        return getAccountUsageKey(provider, account.providerUuid, account.accountIdentity) || accountKey;
-    }
-    return accountKey;
+    return getAccountUsageKey(
+        provider,
+        account.providerUuid || getIdentityFromAccountKey(accountKey),
+        account.accountIdentity || null,
+        account.accountEmail || null,
+        account.providerName || null
+    ) || accountKey;
 }
 
 function getAccountSummaryAliases(accountKey, account = {}) {
@@ -433,7 +465,15 @@ function getAccountSummaryAliases(accountKey, account = {}) {
 
 function createAccountSummaryEntry(accountKey, account = {}) {
     const provider = getAccountProvider(accountKey, account);
-    const providerUuid = account.accountIdentity
+    const canonical = getCanonicalAccountUsageIdentity(
+        provider,
+        account.providerUuid || getIdentityFromAccountKey(accountKey),
+        account.accountIdentity || null,
+        account.accountEmail || null,
+        account.providerName || null
+    );
+    const providerUuid = canonical?.identity
+        || account.accountIdentity
         || account.providerUuid
         || getIdentityFromAccountKey(accountKey);
     const providerUuids = Array.isArray(account.providerUuids)
@@ -442,10 +482,10 @@ function createAccountSummaryEntry(accountKey, account = {}) {
 
     return {
         accountKey: getSummaryCanonicalAccountKey(accountKey, account),
-        provider,
+        provider: canonical?.provider || provider,
         providerUuid,
-        accountIdentity: account.accountIdentity || null,
-        accountEmail: account.accountEmail || normalizeEmailAlias(account.providerName),
+        accountIdentity: canonical?.identity || account.accountIdentity || null,
+        accountEmail: canonical?.accountEmail || account.accountEmail || normalizeEmailAlias(account.providerName),
         providerUuids,
         providerName: account.providerName || null,
         today: createUsageBucket(),
@@ -456,6 +496,23 @@ function createAccountSummaryEntry(accountKey, account = {}) {
 
 function mergeAccountSummaryMeta(target, account = {}, accountKey = null) {
     if (!target) return;
+    const canonical = getCanonicalAccountUsageIdentity(
+        account.provider || target.provider || getProviderFromAccountKey(accountKey),
+        account.providerUuid || getIdentityFromAccountKey(accountKey),
+        account.accountIdentity || null,
+        account.accountEmail || null,
+        account.providerName || null
+    );
+    if (canonical?.provider) {
+        target.provider = canonical.provider;
+    }
+    if (canonical?.identity) {
+        target.accountIdentity = canonical.identity;
+        target.providerUuid = canonical.identity;
+    }
+    if (canonical?.accountEmail) {
+        target.accountEmail = canonical.accountEmail;
+    }
     if (account.providerName && !target.providerName) {
         target.providerName = account.providerName;
     }
@@ -1049,7 +1106,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     const providerName = context.providerName || usage.providerName || null;
     const accountIdentity = context.accountIdentity || usage.accountIdentity || null;
     const accountEmail = context.accountEmail || usage.accountEmail || null;
-    const accountUsage = ensureAccountUsage(dayHistory.accounts, pName, providerUuid, providerName, accountIdentity);
+    const accountUsage = ensureAccountUsage(dayHistory.accounts, pName, providerUuid, providerName, accountIdentity, accountEmail);
     if (accountUsage) {
         if (accountEmail && !accountUsage.accountEmail) accountUsage.accountEmail = accountEmail;
         addUsage(accountUsage.summary, usage);
@@ -1069,7 +1126,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     if (!hourUsage.models[mName]) hourUsage.models[mName] = createUsageBucket();
     addUsage(hourUsage.models[mName], usage);
     updatePeaks(hourUsage.models[mName]);
-    const hourAccountUsage = ensureAccountUsage(hourUsage.accounts, pName, providerUuid, providerName, accountIdentity);
+    const hourAccountUsage = ensureAccountUsage(hourUsage.accounts, pName, providerUuid, providerName, accountIdentity, accountEmail);
     if (hourAccountUsage) {
         if (accountEmail && !hourAccountUsage.accountEmail) hourAccountUsage.accountEmail = accountEmail;
         addUsage(hourAccountUsage.summary, usage);
