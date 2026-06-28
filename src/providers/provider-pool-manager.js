@@ -6,7 +6,6 @@ import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { convertData } from '../convert/convert.js';
-import { getAccountTokenUsageSummary } from '../plugins/model-usage-stats/stats-manager.js';
 
 import {
     getConfiguredSupportedModels,
@@ -108,12 +107,18 @@ function modelMatchesAnyPattern(model, patterns) {
     return patterns.some(pattern => globPatternToRegExp(pattern).test(model));
 }
 
-function getPositiveTokenLimit(value) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
 const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const CODEX_QUOTA_BUCKET = {
+    GENERAL: 'general',
+    CODEX_53: 'codex53'
+};
+
+const DEFAULT_CODEX_53_MODEL_PATTERNS = [
+    '*5.3*',
+    '*codexspark*',
+    '*codex-spark*',
+    '*codex_spark*'
+];
 
 function getPositivePercentLimit(value) {
     const parsed = Number(value);
@@ -168,6 +173,16 @@ function getUsageItemPercent(usage, itemId) {
     return normalizePercentValue(item.percent ?? item.usedPercent ?? item.used);
 }
 
+function getUsageItemPercentByMatcher(usage, matcher) {
+    const items = Array.isArray(usage?.items) ? usage.items : [];
+    const item = items.find(entry => matcher({
+        id: String(entry?.id || entry?.key || entry?.name || '').toLowerCase(),
+        label: String(entry?.label || '').toLowerCase()
+    }));
+    if (!item) return null;
+    return normalizePercentValue(item.percent ?? item.usedPercent ?? item.used);
+}
+
 function getRawRateLimitWindowPercent(rawUsage, windowId) {
     const rateLimit = rawUsage?.rate_limit || rawUsage?.rateLimit;
     const windowAliases = windowId === 'primary_window'
@@ -183,9 +198,34 @@ function getRawRateLimitWindowPercent(rawUsage, windowId) {
     return null;
 }
 
-function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId) {
+function resolveCodexQuotaBucket(requestedModel = null, patterns = DEFAULT_CODEX_53_MODEL_PATTERNS) {
+    const model = String(requestedModel || '').trim();
+    if (!model) return CODEX_QUOTA_BUCKET.GENERAL;
+    const normalizedPatterns = toStringArray(patterns).map(pattern => pattern.toLowerCase());
+    return modelMatchesAnyPattern(model.toLowerCase(), normalizedPatterns) ? CODEX_QUOTA_BUCKET.CODEX_53 : CODEX_QUOTA_BUCKET.GENERAL;
+}
+
+function getCodex53UsagePercent(usage, windowId) {
+    const isPrimary = windowId === 'primary_window';
+    const windowNeedle = isPrimary ? 'primary_window' : 'secondary_window';
+    const labelNeedle = isPrimary ? '5h' : 'weekly';
+    return getUsageItemPercentByMatcher(usage, ({ id, label }) =>
+        id.includes('additional') &&
+        id.includes('gpt_5_3_codex_spark') &&
+        id.includes(windowNeedle)
+    ) ?? getUsageItemPercentByMatcher(usage, ({ id, label }) =>
+        (id.includes('gpt_5_3') || label.includes('gpt-5.3')) &&
+        (id.includes(windowNeedle) || label.includes(labelNeedle))
+    );
+}
+
+function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
     const usage = getCachedCodexUsageForProvider(providerType, uuid, usageCache);
     if (!usage) return null;
+
+    if (bucket === CODEX_QUOTA_BUCKET.CODEX_53) {
+        return getCodex53UsagePercent(usage, windowId);
+    }
 
     const itemPercent = getUsageItemPercent(usage, windowId);
     if (itemPercent !== null) return itemPercent;
@@ -193,13 +233,36 @@ function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId) {
     return getRawRateLimitWindowPercent(usage.raw || usage, windowId);
 }
 
-function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = null) {
+function getCodexQuotaLimits(config = {}, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
+    if (bucket === CODEX_QUOTA_BUCKET.CODEX_53) {
+        return {
+            max5hPercent: getPositivePercentLimit(config.codex53Max5hPercent),
+            maxWeeklyPercent: getPositivePercentLimit(config.codex53MaxWeeklyPercent)
+        };
+    }
+
+    return {
+        max5hPercent: getPositivePercentLimit(config.codexGeneralMax5hPercent),
+        maxWeeklyPercent: getPositivePercentLimit(config.codexGeneralMaxWeeklyPercent)
+    };
+}
+
+function getCodexQuotaState(config = {}, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
+    return config.codexQuotaHealth?.[bucket] || {};
+}
+
+function isCodexQuotaBucketCoolingDown(config = {}, bucket = CODEX_QUOTA_BUCKET.GENERAL, now = Date.now()) {
+    const quotaState = getCodexQuotaState(config, bucket);
+    if (quotaState.isHealthy !== false) return false;
+
+    const recoveryMs = Date.parse(quotaState.scheduledRecoveryTime || '');
+    return Number.isFinite(recoveryMs) && now < recoveryMs;
+}
+
+function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = null, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
     const config = providerStatus?.config || {};
-    const max5hTokens = getPositiveTokenLimit(config.codexMax5hTokens);
-    const maxWeeklyTokens = getPositiveTokenLimit(config.codexMaxWeeklyTokens);
-    const max5hPercent = getPositivePercentLimit(config.codexMax5hPercent);
-    const maxWeeklyPercent = getPositivePercentLimit(config.codexMaxWeeklyPercent);
-    if (!max5hTokens && !maxWeeklyTokens && !max5hPercent && !maxWeeklyPercent) {
+    const { max5hPercent, maxWeeklyPercent } = getCodexQuotaLimits(config, bucket);
+    if (!max5hPercent && !maxWeeklyPercent) {
         return { limited: false, exceeded: false };
     }
 
@@ -211,74 +274,36 @@ function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = nul
     const warnings = [];
 
     if (max5hPercent) {
-        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'primary_window');
+        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'primary_window', bucket);
         if (usagePercent === null) {
-            warnings.push('official 5h usage percent unavailable');
+            warnings.push(`official ${bucket} 5h usage percent unavailable`);
         } else if (usagePercent >= max5hPercent) {
             return {
                 limited: true,
                 exceeded: true,
-                reason: `5h usage quota reached (${usagePercent.toFixed(1)}%/${max5hPercent}%)`,
+                bucket,
+                reason: `${bucket} 5h usage quota reached (${usagePercent.toFixed(1)}%/${max5hPercent}%)`,
                 usagePercent
             };
         }
     }
 
     if (maxWeeklyPercent) {
-        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'secondary_window');
+        const usagePercent = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'secondary_window', bucket);
         if (usagePercent === null) {
-            warnings.push('official weekly usage percent unavailable');
+            warnings.push(`official ${bucket} weekly usage percent unavailable`);
         } else if (usagePercent >= maxWeeklyPercent) {
             return {
                 limited: true,
                 exceeded: true,
-                reason: `weekly usage quota reached (${usagePercent.toFixed(1)}%/${maxWeeklyPercent}%)`,
+                bucket,
+                reason: `${bucket} weekly usage quota reached (${usagePercent.toFixed(1)}%/${maxWeeklyPercent}%)`,
                 usagePercent
             };
         }
     }
 
-    if (!max5hTokens && !maxWeeklyTokens) {
-        return { limited: true, exceeded: false, reason: warnings.join('; ') || null };
-    }
-
-    try {
-        const tokenUsageIdentity = config.codexAccountKey || config.codexAccountId || uuid;
-        const usage = getAccountTokenUsageSummary(providerType, tokenUsageIdentity, {
-            rolling5hTokenLimit: max5hTokens,
-            weeklyTokenLimit: maxWeeklyTokens
-        });
-        const exceededReasons = [];
-        const recoveryTimes = [];
-        if (max5hTokens && usage.rolling5hTokens >= max5hTokens) {
-            exceededReasons.push(`5h token quota reached (${usage.rolling5hTokens}/${max5hTokens})`);
-            if (usage.rolling5hRecoveryTime) {
-                recoveryTimes.push(usage.rolling5hRecoveryTime);
-            }
-        }
-        if (maxWeeklyTokens && usage.weeklyTokens >= maxWeeklyTokens) {
-            exceededReasons.push(`weekly token quota reached (${usage.weeklyTokens}/${maxWeeklyTokens})`);
-            if (usage.weeklyRecoveryTime) {
-                recoveryTimes.push(usage.weeklyRecoveryTime);
-            }
-        }
-        if (exceededReasons.length > 0) {
-            const recoveryTime = recoveryTimes
-                .map(value => new Date(value))
-                .filter(date => Number.isFinite(date.getTime()))
-                .sort((a, b) => b.getTime() - a.getTime())[0] || null;
-            return {
-                limited: true,
-                exceeded: true,
-                reason: exceededReasons.join('; '),
-                usage,
-                recoveryTime: recoveryTime ? recoveryTime.toISOString() : null
-            };
-        }
-        return { limited: true, exceeded: false, usage, reason: warnings.join('; ') || null };
-    } catch (error) {
-        return { limited: true, exceeded: false, reason: `quota stats unavailable: ${error.message}` };
-    }
+    return { limited: true, exceeded: false, reason: warnings.join('; ') || null };
 }
 
 /**
@@ -940,7 +965,7 @@ export class ProviderPoolManager {
         }
 
         if (isCodexProviderType(providerType) && candidates.length > 0) {
-            candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates);
+            candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates, requestedModel);
         }
 
         return candidates;
@@ -1583,7 +1608,7 @@ export class ProviderPoolManager {
         }
 
         if (isCodexProviderType(providerType)) {
-            availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders);
+            availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders, requestedModel);
         }
 
         let selected;
@@ -1646,13 +1671,24 @@ export class ProviderPoolManager {
         return selected.config;
     }
 
-    _filterCodexProvidersByTokenQuota(providerType, providers) {
+    _filterCodexProvidersByTokenQuota(providerType, providers, requestedModel = null) {
         let limitedCount = 0;
         const allowed = [];
         const usageCache = readUsageCacheSync();
+        const bucket = resolveCodexQuotaBucket(
+            requestedModel,
+            toStringArray(this.globalConfig?.CODEX_53_QUOTA_MODEL_PATTERNS || this.globalConfig?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS)
+        );
+        const now = Date.now();
 
         for (const provider of providers) {
-            const quotaStatus = getCodexTokenQuotaStatus(providerType, provider, usageCache);
+            if (isCodexQuotaBucketCoolingDown(provider.config, bucket, now)) {
+                limitedCount += 1;
+                this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${bucket} quota bucket is cooling down`);
+                continue;
+            }
+
+            const quotaStatus = getCodexTokenQuotaStatus(providerType, provider, usageCache, bucket);
             if (!quotaStatus.limited) {
                 allowed.push(provider);
                 continue;
@@ -1661,19 +1697,13 @@ export class ProviderPoolManager {
             limitedCount += 1;
             if (quotaStatus.exceeded) {
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
-                if (quotaStatus.recoveryTime) {
-                    this.markProviderUnhealthyWithRecoveryTime(
-                        providerType,
-                        provider.config,
-                        quotaStatus.reason,
-                        quotaStatus.recoveryTime
-                    );
-                }
+                this.markCodexQuotaBucketUnhealthy(providerType, provider.config, bucket, quotaStatus.reason);
                 continue;
             }
             if (quotaStatus.reason) {
                 this._log('warn', `Codex quota check for ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
             }
+            this.markCodexQuotaBucketHealthy(providerType, provider.config, bucket);
             allowed.push(provider);
         }
 
@@ -2322,6 +2352,47 @@ export class ProviderPoolManager {
         }
     }
 
+    markCodexQuotaBucketUnhealthy(providerType, providerConfig, bucket, errorMessage = null, recoveryTime = null) {
+        if (!providerConfig?.uuid || !isCodexProviderType(providerType)) {
+            return;
+        }
+
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        if (!provider) return;
+
+        provider.config.codexQuotaHealth = provider.config.codexQuotaHealth || {};
+        provider.config.codexQuotaHealth[bucket] = {
+            ...(provider.config.codexQuotaHealth[bucket] || {}),
+            isHealthy: false,
+            lastErrorTime: new Date().toISOString(),
+            lastErrorMessage: errorMessage || null,
+            scheduledRecoveryTime: recoveryTime ? new Date(recoveryTime).toISOString() : null
+        };
+        provider.config.lastUsed = new Date().toISOString();
+        this._log('warn', `Marked Codex quota bucket ${bucket} as unhealthy for ${this._getDisplayName(provider.config)} (${providerType}). Reason: ${errorMessage || 'Quota exhausted'}`);
+        this._debouncedSave(providerType);
+    }
+
+    markCodexQuotaBucketHealthy(providerType, providerConfig, bucket) {
+        if (!providerConfig?.uuid || !isCodexProviderType(providerType)) {
+            return;
+        }
+
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        const quotaState = provider?.config?.codexQuotaHealth?.[bucket];
+        if (!provider || quotaState?.isHealthy !== false) return;
+
+        provider.config.codexQuotaHealth[bucket] = {
+            ...quotaState,
+            isHealthy: true,
+            lastErrorTime: null,
+            lastErrorMessage: null,
+            scheduledRecoveryTime: null
+        };
+        this._log('info', `Recovered Codex quota bucket ${bucket} for ${this._getDisplayName(provider.config)} (${providerType})`);
+        this._debouncedSave(providerType);
+    }
+
     /**
      * Marks a provider as healthy.
      * @param {string} providerType - The type of the provider.
@@ -2558,6 +2629,30 @@ export class ProviderPoolManager {
                         config.scheduledRecoveryTime = null; // 清除恢复时间
                         
                         // 保存更改
+                        this._debouncedSave(type);
+                    }
+                }
+
+                if (isCodexProviderType(type) && config.codexQuotaHealth && typeof config.codexQuotaHealth === 'object') {
+                    let recoveredBucket = false;
+                    for (const [bucket, quotaState] of Object.entries(config.codexQuotaHealth)) {
+                        if (quotaState?.isHealthy !== false || !quotaState?.scheduledRecoveryTime) {
+                            continue;
+                        }
+                        const recoveryTime = new Date(quotaState.scheduledRecoveryTime);
+                        if (Number.isFinite(recoveryTime.getTime()) && now >= recoveryTime) {
+                            config.codexQuotaHealth[bucket] = {
+                                ...quotaState,
+                                isHealthy: true,
+                                lastErrorTime: null,
+                                lastErrorMessage: null,
+                                scheduledRecoveryTime: null
+                            };
+                            recoveredBucket = true;
+                            this._log('info', `Auto-recovering Codex quota bucket ${bucket} for ${this._getDisplayName(config)} (${type}). Scheduled recovery time reached: ${recoveryTime.toISOString()}`);
+                        }
+                    }
+                    if (recoveredBucket) {
                         this._debouncedSave(type);
                     }
                 }

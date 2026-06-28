@@ -15,6 +15,13 @@ let nodeSearchTerm = '';
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 let cachedProxyPools = [];
 
+const CODEX_QUOTA_PERCENT_FIELDS = new Set([
+    'codexGeneralMax5hPercent',
+    'codexGeneralMaxWeeklyPercent',
+    'codex53Max5hPercent',
+    'codex53MaxWeeklyPercent'
+]);
+
 function usesManagedModelList(providerType = '') {
     return Array.from(MANAGED_MODEL_LIST_PROVIDERS).some(baseType =>
         providerType === baseType || providerType.startsWith(`${baseType}-`)
@@ -188,7 +195,7 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
             value = parseInt(value || '0', 10);
         } else if (key === 'providerWeight') {
             value = Number(value || '1');
-        } else if (key === 'codexMax5hTokens' || key === 'codexMaxWeeklyTokens' || key === 'codexMax5hPercent' || key === 'codexMaxWeeklyPercent') {
+        } else if (CODEX_QUOTA_PERCENT_FIELDS.has(key)) {
             value = Number(value || '0');
         } else if (key === 'PROXY_REQUIRED') {
             value = String(value || '').trim().toLowerCase() === 'true';
@@ -1491,6 +1498,9 @@ function getFieldOrder(provider) {
     const hiddenProviderConfigFields = [
         'codexMax5hTokens',
         'codexMaxWeeklyTokens',
+        'codexMax5hPercent',
+        'codexMaxWeeklyPercent',
+        'codexQuotaHealth',
         'codexAccountKey',
         'codexAccountId',
         'codexEmail',
@@ -2140,7 +2150,7 @@ async function addProvider(providerType) {
     allFields.forEach(field => {
         const element = document.getElementById(`new${field.id}`);
         if (element) {
-            if (field.id === 'codexMax5hTokens' || field.id === 'codexMaxWeeklyTokens' || field.id === 'codexMax5hPercent' || field.id === 'codexMaxWeeklyPercent') {
+            if (CODEX_QUOTA_PERCENT_FIELDS.has(field.id)) {
                 providerConfig[field.id] = Number(element.value || '0');
             } else if (field.id === 'PROXY_REQUIRED') {
                 providerConfig[field.id] = element.value === 'true';

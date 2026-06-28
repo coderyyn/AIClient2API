@@ -2,16 +2,36 @@ import { describe, expect, test } from '@jest/globals';
 import { normalizeProviderConfigFields } from '../src/utils/provider-config-normalizer.js';
 
 describe('provider config normalizer', () => {
-    test('normalizes Codex percentage quota limits as non-negative numbers', () => {
+    test('normalizes split Codex percentage quota limits as non-negative numbers', () => {
         const normalized = normalizeProviderConfigFields({
-            codexMax5hPercent: '80',
-            codexMaxWeeklyPercent: '90'
+            codexGeneralMax5hPercent: '80',
+            codexGeneralMaxWeeklyPercent: '90',
+            codex53Max5hPercent: '70',
+            codex53MaxWeeklyPercent: '75'
         });
 
         expect(normalized).toMatchObject({
-            codexMax5hPercent: 80,
-            codexMaxWeeklyPercent: 90
+            codexGeneralMax5hPercent: 80,
+            codexGeneralMaxWeeklyPercent: 90,
+            codex53Max5hPercent: 70,
+            codex53MaxWeeklyPercent: 75
         });
+    });
+
+    test('removes legacy Codex token quota limit fields from saved config', () => {
+        const normalized = normalizeProviderConfigFields({
+            codexMax5hTokens: '100000000',
+            codexMaxWeeklyTokens: '500000000',
+            codexMax5hPercent: '80',
+            codexMaxWeeklyPercent: '90',
+            codexGeneralMax5hPercent: '85'
+        });
+
+        expect(normalized.codexMax5hTokens).toBeUndefined();
+        expect(normalized.codexMaxWeeklyTokens).toBeUndefined();
+        expect(normalized.codexMax5hPercent).toBeUndefined();
+        expect(normalized.codexMaxWeeklyPercent).toBeUndefined();
+        expect(normalized.codexGeneralMax5hPercent).toBe(85);
     });
 
     test('removes legacy provider node proxy fields from saved config', () => {

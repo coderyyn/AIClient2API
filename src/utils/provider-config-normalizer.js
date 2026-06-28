@@ -13,15 +13,22 @@ const LEGACY_PROVIDER_PROXY_FIELDS = [
     'PROXY_REQUIRED'
 ];
 
+const LEGACY_CODEX_QUOTA_FIELDS = [
+    'codexMax5hTokens',
+    'codexMaxWeeklyTokens',
+    'codexMax5hPercent',
+    'codexMaxWeeklyPercent'
+];
+
 const PROVIDER_POSITIVE_NUMBER_CONFIG_FIELDS = [
     'providerWeight'
 ];
 
 const PROVIDER_NON_NEGATIVE_NUMBER_CONFIG_FIELDS = [
-    'codexMax5hTokens',
-    'codexMaxWeeklyTokens',
-    'codexMax5hPercent',
-    'codexMaxWeeklyPercent'
+    'codexGeneralMax5hPercent',
+    'codexGeneralMaxWeeklyPercent',
+    'codex53Max5hPercent',
+    'codex53MaxWeeklyPercent'
 ];
 
 function normalizeStringArrayConfigValue(value) {
@@ -117,6 +124,9 @@ export function normalizeProviderConfigFields(data) {
 
     const result = { ...data };
     for (const key of LEGACY_PROVIDER_PROXY_FIELDS) {
+        delete result[key];
+    }
+    for (const key of LEGACY_CODEX_QUOTA_FIELDS) {
         delete result[key];
     }
 

@@ -14,7 +14,7 @@ describe('provider modal source regressions', () => {
         expect(field1OAuthBranch).not.toContain('field2Def');
     });
 
-    test('Codex token quota limit fields are hidden from provider detail rendering', () => {
+    test('Codex legacy quota fields are hidden from provider detail rendering', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/modal.js'), 'utf8').replace(/\r\n/g, '\n');
         const excludedStart = source.indexOf('const hiddenProviderConfigFields = [');
         expect(excludedStart).toBeGreaterThanOrEqual(0);
@@ -25,5 +25,7 @@ describe('provider modal source regressions', () => {
         const hiddenFieldsBlock = source.slice(excludedStart, excludedEnd);
         expect(hiddenFieldsBlock).toContain("'codexMax5hTokens'");
         expect(hiddenFieldsBlock).toContain("'codexMaxWeeklyTokens'");
+        expect(hiddenFieldsBlock).toContain("'codexMax5hPercent'");
+        expect(hiddenFieldsBlock).toContain("'codexMaxWeeklyPercent'");
     });
 });

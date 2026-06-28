@@ -23,4 +23,15 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('instance.codexAccountKey');
         expect(source).toContain('account-usage-identity');
     });
+
+    test('Codex usage cards render separate general and Codex 5.3 quota health badges', () => {
+        const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
+        const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(usageApiSource).toContain('codexQuotaHealth: provider.codexQuotaHealth || null');
+        expect(usageManagerSource).toContain('function renderCodexQuotaHealthBadges(instance, providerType)');
+        expect(usageManagerSource).toContain('通用额度');
+        expect(usageManagerSource).toContain('5.3额度');
+        expect(usageManagerSource).toContain('renderCodexQuotaHealthBadges(instance, providerType)');
+    });
 });

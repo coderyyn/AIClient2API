@@ -358,6 +358,25 @@ function canUseCodexRateLimitReset(rateLimitResetCredits) {
     return Boolean(rateLimitResetCredits && (rateLimitResetCredits.canReset || getCodexResetAvailableCount(rateLimitResetCredits) > 0));
 }
 
+function renderCodexQuotaHealthBadges(instance, providerType) {
+    if (providerType !== 'openai-codex-oauth') return '';
+
+    const quotaHealth = instance.codexQuotaHealth || {};
+    const renderBadge = (label, state = {}) => {
+        const isHealthy = state.isHealthy !== false;
+        const titleParts = [];
+        if (state.lastErrorMessage) titleParts.push(state.lastErrorMessage);
+        if (state.scheduledRecoveryTime) titleParts.push(`恢复时间: ${formatDate(state.scheduledRecoveryTime)}`);
+        const title = titleParts.length > 0 ? ` title="${escapeHtml(titleParts.join('；'))}"` : '';
+        return `<span class="badge ${isHealthy ? 'badge-healthy' : 'badge-unhealthy'}"${title}>${label}: ${isHealthy ? '正常' : '受限'}</span>`;
+    };
+
+    return [
+        renderBadge('通用额度', quotaHealth.general),
+        renderBadge('5.3额度', quotaHealth.codex53)
+    ].join('');
+}
+
 function confirmCodexRateLimitReset(displayName, availableCount) {
     return window.confirm([
         `Use one Codex rate-limit reset for ${displayName}?`,
@@ -598,6 +617,7 @@ function createInstanceUsageCard(instance, providerType) {
                         ${instance.configFilePath ? `<button class="btn-download-config" title="${t('usage.card.downloadConfig')}"><i class="fas fa-download"></i></button>` : ''}
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
                         ${instance.isDisabled ? `<span class="badge badge-disabled">${t('usage.card.status.disabled')}</span>` : `<span class="badge ${instance.isHealthy ? 'badge-healthy' : 'badge-unhealthy'}">${t(instance.isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')}</span>`}
+                        ${renderCodexQuotaHealthBadges(instance, providerType)}
                     </div>
                 </div>
                 <div class="instance-name"><span class="instance-name-text" title="${displayName}">${displayName}</span></div>

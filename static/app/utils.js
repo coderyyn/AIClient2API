@@ -211,10 +211,10 @@ function getFieldLabel(key) {
         'concurrencyLimit': t('modal.provider.concurrencyLimit') + ' ' + t('config.optional'),
         'queueLimit': t('modal.provider.queueLimit') + ' ' + t('config.optional'),
         'providerWeight': (t('modal.provider.providerWeight') || '节点权重') + ' ' + t('config.optional'),
-        'codexMax5hTokens': t('modal.provider.codexMax5hTokens') + ' ' + t('config.optional'),
-        'codexMaxWeeklyTokens': t('modal.provider.codexMaxWeeklyTokens') + ' ' + t('config.optional'),
-        'codexMax5hPercent': t('modal.provider.codexMax5hPercent') + ' ' + t('config.optional'),
-        'codexMaxWeeklyPercent': t('modal.provider.codexMaxWeeklyPercent') + ' ' + t('config.optional'),
+        'codexGeneralMax5hPercent': t('modal.provider.codexGeneralMax5hPercent') + ' ' + t('config.optional'),
+        'codexGeneralMaxWeeklyPercent': t('modal.provider.codexGeneralMaxWeeklyPercent') + ' ' + t('config.optional'),
+        'codex53Max5hPercent': t('modal.provider.codex53Max5hPercent') + ' ' + t('config.optional'),
+        'codex53MaxWeeklyPercent': t('modal.provider.codex53MaxWeeklyPercent') + ' ' + t('config.optional'),
         'PROXY_URL': t('modal.provider.proxyUrl') + ' ' + t('config.optional'),
         'PROXY_REQUIRED': t('modal.provider.proxyRequired') + ' ' + t('config.optional'),
         'PROXY_ID': t('modal.provider.proxyId') + ' ' + t('config.optional'),
@@ -463,16 +463,28 @@ function getProviderTypeFields(providerType) {
                 placeholder: 'https://api.openai.com/v1/codex'
             },
             {
-                id: 'codexMax5hPercent',
-                label: `${t('modal.provider.codexMax5hPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                id: 'codexGeneralMax5hPercent',
+                label: `${t('modal.provider.codexGeneralMax5hPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'number',
-                placeholder: '例如 80，达到 80% 已用量后停用；0 = 不限制'
+                placeholder: '通用额度 5h 已用百分比阈值，例如 80；0 = 不限制'
             },
             {
-                id: 'codexMaxWeeklyPercent',
-                label: `${t('modal.provider.codexMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                id: 'codexGeneralMaxWeeklyPercent',
+                label: `${t('modal.provider.codexGeneralMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'number',
-                placeholder: '例如 90，达到 90% 已用量后停用；0 = 不限制'
+                placeholder: '通用额度周已用百分比阈值，例如 90；0 = 不限制'
+            },
+            {
+                id: 'codex53Max5hPercent',
+                label: `${t('modal.provider.codex53Max5hPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Codex 5.3 额度 5h 已用百分比阈值，例如 80；0 = 不限制'
+            },
+            {
+                id: 'codex53MaxWeeklyPercent',
+                label: `${t('modal.provider.codex53MaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Codex 5.3 额度周已用百分比阈值，例如 90；0 = 不限制'
             },
             {
                 id: 'PROXY_ID',
