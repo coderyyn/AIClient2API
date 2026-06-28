@@ -38,6 +38,36 @@ describe('usage manager display source regressions', () => {
         expect(usageManagerSource).toContain('renderCodexQuotaHealthBadges(instance, providerType)');
     });
 
+    test('Codex collapsed header renders base, general, and Codex 5.3 status icons separately', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function getBaseStatusState(instance)');
+        expect(source).toContain('function renderCollapsedStatusIcons(instance, providerType)');
+        expect(source).toContain("renderStatusIcon('基础状态', getBaseStatusState(instance))");
+        expect(source).toContain("renderStatusIcon('通用额度', getQuotaStatusState(instance.codexQuotaHealth?.general))");
+        expect(source).toContain("renderStatusIcon('5.3额度', getQuotaStatusState(instance.codexQuotaHealth?.codex53))");
+        expect(source).toContain('${renderCollapsedStatusIcons(instance, providerType)}');
+        expect(source).not.toContain("${instance.success ? '<i class=\"fas fa-check-circle status-success\"></i>' : '<i class=\"fas fa-times-circle status-error\"></i>'}");
+    });
+
+    test('Codex expanded base status badge is independent from quota bucket state', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function renderBaseStatusBadge(instance)');
+        expect(source).toContain('const baseStatus = getBaseStatusState(instance)');
+        expect(source).toContain('${renderBaseStatusBadge(instance)}');
+        expect(source).not.toContain('${instance.isDisabled ? `<span class="badge badge-disabled">${t(\'usage.card.status.disabled\')}</span>`');
+    });
+
+    test('provider selection filters base health before Codex quota bucket health', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src/providers/provider-pool-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+        const baseFilterIndex = source.indexOf('let availableAndHealthyProviders = availableProviders.filter(p =>\n            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh');
+        const codexFilterIndex = source.indexOf('availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders, requestedModel);');
+
+        expect(baseFilterIndex).toBeGreaterThanOrEqual(0);
+        expect(codexFilterIndex).toBeGreaterThan(baseFilterIndex);
+    });
+
     test('usage refresh failures keep last successful cached data visible', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');

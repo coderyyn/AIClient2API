@@ -370,6 +370,75 @@ function canUseCodexRateLimitReset(rateLimitResetCredits) {
     return Boolean(rateLimitResetCredits && (rateLimitResetCredits.canReset || getCodexResetAvailableCount(rateLimitResetCredits) > 0));
 }
 
+function getBaseStatusState(instance) {
+    if (instance.isDisabled) {
+        return {
+            isHealthy: false,
+            label: t('usage.card.status.disabled'),
+            title: t('usage.card.status.disabled')
+        };
+    }
+    if (instance.lastRefreshError) {
+        return {
+            isHealthy: false,
+            label: t('usage.card.status.unhealthy'),
+            title: instance.lastRefreshError
+        };
+    }
+    if (instance.success) {
+        return {
+            isHealthy: true,
+            label: t('usage.card.status.healthy'),
+            title: t('usage.card.status.healthy')
+        };
+    }
+
+    const isHealthy = instance.isHealthy !== false;
+    return {
+        isHealthy,
+        label: t(isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy'),
+        title: instance.error || t(isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')
+    };
+}
+
+function getQuotaStatusState(state = {}) {
+    const isHealthy = state?.isHealthy !== false;
+    const titleParts = [];
+    if (state?.lastErrorMessage) titleParts.push(state.lastErrorMessage);
+    if (state?.scheduledRecoveryTime) titleParts.push(`恢复时间: ${formatDate(state.scheduledRecoveryTime)}`);
+    return {
+        isHealthy,
+        label: isHealthy ? '正常' : '受限',
+        title: titleParts.join('；') || (isHealthy ? '正常' : '受限')
+    };
+}
+
+function renderStatusIcon(label, state) {
+    const iconClass = state.isHealthy ? 'fa-check-circle status-success' : 'fa-times-circle status-error';
+    const title = `${label}：${state.label}${state.title && state.title !== state.label ? `；${state.title}` : ''}`;
+    return `<i class="fas ${iconClass}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></i>`;
+}
+
+function renderCollapsedStatusIcons(instance, providerType) {
+    const icons = [
+        renderStatusIcon('基础状态', getBaseStatusState(instance))
+    ];
+
+    if (providerType === 'openai-codex-oauth') {
+        icons.push(
+            renderStatusIcon('通用额度', getQuotaStatusState(instance.codexQuotaHealth?.general)),
+            renderStatusIcon('5.3额度', getQuotaStatusState(instance.codexQuotaHealth?.codex53))
+        );
+    }
+
+    return icons.join('');
+}
+
+function renderBaseStatusBadge(instance) {
+    const baseStatus = getBaseStatusState(instance);
+    return `<span class="badge ${baseStatus.isHealthy ? 'badge-healthy' : 'badge-unhealthy'}" title="${escapeHtml(baseStatus.title || baseStatus.label)}">${escapeHtml(baseStatus.label)}</span>`;
+}
+
 function renderCodexQuotaHealthBadges(instance, providerType) {
     if (providerType !== 'openai-codex-oauth') return '';
 
@@ -607,7 +676,7 @@ function createInstanceUsageCard(instance, providerType) {
                 <i class="fas fa-chevron-right usage-toggle-icon"></i>
                 <span class="collapsed-name" title="${displayName} ${t('usage.clickToManage')}" onclick="event.stopPropagation(); window.jumpToProviderNode('${providerType}', '${instance.uuid}', event)">${displayName}</span>
                 ${summary.plan ? `<span class="collapsed-plan-badge ${planClass}">${summary.plan}</span>` : ''}
-                ${instance.success ? '<i class="fas fa-check-circle status-success"></i>' : '<i class="fas fa-times-circle status-error"></i>'}
+                ${renderCollapsedStatusIcons(instance, providerType)}
             </div>
             ${instance.success ? `
             <div class="collapsed-summary-row collapsed-summary-usage-row">
@@ -628,7 +697,7 @@ function createInstanceUsageCard(instance, providerType) {
                     <div class="instance-status-badges">
                         ${instance.configFilePath ? `<button class="btn-download-config" title="${t('usage.card.downloadConfig')}"><i class="fas fa-download"></i></button>` : ''}
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
-                        ${instance.isDisabled ? `<span class="badge badge-disabled">${t('usage.card.status.disabled')}</span>` : `<span class="badge ${instance.isHealthy ? 'badge-healthy' : 'badge-unhealthy'}">${t(instance.isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')}</span>`}
+                        ${renderBaseStatusBadge(instance)}
                         ${renderCodexQuotaHealthBadges(instance, providerType)}
                     </div>
                 </div>
