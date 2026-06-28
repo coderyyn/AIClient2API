@@ -37,9 +37,9 @@ function formatTimestampForPath(now) {
 }
 
 function createPermanentBackup(configDir, now) {
-    const parentDir = path.dirname(configDir);
+    const backupRootDir = path.join(configDir, '.migration-backups');
     const backupBase = path.join(
-        parentDir,
+        backupRootDir,
         `ai_client_configs_backup_before_email_identity_migration_${formatTimestampForPath(now)}`
     );
     let backupDir = backupBase;

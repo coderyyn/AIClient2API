@@ -515,6 +515,9 @@ async function scanOAuthDirectory(dirPath, usedPaths, currentConfig, providerPoo
                     }
                 }
             } else if (file.isDirectory()) {
+                if (file.name.startsWith('.') || file.name.includes('migration-backup')) {
+                    continue;
+                }
                 // 递归扫描子目录（限制深度）
                 const relativePath = path.relative(process.cwd(), fullPath);
                 // 最大深度4层，以支持 configs/kiro/{subfolder}/file.json 这样的结构

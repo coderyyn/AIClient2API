@@ -146,7 +146,11 @@ describe('Codex email identity migration', () => {
         const potluckKeys = readJson('api-potluck-keys.json');
         const accountKey = 'openai-codex-oauth:user@example.com';
 
-        expect(result.backupDir).toContain('ai_client_configs_backup_before_email_identity_migration_20260628-103000');
+        expect(result.backupDir).toBe(path.join(
+            tempDir,
+            '.migration-backups',
+            'ai_client_configs_backup_before_email_identity_migration_20260628-103000'
+        ));
         expect(fs.existsSync(result.backupDir)).toBe(true);
         expect(fs.existsSync(path.join(result.backupDir, 'SHA256SUMS.txt'))).toBe(true);
         expect(fs.existsSync(path.join(result.backupDir, 'README.txt'))).toBe(true);
@@ -262,6 +266,67 @@ describe('Codex email identity migration', () => {
             totalTokens: 200,
             eventCount: 0
         });
+    });
+
+    test('formal migration removes unmapped Codex account buckets from persisted stats', async () => {
+        writeJson('provider_pools.json', {
+            'openai-codex-oauth': [
+                { uuid: 'known-uuid', codexEmail: 'user@example.com' }
+            ]
+        });
+        writeJson('model-usage-stats.json', {
+            updatedAt: '2026-06-28T10:00:00.000Z',
+            summary: { requestCount: 2, totalTokens: 300 },
+            providers: {},
+            accounts: {
+                'openai-codex-oauth:known-uuid': {
+                    provider: 'openai-codex-oauth',
+                    providerUuid: 'known-uuid',
+                    providerUuids: ['known-uuid'],
+                    summary: { requestCount: 1, totalTokens: 100 },
+                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 100 } }
+                },
+                'openai-codex-oauth:orphan-uuid': {
+                    provider: 'openai-codex-oauth',
+                    providerUuid: 'orphan-uuid',
+                    providerUuids: ['orphan-uuid'],
+                    summary: { requestCount: 1, totalTokens: 200 },
+                    models: { 'gpt-5.5': { requestCount: 1, totalTokens: 200 } }
+                }
+            },
+            accountUsageEvents: {},
+            daily: {
+                '2026-06-24': {
+                    accounts: {
+                        'openai-codex-oauth:orphan-uuid': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'orphan-uuid',
+                            providerUuids: ['orphan-uuid'],
+                            summary: { requestCount: 1, totalTokens: 200 },
+                            models: { 'gpt-5.5': { requestCount: 1, totalTokens: 200 } }
+                        }
+                    }
+                }
+            }
+        });
+        writeJson('api-potluck-keys.json', { keys: {} });
+
+        const { migrateCodexEmailIdentity } = await import('../src/scripts/migrate-codex-email-identity.js');
+        await migrateCodexEmailIdentity({
+            configDir: tempDir,
+            now: new Date('2026-06-28T10:30:00.000Z')
+        });
+
+        const stats = readJson('model-usage-stats.json');
+        expect(stats.accounts['openai-codex-oauth:orphan-uuid']).toBeUndefined();
+        expect(stats.daily['2026-06-24'].accounts['openai-codex-oauth:orphan-uuid']).toBeUndefined();
+        expect(Object.keys(stats.accounts)).toEqual(['openai-codex-oauth:user@example.com']);
+        expect(fs.existsSync(path.join(
+            tempDir,
+            '.migration-backups',
+            'ai_client_configs_backup_before_email_identity_migration_20260628-103000',
+            'model-usage-stats.json'
+        ))).toBe(true);
     });
 
     test('uses explicit email identity overrides for historical orphan UUIDs', async () => {
