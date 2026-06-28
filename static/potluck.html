@@ -73,8 +73,8 @@
             gap: 1.25rem;
             align-items: start;
         }
-        .usage-calendar-card { grid-column: span 4; }
-        .usage-provider-card { grid-column: span 5; }
+        .usage-calendar-card { grid-column: span 3; }
+        .usage-provider-card { grid-column: span 6; }
         .usage-model-card { grid-column: span 3; }
         .stat-card {
             background: var(--bg-primary);
@@ -169,22 +169,25 @@
             grid-template-columns: repeat(3, minmax(0, 1fr));
         }
         .provider-account-child {
-            padding: 9px 10px 8px;
+            padding: 10px 11px 9px;
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
             border-radius: 14px;
             box-shadow: var(--shadow-sm);
         }
-        .provider-account-child .dist-info {
-            align-items: flex-start;
-            gap: 8px;
+        .account-main-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            margin-bottom: 8px;
         }
         .account-title {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             min-width: 0;
-            gap: 8px;
-            flex: 1 1 auto;
+            gap: 7px;
         }
         .account-dot {
             width: 8px;
@@ -192,6 +195,40 @@
             border-radius: var(--radius-full);
             background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
             flex-shrink: 0;
+        }
+        .account-name {
+            max-width: 78px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .account-calls {
+            flex: 0 0 auto;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .account-token-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 7px;
+        }
+        .account-token-value {
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .account-token-share {
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
         }
         .account-sub {
             display: none;
@@ -825,8 +862,8 @@
         .calendar-legend { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
         .calendar-legend .level { width: 10px; height: 10px; border-radius: 2px; }
         .calendar-wrapper { overflow-x: auto; padding: 25px 0 10px; scrollbar-width: thin; margin-top: -15px; display: flex; justify-content: center; }
-        .calendar-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); gap: 3px; min-width: max-content; padding: 2px; }
-        .calendar-day { width: 11px; height: 11px; border-radius: 2px; background: var(--bg-secondary); position: relative; cursor: pointer; transition: transform 0.1s; }
+        .calendar-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 9px); gap: 3px; min-width: max-content; padding: 2px; }
+        .calendar-day { width: 9px; height: 9px; border-radius: 2px; background: var(--bg-secondary); position: relative; cursor: pointer; transition: transform 0.1s; }
         .calendar-day:hover { transform: scale(1.2); z-index: 10; outline: 1px solid var(--primary-color); }
         .calendar-footer { margin-top: 10px; font-size: 12px; color: var(--text-tertiary); text-align: right; }
         .level-0, .calendar-day[data-level="0"] { background: var(--bg-secondary); }
@@ -924,7 +961,7 @@
                         </div>
                     </div>
                     <div class="calendar-wrapper" style="justify-content: flex-start; padding: 10px 0 5px; margin-top: 0;">
-                        <div class="calendar-grid" id="calendarGrid" style="grid-template-rows: repeat(7, 11px); gap: 3px;"></div>
+                        <div class="calendar-grid" id="calendarGrid"></div>
                     </div>
                     <div id="calendarFooter" style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;"></div>
                 </div>
@@ -1564,15 +1601,16 @@
                 const shortName = truncateAccountName(displayName);
                 return `
                     <div class="provider-account-child">
-                        <div class="dist-info">
+                        <div class="account-main-row">
                             <span class="account-title">
                                 <span class="account-dot"></span>
-                                <span class="dist-name" title="${escapeHtml(displayName)}">${escapeHtml(shortName)}</span>
+                                <span class="account-name" title="${escapeHtml(displayName)}">${escapeHtml(shortName)}</span>
                             </span>
-                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
+                            <span class="account-calls">${formatNumber(calls)} 次</span>
                         </div>
-                        <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(calls)} 次</span>
+                        <div class="account-token-row">
+                            <span class="account-token-value">${formatTokenCompact(tokens)} Tokens</span>
+                            <span class="account-token-share">${percentText}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${barWidth}%"></div>
@@ -1591,12 +1629,16 @@
                 const barWidth = Math.max(1, Math.min(100, (other.tokens / providerTokens) * 100));
                 rows.push(`
                     <div class="provider-account-child">
-                        <div class="dist-info">
-                            <span class="dist-name" style="font-style: italic;">其他账号 (${provider.accounts.length - 5} 个)</span>
-                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${percentText})</span>
+                        <div class="account-main-row">
+                            <span class="account-title">
+                                <span class="account-dot" style="background: #94a3b8;"></span>
+                                <span class="account-name" title="其他账号 (${provider.accounts.length - 5} 个)" style="font-style: italic;">其他账号</span>
+                            </span>
+                            <span class="account-calls">${formatNumber(other.calls)} 次</span>
                         </div>
-                        <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
+                        <div class="account-token-row">
+                            <span class="account-token-value">${formatTokenCompact(other.tokens)} Tokens</span>
+                            <span class="account-token-share">${percentText}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${barWidth}%; background: #94a3b8;"></div>

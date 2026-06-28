@@ -54,6 +54,15 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function buildProviderAccountTokenTree(providers, accounts)');
         expect(source).toContain('function renderProviderAccountRows(provider)');
         expect(source).toContain('provider-account-children');
+        expect(source).toContain('.usage-calendar-card { grid-column: span 3; }');
+        expect(source).toContain('.usage-provider-card { grid-column: span 6; }');
+        expect(source).toContain('.calendar-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 9px);');
+        expect(source).toContain('.calendar-day { width: 9px; height: 9px;');
+        expect(source).toContain('account-main-row');
+        expect(source).toContain('account-calls');
+        expect(source).toContain('account-token-row');
+        expect(source).toContain('account-token-value');
+        expect(source).toContain('account-token-share');
         expect(source).toContain('account-sub');
         expect(source).toContain('.account-sub {\n            display: none;');
         expect(source).toContain('isCodexOauthAccount(account)');
