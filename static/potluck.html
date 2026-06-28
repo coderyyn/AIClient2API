@@ -1544,7 +1544,7 @@
         function truncateAccountName(name, maxLength = 10) {
             const value = String(name || '');
             if (isEmailLike(value)) {
-                return `${value.slice(0, 5)}...`;
+                return value.split('@')[0];
             }
             return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
         }

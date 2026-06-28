@@ -77,7 +77,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('providerUuids: Array.isArray(account.providerUuids)');
         expect(source).toContain('account?.accountEmail || account?.providerName');
         expect(source).toContain('function isEmailLike(value)');
-        expect(source).toContain("return `${value.slice(0, 5)}...`;");
+        expect(source).toContain("return value.split('@')[0];");
     });
 
     test('admin provider account tree renders every account without grouping into other accounts', () => {
