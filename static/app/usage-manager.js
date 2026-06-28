@@ -655,7 +655,7 @@ function createInstanceUsageCard(instance, providerType) {
     const accountUsageSummary = getAccountUsageSummary(providerType, instance);
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
-    const displayName = user.email || instance.name || instance.uuid;
+    const displayName = user.email || instance.codexEmail || instance.name || instance.uuid;
     const providerDisplayName = getProviderDisplayName(providerType);
     const rateLimitResetCredits = summary.rateLimitResetCredits
         || (providerType === 'openai-codex-oauth' && summary.resetAvailableCount !== undefined

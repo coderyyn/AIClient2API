@@ -78,4 +78,17 @@ describe('usage manager display source regressions', () => {
         expect(usageApiSource).toContain('readUsageCache({ maxAgeMs: null, allowStale: true })');
         expect(usageManagerSource).toContain('showUsageRefreshErrors(data.refreshErrors)');
     });
+    test('Codex usage cards prefer backend codexEmail before provider display name', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('const displayName = user.email || instance.codexEmail || instance.name || instance.uuid;');
+    });
+
+    test('usage api normalizes legacy CODEX_EMAIL into codexEmail', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function getProviderCodexEmail(provider = {})');
+        expect(source).toContain('return provider.codexEmail || provider.CODEX_EMAIL || provider.email || null;');
+        expect(source).toContain('codexEmail: getProviderCodexEmail(provider)');
+    });
 });

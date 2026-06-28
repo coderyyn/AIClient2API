@@ -98,6 +98,10 @@ function loadProviderList(providerType, currentConfig, providerPoolManager) {
     return [];
 }
 
+function getProviderCodexEmail(provider = {}) {
+    return provider.codexEmail || provider.CODEX_EMAIL || provider.email || null;
+}
+
 function getScheduledRecoveryError(provider, now = Date.now()) {
     if (provider?.isHealthy !== false || !provider?.scheduledRecoveryTime) {
         return null;
@@ -333,7 +337,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             name: getProviderDisplayName(provider, providerType),
             codexAccountKey: provider.codexAccountKey || null,
             codexAccountId: provider.codexAccountId || null,
-            codexEmail: provider.codexEmail || null,
+            codexEmail: getProviderCodexEmail(provider),
             codexQuotaHealth: provider.codexQuotaHealth || null,
             configFilePath: getProviderConfigFilePath(provider, providerType),
             isHealthy: provider.isHealthy !== false,
@@ -483,7 +487,7 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         name: getProviderDisplayName(provider, providerType),
         codexAccountKey: provider.codexAccountKey || null,
         codexAccountId: provider.codexAccountId || null,
-        codexEmail: provider.codexEmail || null,
+        codexEmail: getProviderCodexEmail(provider),
         codexQuotaHealth: provider.codexQuotaHealth || null,
         configFilePath: getProviderConfigFilePath(provider, providerType),
         isHealthy: provider.isHealthy !== false,
