@@ -312,11 +312,20 @@ function ensureHourUsage(dayHistory, hour) {
 
 function addAccountUsage(targetMap, account = {}) {
     const provider = account.provider || 'unknown';
-    const providerUuid = account.providerUuid || null;
+    const providerUuids = Array.isArray(account.providerUuids)
+        ? account.providerUuids.filter(Boolean)
+        : [];
+    const providerUuid = providerUuids[0] || account.providerUuid || null;
     const accountUsage = ensureAccountUsage(targetMap, provider, providerUuid, account.providerName, account.accountIdentity || null);
     if (!accountUsage) return;
     if (account.accountEmail && !accountUsage.accountEmail) {
         accountUsage.accountEmail = account.accountEmail;
+    }
+    for (const uuid of providerUuids) {
+        addProviderUuidToAccount(accountUsage, uuid);
+    }
+    if (account.providerUuid && account.providerUuid !== account.accountIdentity) {
+        addProviderUuidToAccount(accountUsage, account.providerUuid);
     }
 
     addUsage(accountUsage.summary, account.summary);
@@ -370,6 +379,116 @@ function cloneUsageBucket(bucket = {}) {
 function addAccountSummaryRange(target, rangeName, account) {
     if (!target[rangeName]) target[rangeName] = createUsageBucket();
     addUsage(target[rangeName], account?.summary);
+}
+
+function isEmailLike(value) {
+    return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function normalizeEmailAlias(value) {
+    return isEmailLike(value) ? value.trim().toLowerCase() : null;
+}
+
+function getProviderFromAccountKey(accountKey) {
+    return accountKey?.split(':')[0] || 'unknown';
+}
+
+function getIdentityFromAccountKey(accountKey) {
+    return accountKey?.split(':').slice(1).join(':') || null;
+}
+
+function getAccountProvider(accountKey, account = {}) {
+    return account.provider || getProviderFromAccountKey(accountKey);
+}
+
+function getSummaryCanonicalAccountKey(accountKey, account = {}) {
+    const provider = getAccountProvider(accountKey, account);
+    if (account.accountIdentity) {
+        return getAccountUsageKey(provider, account.providerUuid, account.accountIdentity) || accountKey;
+    }
+    return accountKey;
+}
+
+function getAccountSummaryAliases(accountKey, account = {}) {
+    const provider = getAccountProvider(accountKey, account);
+    const aliases = new Set([`account-key:${accountKey}`]);
+    const addProviderAlias = (value) => {
+        if (value) aliases.add(`provider:${provider}:${value}`);
+    };
+
+    addProviderAlias(getIdentityFromAccountKey(accountKey));
+    addProviderAlias(account.providerUuid);
+    addProviderAlias(account.accountIdentity);
+    for (const uuid of account.providerUuids || []) {
+        addProviderAlias(uuid);
+    }
+
+    const emailAlias = normalizeEmailAlias(account.accountEmail) || normalizeEmailAlias(account.providerName);
+    if (emailAlias) {
+        aliases.add(`email:${provider}:${emailAlias}`);
+    }
+
+    return [...aliases];
+}
+
+function createAccountSummaryEntry(accountKey, account = {}) {
+    const provider = getAccountProvider(accountKey, account);
+    const providerUuid = account.accountIdentity
+        || account.providerUuid
+        || getIdentityFromAccountKey(accountKey);
+    const providerUuids = Array.isArray(account.providerUuids)
+        ? [...new Set(account.providerUuids.filter(Boolean))]
+        : (account.providerUuid && account.providerUuid !== account.accountIdentity ? [account.providerUuid] : []);
+
+    return {
+        accountKey: getSummaryCanonicalAccountKey(accountKey, account),
+        provider,
+        providerUuid,
+        accountIdentity: account.accountIdentity || null,
+        accountEmail: account.accountEmail || normalizeEmailAlias(account.providerName),
+        providerUuids,
+        providerName: account.providerName || null,
+        today: createUsageBucket(),
+        week: createUsageBucket(),
+        month: createUsageBucket()
+    };
+}
+
+function mergeAccountSummaryMeta(target, account = {}, accountKey = null) {
+    if (!target) return;
+    if (account.providerName && !target.providerName) {
+        target.providerName = account.providerName;
+    }
+    if (account.accountEmail && !target.accountEmail) {
+        target.accountEmail = account.accountEmail;
+    } else if (!target.accountEmail && normalizeEmailAlias(account.providerName)) {
+        target.accountEmail = normalizeEmailAlias(account.providerName);
+    }
+    if (account.accountIdentity && !target.accountIdentity) {
+        target.accountIdentity = account.accountIdentity;
+        target.providerUuid = account.accountIdentity;
+    }
+
+    const uuids = new Set(Array.isArray(target.providerUuids) ? target.providerUuids : []);
+    for (const uuid of account.providerUuids || []) {
+        if (uuid && uuid !== target.accountIdentity) uuids.add(uuid);
+    }
+    if (account.providerUuid && account.providerUuid !== target.accountIdentity) {
+        uuids.add(account.providerUuid);
+    }
+    const keyIdentity = getIdentityFromAccountKey(accountKey);
+    if (keyIdentity && keyIdentity !== target.accountIdentity) {
+        uuids.add(keyIdentity);
+    }
+    target.providerUuids = [...uuids];
+}
+
+function reassignAccountSummaryAliases(aliasIndex, fromKey, toKey) {
+    for (const [alias, key] of aliasIndex.entries()) {
+        if (key === fromKey) {
+            aliasIndex.set(alias, toKey);
+        }
+    }
 }
 
 function resetUsageBucketTokens(bucket) {
@@ -1096,6 +1215,7 @@ export async function getAccountUsageSummary(now = new Date()) {
     const stats = await getStats();
     const starts = getBeijingPeriodStarts(now);
     const accounts = new Map();
+    const aliasIndex = new Map();
 
     for (const [dateKey, day] of Object.entries(stats.usageHistory || {})) {
         const inToday = dateKey === starts.today;
@@ -1104,30 +1224,43 @@ export async function getAccountUsageSummary(now = new Date()) {
         if (!inToday && !inWeek && !inMonth) continue;
 
         for (const [accountKey, account] of Object.entries(day.accounts || {})) {
-            const current = accounts.get(accountKey) || {
-                accountKey,
-                provider: account.provider || accountKey.split(':')[0] || 'unknown',
-                providerUuid: account.providerUuid || accountKey.split(':').slice(1).join(':') || null,
-                accountIdentity: account.accountIdentity || null,
-                accountEmail: account.accountEmail || null,
-                providerUuids: Array.isArray(account.providerUuids)
-                    ? [...new Set(account.providerUuids.filter(Boolean))]
-                    : (account.providerUuid ? [account.providerUuid] : []),
-                providerName: account.providerName || null,
-                today: createUsageBucket(),
-                week: createUsageBucket(),
-                month: createUsageBucket()
-            };
-            if (account.providerName && !current.providerName) {
-                current.providerName = account.providerName;
+            const aliases = getAccountSummaryAliases(accountKey, account);
+            let targetKey = aliases.map(alias => aliasIndex.get(alias)).find(Boolean);
+            const preferredKey = getSummaryCanonicalAccountKey(accountKey, account);
+
+            if (!targetKey) {
+                targetKey = preferredKey;
+            } else {
+                const current = accounts.get(targetKey);
+                const currentPreferredKey = getSummaryCanonicalAccountKey(targetKey, current);
+                const shouldPromoteToIncomingIdentity = account.accountIdentity && !current?.accountIdentity;
+                const nextKey = shouldPromoteToIncomingIdentity ? preferredKey : currentPreferredKey;
+                if (nextKey && nextKey !== targetKey) {
+                    accounts.delete(targetKey);
+                    current.accountKey = nextKey;
+                    accounts.set(nextKey, current);
+                    reassignAccountSummaryAliases(aliasIndex, targetKey, nextKey);
+                    targetKey = nextKey;
+                }
             }
-            if (account.accountEmail && !current.accountEmail) {
-                current.accountEmail = account.accountEmail;
+
+            const current = accounts.get(targetKey) || createAccountSummaryEntry(targetKey, account);
+            current.accountKey = targetKey;
+            mergeAccountSummaryMeta(current, account, accountKey);
+            if (!accounts.has(targetKey)) {
+                accounts.set(targetKey, current);
             }
+
             if (inToday) addAccountSummaryRange(current, 'today', account);
             if (inWeek) addAccountSummaryRange(current, 'week', account);
             if (inMonth) addAccountSummaryRange(current, 'month', account);
-            accounts.set(accountKey, current);
+
+            for (const alias of getAccountSummaryAliases(current.accountKey, current)) {
+                aliasIndex.set(alias, targetKey);
+            }
+            for (const alias of aliases) {
+                aliasIndex.set(alias, targetKey);
+            }
         }
     }
 

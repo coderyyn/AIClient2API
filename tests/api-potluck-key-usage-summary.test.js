@@ -299,6 +299,60 @@ describe('api potluck key usage summary', () => {
         expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
     });
 
+    test('getAccountUsageSummary merges legacy provider UUID buckets with later account identity buckets', async () => {
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-06-24T02:00:00.000Z'));
+        const key = await createKey('Codex Client', 1000);
+
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 4,
+            promptTokens: 3900,
+            completionTokens: 100,
+            totalTokens: 4000
+        }, 'req-legacy-provider-uuid', {
+            providerUuid: 'old-provider-uuid',
+            providerName: 'user@example.com'
+        });
+
+        jest.setSystemTime(new Date('2026-06-26T02:00:00.000Z'));
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
+            requestCount: 2,
+            promptTokens: 1900,
+            completionTokens: 100,
+            totalTokens: 2000
+        }, 'req-account-identity', {
+            providerUuid: 'old-provider-uuid',
+            providerName: 'user@example.com',
+            accountIdentity: 'acct-chatgpt-123',
+            accountEmail: 'user@example.com'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-06-26T03:00:00.000Z'));
+        const matchingAccounts = summary.accounts.filter(account =>
+            account.provider === 'openai-codex-oauth'
+            && (
+                account.accountEmail === 'user@example.com'
+                || account.providerName === 'user@example.com'
+                || account.providerUuids.includes('old-provider-uuid')
+            )
+        );
+
+        expect(matchingAccounts).toHaveLength(1);
+        expect(matchingAccounts[0]).toMatchObject({
+            accountKey: 'openai-codex-oauth:acct-chatgpt-123',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'acct-chatgpt-123',
+            accountIdentity: 'acct-chatgpt-123',
+            accountEmail: 'user@example.com',
+            providerName: 'user@example.com',
+            providerUuids: ['old-provider-uuid']
+        });
+        expect(matchingAccounts[0].today).toMatchObject({ requestCount: 2, totalTokens: 2000 });
+        expect(matchingAccounts[0].week).toMatchObject({ requestCount: 6, totalTokens: 6000 });
+        expect(matchingAccounts[0].month).toMatchObject({ requestCount: 6, totalTokens: 6000 });
+    });
+
     test('listKeys exposes sanitized related account names for audit key selectors', async () => {
         const { createKey, incrementUsage, listKeys } = await loadKeyManager();
 
