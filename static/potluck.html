@@ -691,81 +691,67 @@
             font-size: 12px;
             pointer-events: none;
         }
-        .limit-unlimited-option {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 12px 14px;
-            min-height: 56px;
+        .limit-mode-selector {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+            padding: 6px;
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
             background: var(--bg-secondary);
-            cursor: pointer;
-            transition: var(--transition);
         }
-        .limit-unlimited-option:hover {
-            border-color: var(--primary-30);
-            background: var(--primary-10);
-        }
-        .limit-unlimited-copy {
+        .limit-mode-option {
             display: flex;
             flex-direction: column;
-            gap: 3px;
-            min-width: 0;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 4px;
+            min-height: 62px;
+            padding: 12px 14px;
+            border: 1px solid transparent;
+            border-radius: calc(var(--radius-lg) - 4px);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            text-align: left;
+            transition: var(--transition);
         }
-        .limit-unlimited-title {
+        .limit-mode-option:hover {
             color: var(--text-primary);
-            font-size: 14px;
-            font-weight: 600;
+            background: var(--bg-primary);
+            border-color: var(--border-color);
         }
-        .limit-unlimited-help {
+        .limit-mode-option.is-active {
+            color: #ffffff;
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            box-shadow: 0 8px 20px var(--primary-20);
+        }
+        .limit-mode-option.is-active .limit-mode-help {
+            color: rgba(255, 255, 255, 0.86);
+        }
+        .limit-mode-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        .limit-mode-help {
             color: var(--text-tertiary);
             font-size: 12px;
             line-height: 1.35;
         }
-        .limit-switch {
-            position: relative;
-            width: 46px;
-            height: 26px;
-            flex: 0 0 auto;
-        }
-        .limit-switch input {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0;
-            cursor: pointer;
-            margin: 0;
-        }
-        .limit-switch-track {
-            position: absolute;
-            inset: 0;
-            border-radius: 999px;
-            background: var(--border-color);
-            transition: var(--transition);
-        }
-        .limit-switch-track::after {
-            content: '';
-            position: absolute;
-            width: 20px;
-            height: 20px;
-            left: 3px;
-            top: 3px;
-            border-radius: 50%;
-            background: #ffffff;
-            box-shadow: var(--shadow-sm);
-            transition: var(--transition);
-        }
-        .limit-switch input:checked + .limit-switch-track {
-            background: var(--primary-color);
-        }
-        .limit-switch input:checked + .limit-switch-track::after {
-            transform: translateX(20px);
-        }
-        .limit-switch input:focus-visible + .limit-switch-track {
+        .limit-mode-option:focus-visible {
+            outline: none;
             box-shadow: 0 0 0 4px var(--primary-10);
+        }
+        .limit-unlimited-checkbox {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
         }
 
         /* Key 显示 */
@@ -1151,16 +1137,17 @@
                             <input type="number" id="keyLimit" placeholder="默认 500" min="0" inputmode="numeric">
                             <span class="limit-input-suffix">次/日</span>
                         </div>
-                        <label class="limit-unlimited-option" for="keyUnlimited">
-                            <span class="limit-unlimited-copy">
-                                <span class="limit-unlimited-title">不限量</span>
-                                <span class="limit-unlimited-help">关闭每日调用拦截，保存时等同于填 0。默认不勾选时为 500。</span>
-                            </span>
-                            <span class="limit-switch">
-                                <input type="checkbox" id="keyUnlimited" onchange="toggleLimitInput('keyLimit', 'keyUnlimited')">
-                                <span class="limit-switch-track"></span>
-                            </span>
-                        </label>
+                        <div class="limit-mode-selector" role="group" aria-label="每日限额模式">
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="keyUnlimited" data-limit-mode="limited" onclick="setLimitMode('keyLimit', 'keyUnlimited', false)">
+                                <span class="limit-mode-title"><i class="fas fa-gauge-high"></i> 每日限额</span>
+                                <span class="limit-mode-help">默认 500 次/日</span>
+                            </button>
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="keyUnlimited" data-limit-mode="unlimited" onclick="setLimitMode('keyLimit', 'keyUnlimited', true)">
+                                <span class="limit-mode-title"><i class="fas fa-infinity"></i> 不限量</span>
+                                <span class="limit-mode-help">保存为 0，不拦截</span>
+                            </button>
+                            <input type="checkbox" id="keyUnlimited" class="limit-unlimited-checkbox" onchange="toggleLimitInput('keyLimit', 'keyUnlimited')">
+                        </div>
                     </div>
                 </div>
                 <button class="btn btn-primary btn-block" onclick="createKey()">
@@ -1202,16 +1189,17 @@
                             <input type="number" id="newLimit" min="0" inputmode="numeric">
                             <span class="limit-input-suffix">次/日</span>
                         </div>
-                        <label class="limit-unlimited-option" for="newLimitUnlimited">
-                            <span class="limit-unlimited-copy">
-                                <span class="limit-unlimited-title">不限量</span>
-                                <span class="limit-unlimited-help">0 表示不限量，Key 不再按每日调用次数拦截。</span>
-                            </span>
-                            <span class="limit-switch">
-                                <input type="checkbox" id="newLimitUnlimited" onchange="toggleLimitInput('newLimit', 'newLimitUnlimited')">
-                                <span class="limit-switch-track"></span>
-                            </span>
-                        </label>
+                        <div class="limit-mode-selector" role="group" aria-label="每日限额模式">
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="newLimitUnlimited" data-limit-mode="limited" onclick="setLimitMode('newLimit', 'newLimitUnlimited', false)">
+                                <span class="limit-mode-title"><i class="fas fa-gauge-high"></i> 每日限额</span>
+                                <span class="limit-mode-help">按调用次数拦截</span>
+                            </button>
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="newLimitUnlimited" data-limit-mode="unlimited" onclick="setLimitMode('newLimit', 'newLimitUnlimited', true)">
+                                <span class="limit-mode-title"><i class="fas fa-infinity"></i> 不限量</span>
+                                <span class="limit-mode-help">保存为 0，不拦截</span>
+                            </button>
+                            <input type="checkbox" id="newLimitUnlimited" class="limit-unlimited-checkbox" onchange="toggleLimitInput('newLimit', 'newLimitUnlimited')">
+                        </div>
                     </div>
                 </div>
                 <input type="hidden" id="editKeyId">
@@ -1257,16 +1245,17 @@
                             <input type="number" id="applyLimitValue" placeholder="默认 500" min="0" inputmode="numeric">
                             <span class="limit-input-suffix">次/日</span>
                         </div>
-                        <label class="limit-unlimited-option" for="applyLimitUnlimited">
-                            <span class="limit-unlimited-copy">
-                                <span class="limit-unlimited-title">不限量</span>
-                                <span class="limit-unlimited-help">0 表示不限量，将覆盖所有 Key 的每日限额。</span>
-                            </span>
-                            <span class="limit-switch">
-                                <input type="checkbox" id="applyLimitUnlimited" onchange="toggleLimitInput('applyLimitValue', 'applyLimitUnlimited')">
-                                <span class="limit-switch-track"></span>
-                            </span>
-                        </label>
+                        <div class="limit-mode-selector" role="group" aria-label="批量限额模式">
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="applyLimitUnlimited" data-limit-mode="limited" onclick="setLimitMode('applyLimitValue', 'applyLimitUnlimited', false)">
+                                <span class="limit-mode-title"><i class="fas fa-gauge-high"></i> 每日限额</span>
+                                <span class="limit-mode-help">覆盖为指定次数</span>
+                            </button>
+                            <button type="button" class="limit-mode-option" data-limit-checkbox="applyLimitUnlimited" data-limit-mode="unlimited" onclick="setLimitMode('applyLimitValue', 'applyLimitUnlimited', true)">
+                                <span class="limit-mode-title"><i class="fas fa-infinity"></i> 不限量</span>
+                                <span class="limit-mode-help">保存为 0，全部不拦截</span>
+                            </button>
+                            <input type="checkbox" id="applyLimitUnlimited" class="limit-unlimited-checkbox" onchange="toggleLimitInput('applyLimitValue', 'applyLimitUnlimited')">
+                        </div>
                     </div>
                 </div>
                 <div style="background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: var(--radius-lg); padding: 12px; margin-top: 12px;">
@@ -1923,6 +1912,21 @@
                 input.disabled = unlimited;
                 input.value = unlimited ? '' : value;
             }
+            updateLimitModeView(checkboxId, unlimited);
+        }
+
+        function updateLimitModeView(checkboxId, unlimited) {
+            document.querySelectorAll(`[data-limit-checkbox="${checkboxId}"]`).forEach(button => {
+                const active = button.dataset.limitMode === (unlimited ? 'unlimited' : 'limited');
+                button.classList.toggle('is-active', active);
+                button.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
+        function setLimitMode(inputId, checkboxId, unlimited) {
+            const checkbox = document.getElementById(checkboxId);
+            if (checkbox) checkbox.checked = unlimited;
+            toggleLimitInput(inputId, checkboxId);
         }
 
         function toggleLimitInput(inputId, checkboxId) {
@@ -1933,6 +1937,7 @@
             if (checkbox.checked) {
                 input.value = '';
             }
+            updateLimitModeView(checkboxId, checkbox.checked);
         }
 
         function readDailyLimitInput(inputId, checkboxId, fallback = null) {
@@ -2032,7 +2037,7 @@
         function renderKeys(keys) {
             const container = document.getElementById('keysList');
             if (allKeys.length === 0) {
-                container.innerHTML = '<div class="empty-state"><div class="icon"><i class="fas fa-inbox"></i></div><p>还没有任何 API Key</p><button class="btn btn-primary btn-lg" onclick="openModal(\'createModal\')"><i class="fas fa-plus"></i> 生成第一个 Key</button></div>';
+                container.innerHTML = '<div class="empty-state"><div class="icon"><i class="fas fa-inbox"></i></div><p>还没有任何 API Key</p><button class="btn btn-primary btn-lg" onclick="showCreateModal()"><i class="fas fa-plus"></i> 生成第一个 Key</button></div>';
                 return;
             }
             if (keys.length === 0) {
@@ -2120,6 +2125,11 @@
             }).join('');
         }
 
+        function showCreateModal() {
+            setLimitControl('keyLimit', 'keyUnlimited', systemConfig.defaultDailyLimit ?? 500);
+            openModal('createModal');
+        }
+
         async function createKey() {
             const name = document.getElementById('keyName').value;
             const dailyLimit = readDailyLimitInput('keyLimit', 'keyUnlimited', systemConfig.defaultDailyLimit);
@@ -2135,6 +2145,7 @@
                 document.getElementById('keyLimit').value = '';
                 document.getElementById('keyLimit').disabled = false;
                 document.getElementById('keyUnlimited').checked = false;
+                updateLimitModeView('keyUnlimited', false);
             } else {
                 showToast(result?.error?.message || '创建失败', 'error');
             }
@@ -2411,7 +2422,7 @@
         }
         
         // 事件绑定
-        document.getElementById('createKeyBtn').addEventListener('click', () => openModal('createModal'));
+        document.getElementById('createKeyBtn').addEventListener('click', showCreateModal);
         document.getElementById('searchBox').addEventListener('input', applyFilterAndSort);
         document.getElementById('sortSelect').addEventListener('change', applyFilterAndSort);
         document.getElementById('themeToggle')?.addEventListener('click', () => {

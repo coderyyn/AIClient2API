@@ -75,8 +75,11 @@ describe('API Potluck token display formatting', () => {
         expect(source).toContain('id="newLimitUnlimited"');
         expect(source).toContain('id="applyLimitUnlimited"');
         expect(source.match(/class="limit-control"/g) || []).toHaveLength(3);
-        expect(source).toContain('class="limit-unlimited-option"');
-        expect(source).toContain('0 表示不限量');
+        expect(source.match(/class="limit-mode-selector"/g) || []).toHaveLength(3);
+        expect(source).toContain('data-limit-mode="limited"');
+        expect(source).toContain('data-limit-mode="unlimited"');
+        expect(source).toContain('showCreateModal');
+        expect(source).toContain('保存为 0');
         expect(source).toContain('formatLimitCompact(key.dailyLimit)');
     });
 });
