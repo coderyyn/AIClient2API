@@ -453,6 +453,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 PROMPT_LOG_MODE: currentConfig.PROMPT_LOG_MODE,
                 REQUEST_MAX_RETRIES: currentConfig.REQUEST_MAX_RETRIES,
                 REQUEST_BASE_DELAY: currentConfig.REQUEST_BASE_DELAY,
+                MODEL_FALLBACK_ENABLED: currentConfig.MODEL_FALLBACK_ENABLED,
                 CREDENTIAL_SWITCH_MAX_RETRIES: currentConfig.CREDENTIAL_SWITCH_MAX_RETRIES,
                 RATE_LIMIT_COOLDOWN_ENABLED: currentConfig.RATE_LIMIT_COOLDOWN_ENABLED,
                 RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
