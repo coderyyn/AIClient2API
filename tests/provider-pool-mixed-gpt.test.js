@@ -21,6 +21,7 @@ function createMixedGptPoolManager(overrides = {}) {
                 uuid: 'codex-local',
                 customName: 'Codex Local',
                 providerWeight: 2,
+                lastKnownCodexPlan: 'pro',
                 supportedModels: ['gpt-5.5'],
                 ...overrides.codex
             }
