@@ -169,6 +169,74 @@ describe('provider pool Codex token quota', () => {
         expect(selected.uuid).toBe('aaa-codex-over');
     });
 
+    test('uses the last known Codex plan when fresh usage cache temporarily lacks plan fields', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({
+            over: { lastKnownCodexPlan: 'pro' },
+            ok: { isDisabled: true }
+        });
+
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
+
+        expect(selected.uuid).toBe('aaa-codex-over');
+    });
+
+    test('reports filter reasons when every Codex provider is filtered before routing', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    items: [
+                        { id: 'primary_window', percent: 10, unit: 'percent' },
+                        { id: 'secondary_window', percent: 10, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager();
+
+        await expect(manager.selectProvider('openai-codex-oauth', 'gpt-5.5'))
+            .rejects.toMatchObject({
+                status: 429,
+                message: expect.stringContaining('plan_unknown=2'),
+                filterReasons: expect.objectContaining({ plan_unknown: 2 })
+            });
+    });
+
     test('skips Codex accounts whose general official 5h quota exceeds the general percent limit without marking provider globally unhealthy', async () => {
         writeCodexUsageCache([
             {

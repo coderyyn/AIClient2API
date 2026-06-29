@@ -70,12 +70,34 @@ export function getCodexPlanFromUsage(usage) {
     return 'unknown';
 }
 
-export function getCodexPlanStatusForProvider(providerType, uuid, usageCache) {
+export function getCodexPlanFromProviderConfig(config) {
+    const candidates = [
+        config?.lastKnownCodexPlan,
+        config?.codexPlan,
+        config?.codexAccountPlan,
+        config?.plan,
+        config?.planType
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizeCodexPlan(candidate);
+        if (normalized !== 'unknown') {
+            return normalized;
+        }
+    }
+    return 'unknown';
+}
+
+export function getCodexPlanStatusForProvider(providerType, uuid, usageCache, providerConfig = null) {
     const instance = getCachedCodexUsageInstance(providerType, uuid, usageCache);
-    const plan = getCodexPlanFromUsage(instance?.usage);
+    const usagePlan = getCodexPlanFromUsage(instance?.usage);
+    const plan = usagePlan !== 'unknown'
+        ? usagePlan
+        : getCodexPlanFromProviderConfig(providerConfig);
     return {
         plan,
         allowed: isCodexPlanAllowed(plan),
-        hasUsage: Boolean(instance?.usage)
+        hasUsage: Boolean(instance?.usage),
+        source: usagePlan !== 'unknown' ? 'usage' : (plan !== 'unknown' ? 'last_known' : 'unknown')
     };
 }

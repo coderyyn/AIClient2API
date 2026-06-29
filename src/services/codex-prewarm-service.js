@@ -180,7 +180,7 @@ export class CodexPrewarmService {
             for (const providerStatusItem of pool) {
                 const provider = providerStatusItem.config || providerStatusItem;
                 if (!provider || provider.isDisabled === true) continue;
-                const planStatus = getCodexPlanStatusForProvider(providerType, provider.uuid, usageCache);
+                const planStatus = getCodexPlanStatusForProvider(providerType, provider.uuid, usageCache, provider);
                 if (!planStatus.allowed) {
                     this.log.info(`[CodexPrewarm] Skipping ${provider.customName || provider.uuid || 'unknown'}: plan ${planStatus.plan} is not eligible`);
                     continue;

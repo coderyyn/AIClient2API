@@ -1652,6 +1652,11 @@ export class ProviderPoolManager {
     _filterCodexProvidersByTokenQuota(providerType, providers, requestedModel = null) {
         let limitedCount = 0;
         const allowed = [];
+        const filterReasons = {};
+        const recordFilterReason = (reason) => {
+            filterReasons[reason] = (filterReasons[reason] || 0) + 1;
+        };
+        let updatedLastKnownPlan = false;
         const usageCache = readFreshUsageCacheSync();
         const bucket = resolveCodexQuotaBucket(
             requestedModel,
@@ -1661,15 +1666,22 @@ export class ProviderPoolManager {
 
         for (const provider of providers) {
             const uuid = provider.config?.uuid || provider.uuid;
-            const planStatus = getCodexPlanStatusForProvider(providerType, uuid, usageCache);
+            const planStatus = getCodexPlanStatusForProvider(providerType, uuid, usageCache, provider.config);
             if (!planStatus.allowed) {
                 limitedCount += 1;
+                recordFilterReason(planStatus.plan === 'unknown' ? 'plan_unknown' : `plan_${planStatus.plan}`);
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: plan ${planStatus.plan} is not eligible for routing`);
                 continue;
+            }
+            if (planStatus.source === 'usage' && provider.config?.lastKnownCodexPlan !== planStatus.plan) {
+                provider.config.lastKnownCodexPlan = planStatus.plan;
+                provider.config.lastKnownCodexPlanUpdatedAt = new Date().toISOString();
+                updatedLastKnownPlan = true;
             }
 
             if (isCodexQuotaBucketCoolingDown(provider.config, bucket, now)) {
                 limitedCount += 1;
+                recordFilterReason('cooldown');
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${bucket} quota bucket is cooling down`);
                 continue;
             }
@@ -1682,6 +1694,7 @@ export class ProviderPoolManager {
 
             limitedCount += 1;
             if (quotaStatus.exceeded) {
+                recordFilterReason(`${bucket}_quota_exceeded`);
                 this._log('info', `Skipping Codex provider ${this._getDisplayName(provider.config)}: ${quotaStatus.reason}`);
                 this.markCodexQuotaBucketUnhealthy(providerType, provider.config, bucket, quotaStatus.reason);
                 continue;
@@ -1694,10 +1707,24 @@ export class ProviderPoolManager {
         }
 
         if (allowed.length === 0 && providers.length > 0 && limitedCount > 0) {
-            const error = new Error('All Codex providers exceeded configured usage quotas');
+            if (updatedLastKnownPlan) {
+                this._debouncedSave(providerType);
+            }
+            const reasonSummary = Object.entries(filterReasons)
+                .map(([reason, count]) => `${reason}=${count}`)
+                .join(', ');
+            const message = reasonSummary
+                ? `All Codex providers exceeded configured usage quotas (${reasonSummary})`
+                : 'All Codex providers exceeded configured usage quotas';
+            const error = new Error(message);
             error.status = 429;
             error.code = 429;
+            error.filterReasons = filterReasons;
             throw error;
+        }
+
+        if (updatedLastKnownPlan) {
+            this._debouncedSave(providerType);
         }
 
         return allowed;
