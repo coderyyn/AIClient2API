@@ -23,7 +23,7 @@
             box-shadow: var(--shadow-sm);
         }
         .navbar-inner {
-            max-width: 1400px;
+            max-width: 1680px;
             margin: 0 auto;
             padding: 0 24px;
             height: 64px;
@@ -54,7 +54,7 @@
 
         /* 主容器 */
         .main-container {
-            max-width: 1400px;
+            max-width: 1680px;
             margin: 0 auto;
             padding: 30px 24px;
         }
@@ -341,10 +341,10 @@
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-xl);
-            padding: 20px;
+            padding: 18px;
             display: grid;
-            grid-template-columns: 280px minmax(680px, 1fr) 330px;
-            column-gap: 28px;
+            grid-template-columns: 260px minmax(560px, 1fr) 312px;
+            column-gap: 22px;
             row-gap: 18px;
             align-items: center;
             transition: var(--transition);
@@ -399,7 +399,7 @@
         /* Key 统计 */
         .key-stats {
             display: grid;
-            grid-template-columns: repeat(4, minmax(150px, 1fr));
+            grid-template-columns: repeat(4, minmax(135px, 1fr));
             gap: 24px 20px;
             align-items: flex-start;
             min-width: 0;
@@ -491,14 +491,17 @@
 
         /* Key 操作 */
         .key-actions {
-            display: flex;
+            display: grid;
+            grid-template-columns: repeat(3, 92px);
             gap: 8px;
-            flex-wrap: wrap;
             justify-content: flex-end;
             align-content: center;
+            min-width: 0;
         }
         .key-actions .btn-sm {
-            width: 96px;
+            width: 92px;
+            padding-left: 10px;
+            padding-right: 10px;
             justify-content: center;
         }
 
@@ -808,7 +811,7 @@
         /* 响应式 */
         @media (max-width: 1500px) {
             .key-card {
-                grid-template-columns: 280px minmax(0, 1fr);
+                grid-template-columns: 260px minmax(0, 1fr);
             }
             .key-actions {
                 grid-column: 2;
@@ -819,7 +822,7 @@
 
         @media (max-width: 1280px) {
             .key-stats {
-                grid-template-columns: repeat(3, minmax(150px, 1fr));
+                grid-template-columns: repeat(3, minmax(135px, 1fr));
             }
         }
 
@@ -829,7 +832,7 @@
                 gap: 16px;
             }
             .key-stats {
-                grid-template-columns: repeat(2, minmax(150px, 1fr));
+                grid-template-columns: repeat(2, minmax(135px, 1fr));
                 gap: 16px;
             }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -857,7 +860,7 @@
             .key-info { margin-bottom: 4px; }
             .key-stats {
                 width: 100%;
-                grid-template-columns: repeat(2, minmax(150px, 1fr));
+                grid-template-columns: repeat(2, minmax(135px, 1fr));
                 gap: 20px;
             }
             .key-stat { text-align: left; }

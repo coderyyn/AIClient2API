@@ -87,10 +87,12 @@ describe('API Potluck token display formatting', () => {
     test('admin key list uses fixed identity and two-row action layout', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/potluck.html'), 'utf8');
 
-        expect(source).toContain('grid-template-columns: 280px minmax(680px, 1fr) 330px');
-        expect(source).toContain('grid-template-columns: repeat(4, minmax(150px, 1fr))');
+        expect(source).toContain('max-width: 1680px');
+        expect(source).toContain('grid-template-columns: 260px minmax(560px, 1fr) 312px');
+        expect(source).toContain('grid-template-columns: repeat(4, minmax(135px, 1fr))');
+        expect(source).toContain('grid-template-columns: repeat(3, 92px)');
         expect(source).toContain('.key-actions .btn-sm');
-        expect(source).toContain('width: 96px');
+        expect(source).toContain('width: 92px');
         expect(source).toContain('@media (max-width: 1500px)');
     });
 });
