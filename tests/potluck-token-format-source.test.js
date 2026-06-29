@@ -32,6 +32,15 @@ function loadTokenFormatter(relativePath, marker) {
     return new Function('formatNumber', `${formatTokenCompactSource}; return formatTokenCompact;`)(formatNumber);
 }
 
+function loadLimitFormatter() {
+    const source = fs.readFileSync(path.join(process.cwd(), 'static/potluck.html'), 'utf8').replace(/\r\n/g, '\n');
+    const formatNumberSource = extractBalancedBlock(source, 'function formatNumber(num)');
+    const formatCompactNumberSource = extractBalancedBlock(source, 'function formatCompactNumber(value, units)');
+    const formatCountCompactSource = extractBalancedBlock(source, 'function formatCountCompact(num)');
+    const formatLimitCompactSource = extractBalancedBlock(source, 'function formatLimitCompact(limit)');
+    return new Function(`${formatNumberSource}; ${formatCompactNumberSource}; ${formatCountCompactSource}; ${formatLimitCompactSource}; return formatLimitCompact;`)();
+}
+
 describe('API Potluck token display formatting', () => {
     test.each([
         ['static/potluck.html', 'function formatTokenCompact(num)'],
@@ -46,5 +55,25 @@ describe('API Potluck token display formatting', () => {
         expect(formatTokenCompact(999000000)).toBe('999.00M');
         expect(formatTokenCompact(1000000000)).toBe('1.00B');
         expect(formatTokenCompact(7400433719)).toBe('7.40B');
+    });
+
+    test('admin key limits use compact display and render unlimited as text', () => {
+        const formatLimitCompact = loadLimitFormatter();
+
+        expect(formatLimitCompact(0)).toBe('不限量');
+        expect(formatLimitCompact(null)).toBe('不限量');
+        expect(formatLimitCompact(999)).toBe('999');
+        expect(formatLimitCompact(1200)).toBe('1.2k');
+        expect(formatLimitCompact(10000)).toBe('1w');
+        expect(formatLimitCompact(123456)).toBe('12.35w');
+    });
+
+    test('admin key limit modals expose unlimited controls', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/potluck.html'), 'utf8');
+
+        expect(source).toContain('id="keyUnlimited"');
+        expect(source).toContain('id="newLimitUnlimited"');
+        expect(source).toContain('id="applyLimitUnlimited"');
+        expect(source).toContain('formatLimitCompact(key.dailyLimit)');
     });
 });
