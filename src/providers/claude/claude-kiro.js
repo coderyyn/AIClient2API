@@ -205,6 +205,7 @@ const KIRO_MODELS = getProviderModels(MODEL_PROVIDER.KIRO_API);
 // 完整的模型映射表
 const FULL_MODEL_MAPPING = {
     "claude-haiku-4-5":"claude-haiku-4.5",
+    "claude-haiku-4-5-20251001":"claude-haiku-4.5",
     "claude-opus-4-8":"claude-opus-4.8",
     "claude-opus-4-7":"claude-opus-4.7",
     "claude-opus-4-6":"claude-opus-4.6",
@@ -219,6 +220,22 @@ const FULL_MODEL_MAPPING = {
 const MODEL_MAPPING = Object.fromEntries(
     Object.entries(FULL_MODEL_MAPPING).filter(([key]) => KIRO_MODELS.includes(key))
 );
+
+function resolveKiroModel(model, config = {}) {
+    if (MODEL_MAPPING[model]) {
+        return MODEL_MAPPING[model];
+    }
+
+    if (findCustomModelConfigForModel(model, config)) {
+        return model;
+    }
+
+    if (config.MODEL_FALLBACK_ENABLED === false) {
+        throw new Error(`[Kiro] 模型不存在: ${model}`);
+    }
+
+    return model;
+}
 
 const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
 
@@ -722,8 +739,8 @@ async loadCredentials() {
         applyCredential('idcRegion');
 
         if (!this.region) {
-            logger.warn('[Kiro Auth] Region not found in credentials. Using default region us-east-1 for URLs.');
-            this.region = 'us-east-1';
+            this.region = this.idcRegion || 'us-east-1';
+            logger.warn(`[Kiro Auth] Region not found in credentials. Using idcRegion/default: ${this.region}`);
         }
 
         // idcRegion 用于 REFRESH_IDC_URL，如果未设置则使用 region
@@ -1150,7 +1167,7 @@ async saveCredentialsToFile(filePath, newData) {
         processedMessages.length = 0;
         processedMessages.push(...mergedMessages);
 
-        const codewhispererModel = MODEL_MAPPING[model] || model;
+        const codewhispererModel = resolveKiroModel(model, this.config);
         const toolNameMaps = buildKiroToolNameMaps(tools);
         
         // 动态压缩 tools（保留全部工具，但过滤掉 web_search/websearch）
@@ -2124,7 +2141,7 @@ async saveCredentialsToFile(filePath, newData) {
             this._markCredentialNeedRefresh('Token near expiry in generateContent');
         }
         
-        const finalModel = MODEL_MAPPING[model] ? model : model;
+        const finalModel = resolveKiroModel(model, this.config);
         logger.info(`[Kiro] Calling generateContent with model: ${finalModel}`);
         
         // Estimate input tokens before making the API call
@@ -2483,7 +2500,7 @@ async saveCredentialsToFile(filePath, newData) {
             this._markCredentialNeedRefresh('Token near expiry in generateContentStream');
         }
         
-        const finalModel = MODEL_MAPPING[model] ? model : model;
+        const finalModel = resolveKiroModel(model, this.config);
         logger.info(`[Kiro] Calling generateContentStream with model: ${finalModel} (real streaming)`);
 
         let inputTokens = 0;

@@ -1044,7 +1044,11 @@
                 </div>
                 <div class="form-group">
                     <label>每日调用限额</label>
-                    <input type="number" id="keyLimit" placeholder="500" min="1">
+                    <input type="number" id="keyLimit" placeholder="500" min="0">
+                    <label class="checkbox-label" style="margin-top: 8px;">
+                        <input type="checkbox" id="keyUnlimited" onchange="toggleLimitInput('keyLimit', 'keyUnlimited')">
+                        不限量
+                    </label>
                 </div>
                 <button class="btn btn-primary btn-block" onclick="createKey()">
                     <i class="fas fa-check"></i> 生成 Key
@@ -1080,7 +1084,11 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>新的每日限额</label>
-                    <input type="number" id="newLimit" min="1">
+                    <input type="number" id="newLimit" min="0">
+                    <label class="checkbox-label" style="margin-top: 8px;">
+                        <input type="checkbox" id="newLimitUnlimited" onchange="toggleLimitInput('newLimit', 'newLimitUnlimited')">
+                        不限量
+                    </label>
                 </div>
                 <input type="hidden" id="editKeyId">
                 <button class="btn btn-primary btn-block" onclick="updateLimit()">
@@ -1120,7 +1128,11 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>每日调用限额</label>
-                    <input type="number" id="applyLimitValue" placeholder="500" min="1">
+                    <input type="number" id="applyLimitValue" placeholder="500" min="0">
+                    <label class="checkbox-label" style="margin-top: 8px;">
+                        <input type="checkbox" id="applyLimitUnlimited" onchange="toggleLimitInput('applyLimitValue', 'applyLimitUnlimited')">
+                        不限量
+                    </label>
                 </div>
                 <div style="background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: var(--radius-lg); padding: 12px; margin-top: 12px;">
                     <p style="color: var(--danger-text); font-size: 13px; margin: 0;"><i class="fas fa-exclamation-triangle"></i> 风险提示：</p>
@@ -1164,6 +1176,18 @@
 
         function getToken() { return localStorage.getItem('authToken'); }
         function formatNumber(num) { return new Intl.NumberFormat('zh-CN').format(Number(num || 0)); }
+        function formatCompactNumber(value, units) {
+            const number = Number(value || 0);
+            if (!Number.isFinite(number)) return '0';
+            const abs = Math.abs(number);
+            for (const unit of units) {
+                if (abs >= unit.threshold) {
+                    const scaled = number / unit.threshold;
+                    return `${Number(scaled.toFixed(2)).toString()}${unit.suffix}`;
+                }
+            }
+            return formatNumber(Math.round(number));
+        }
         function formatTokenCompact(num) {
             const value = Number(num || 0);
             if (!Number.isFinite(value)) return '0';
@@ -1180,6 +1204,17 @@
                 }
             }
             return formatNumber(value);
+        }
+        function formatCountCompact(num) {
+            return formatCompactNumber(num, [
+                { threshold: 1e4, suffix: 'w' },
+                { threshold: 1e3, suffix: 'k' }
+            ]);
+        }
+        function formatLimitCompact(limit) {
+            const value = Number(limit || 0);
+            if (!Number.isFinite(value) || value <= 0) return '不限量';
+            return formatCountCompact(value);
         }
         function usageCount(entry) { return typeof entry === 'number' ? entry : Number(entry?.requestCount || 0); }
         function usageTokens(entry) { return typeof entry === 'number' ? 0 : Number(entry?.totalTokens || 0); }
@@ -1743,19 +1778,60 @@
         }
 
 
+        function setLimitControl(inputId, checkboxId, limit) {
+            const input = document.getElementById(inputId);
+            const checkbox = document.getElementById(checkboxId);
+            const value = Number(limit || 0);
+            const unlimited = value <= 0;
+            if (checkbox) checkbox.checked = unlimited;
+            if (input) {
+                input.disabled = unlimited;
+                input.value = unlimited ? '' : value;
+            }
+        }
+
+        function toggleLimitInput(inputId, checkboxId) {
+            const input = document.getElementById(inputId);
+            const checkbox = document.getElementById(checkboxId);
+            if (!input || !checkbox) return;
+            input.disabled = checkbox.checked;
+            if (checkbox.checked) {
+                input.value = '';
+            }
+        }
+
+        function readDailyLimitInput(inputId, checkboxId, fallback = null) {
+            const checkbox = document.getElementById(checkboxId);
+            if (checkbox?.checked) return 0;
+
+            const input = document.getElementById(inputId);
+            const rawValue = input?.value?.trim() ?? '';
+            if (!rawValue && fallback !== null && fallback !== undefined) {
+                return Number(fallback || 0);
+            }
+
+            const dailyLimit = Number.parseInt(rawValue, 10);
+            return Number.isFinite(dailyLimit) ? dailyLimit : NaN;
+        }
+
+        function validateDailyLimit(dailyLimit) {
+            if (!Number.isFinite(dailyLimit) || dailyLimit < 0) {
+                showToast('请输入有效的限额，0 表示不限量', 'error');
+                return false;
+            }
+            return true;
+        }
+
         // 显示批量应用限额模态框
         function showApplyLimitModal() {
-            document.getElementById('applyLimitValue').value = systemConfig.defaultDailyLimit || 500;
+            setLimitControl('applyLimitValue', 'applyLimitUnlimited', systemConfig.defaultDailyLimit ?? 500);
             openModal('applyLimitModal');
         }
 
         // 批量应用每日限额
         async function applyDailyLimitToAll() {
-            const dailyLimit = parseInt(document.getElementById('applyLimitValue').value);
-            if (!dailyLimit || dailyLimit < 1) {
-                showToast('请输入有效的限额', 'error');
-                return;
-            }
+            const dailyLimit = readDailyLimitInput('applyLimitValue', 'applyLimitUnlimited');
+            if (!validateDailyLimit(dailyLimit)) return;
             
             showToast('正在应用限额...', 'success');
             const result = await apiRequest(`${API_BASE}/keys/apply-limit`, { 
@@ -1829,9 +1905,16 @@
                 return;
             }
             container.innerHTML = keys.map(key => {
-                const usagePercent = key.dailyLimit > 0 ? (key.todayUsage / key.dailyLimit * 100) : 0;
+                const dailyLimit = Number(key.dailyLimit || 0);
+                const isUnlimited = dailyLimit <= 0;
+                const usagePercent = !isUnlimited ? (key.todayUsage / dailyLimit * 100) : 0;
                 const progressClass = usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warning' : '';
                 const valueClass = usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warning' : '';
+                const todayLimitText = `${formatCountCompact(key.todayUsage || 0)}/${formatLimitCompact(key.dailyLimit)}`;
+                const todayLimitTitle = `今日 ${formatNumber(key.todayUsage || 0)} 次 / 限额 ${isUnlimited ? '不限量' : formatNumber(dailyLimit)}`;
+                const progressMarkup = isUnlimited
+                    ? '<div class="value muted">不限量，不拦截今日调用</div>'
+                    : `<div class="progress-bar"><div class="fill ${progressClass}" style="width:${usagePercent}%"></div></div>`;
 
                 const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
                 const rangeMetrics = getKeyRangeMetrics(key, currentUsageRange);
@@ -1857,9 +1940,9 @@
 
                         <div class="key-stat">
                             <div class="label">今日/限额</div>
-                            <div class="value ${valueClass}">${key.todayUsage}/${key.dailyLimit}</div>
+                            <div class="value ${valueClass}" title="${todayLimitTitle}">${todayLimitText}</div>
                             <div class="value muted">${formatTokenCompact(key.todayTotalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.todayCacheHitRatio)}</div>
-                            <div class="progress-bar"><div class="fill ${progressClass}" style="width:${Math.min(usagePercent, 100)}%"></div></div>
+                            ${progressMarkup}
                             </div>
                             <div class="key-stat">
                                 <div class="label">${rangeLabel} Token</div>
@@ -1904,7 +1987,8 @@
 
         async function createKey() {
             const name = document.getElementById('keyName').value;
-            const dailyLimit = parseInt(document.getElementById('keyLimit').value) || systemConfig.defaultDailyLimit;
+            const dailyLimit = readDailyLimitInput('keyLimit', 'keyUnlimited', systemConfig.defaultDailyLimit);
+            if (!validateDailyLimit(dailyLimit)) return;
             const result = await apiRequest(`${API_BASE}/keys`, { method: 'POST', body: JSON.stringify({ name, dailyLimit }) });
             if (result && result.success) {
                 currentNewKey = result.data.id;
@@ -1914,6 +1998,8 @@
                 loadData();
                 document.getElementById('keyName').value = '';
                 document.getElementById('keyLimit').value = '';
+                document.getElementById('keyLimit').disabled = false;
+                document.getElementById('keyUnlimited').checked = false;
             } else {
                 showToast(result?.error?.message || '创建失败', 'error');
             }
@@ -2019,7 +2105,11 @@
             const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
             const rangeMetrics = getKeyRangeMetrics(key, currentUsageRange);
             const maskedKey = key.maskedKey || `${key.id.substring(0, 12)}...${key.id.substring(key.id.length - 4)}`;
-            const usagePercent = key.dailyLimit > 0 ? Math.round((Number(key.todayUsage || 0) / key.dailyLimit) * 100) : 0;
+            const dailyLimit = Number(key.dailyLimit || 0);
+            const isUnlimited = dailyLimit <= 0;
+            const usagePercent = !isUnlimited ? Math.round((Number(key.todayUsage || 0) / dailyLimit) * 100) : 0;
+            const todayLimitText = `${formatCountCompact(key.todayUsage || 0)}/${formatLimitCompact(key.dailyLimit)}`;
+            const todayLimitTitle = `今日 ${formatNumber(key.todayUsage || 0)} 次 / 限额 ${isUnlimited ? '不限量' : formatNumber(dailyLimit)}`;
             const statusText = key.enabled ? '启用' : '禁用';
 
             document.getElementById('keyDetailBody').innerHTML = `
@@ -2031,12 +2121,12 @@
                     <span>创建时间：<strong>${formatTime(key.createdAt)}</strong></span>
                     <span>当前范围：<strong>${rangeLabel}</strong></span>
                 </div>
-                <div class="key-detail-summary">
-                    <div class="detail-metric">
-                        <div class="label">今日/限额</div>
-                        <div class="value">${formatNumber(key.todayUsage || 0)}/${formatNumber(key.dailyLimit || 0)}</div>
-                        <div class="subvalue">${usagePercent}% · ${formatTokenCompact(key.todayTotalTokens || 0)} Tokens</div>
-                    </div>
+                    <div class="key-detail-summary">
+                        <div class="detail-metric">
+                            <div class="label">今日/限额</div>
+                            <div class="value" title="${todayLimitTitle}">${todayLimitText}</div>
+                            <div class="subvalue">${isUnlimited ? '不限量' : `${usagePercent}%`} · ${formatTokenCompact(key.todayTotalTokens || 0)} Tokens</div>
+                        </div>
                     <div class="detail-metric">
                         <div class="label">${rangeLabel}调用</div>
                         <div class="value">${formatNumber(rangeMetrics.requestCount || 0)}</div>
@@ -2106,14 +2196,14 @@
 
         function openEditLimit(keyId, currentLimit) {
             document.getElementById('editKeyId').value = keyId;
-            document.getElementById('newLimit').value = currentLimit;
+            setLimitControl('newLimit', 'newLimitUnlimited', currentLimit);
             openModal('editLimitModal');
         }
 
         async function updateLimit() {
             const keyId = document.getElementById('editKeyId').value;
-            const dailyLimit = parseInt(document.getElementById('newLimit').value);
-            if (!dailyLimit || dailyLimit < 1) { showToast('请输入有效的限额', 'error'); return; }
+            const dailyLimit = readDailyLimitInput('newLimit', 'newLimitUnlimited');
+            if (!validateDailyLimit(dailyLimit)) return;
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/limit`, { method: 'PUT', body: JSON.stringify({ dailyLimit }) });
             if (result && result.success) { showToast('限额已更新', 'success'); closeModal('editLimitModal'); loadData(); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }

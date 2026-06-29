@@ -16,9 +16,9 @@ let consoleSpies = [];
 function createCodexPoolManager() {
     return new ProviderPoolManager({
         'openai-codex-oauth': [
-            { uuid: 'codex-a', customName: 'Codex A', supportedModels: ['gpt-5.5'] },
-            { uuid: 'codex-b', customName: 'Codex B', supportedModels: ['gpt-5.5'] },
-            { uuid: 'codex-c', customName: 'Codex C', supportedModels: ['gpt-5.5'] }
+            { uuid: 'codex-a', customName: 'Codex A', lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-b', customName: 'Codex B', lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-c', customName: 'Codex C', lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] }
         ]
     }, {
         logLevel: 'error',
@@ -32,8 +32,8 @@ function createCodexPoolManager() {
 function createWeightedCodexPoolManager() {
     return new ProviderPoolManager({
         'openai-codex-oauth': [
-            { uuid: 'codex-low', customName: 'Codex Low', providerWeight: 1, supportedModels: ['gpt-5.5'] },
-            { uuid: 'codex-high', customName: 'Codex High', providerWeight: 3, supportedModels: ['gpt-5.5'] }
+            { uuid: 'codex-low', customName: 'Codex Low', providerWeight: 1, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-high', customName: 'Codex High', providerWeight: 3, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] }
         ]
     }, {
         logLevel: 'error',

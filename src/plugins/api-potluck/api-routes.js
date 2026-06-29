@@ -36,6 +36,10 @@ function sendJson(res, statusCode, data) {
     res.end(JSON.stringify(data));
 }
 
+function formatDailyLimitMessage(dailyLimit) {
+    return dailyLimit === 0 ? '不限量' : dailyLimit;
+}
+
 function readProviderCredentialEmail(provider) {
     const credPath = provider?.CODEX_OAUTH_CREDS_FILE_PATH;
     if (!credPath) return '';
@@ -243,15 +247,15 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
             const body = await getRequestBody(req, { maxBytes: 1024 * 1024 });
             const { dailyLimit } = body;
             
-            if (dailyLimit === undefined || typeof dailyLimit !== 'number' || dailyLimit < 1) {
-                sendJson(res, 400, { success: false, error: { message: 'dailyLimit 必须是一个正数' } });
+            if (dailyLimit === undefined || typeof dailyLimit !== 'number' || dailyLimit < 0) {
+                sendJson(res, 400, { success: false, error: { message: 'dailyLimit 必须是一个非负数，0 表示不限量' } });
                 return true;
             }
             
             const result = await applyDailyLimitToAllKeys(dailyLimit);
             sendJson(res, 200, {
                 success: true,
-                message: `已将每日限额 ${dailyLimit} 应用到 ${result.updated}/${result.total} 个 Key`,
+                message: `已将每日限额 ${formatDailyLimitMessage(dailyLimit)} 应用到 ${result.updated}/${result.total} 个 Key`,
                 data: result
             });
             return true;
