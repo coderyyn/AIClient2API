@@ -12,8 +12,8 @@ jest.mock('../src/providers/adapter.js', () => ({
 describe('Codex usage formatting', () => {
     function dateKey(offsetDays = 0) {
         const date = new Date();
-        date.setHours(12, 0, 0, 0);
-        date.setDate(date.getDate() + offsetDays);
+        date.setUTCHours(12, 0, 0, 0);
+        date.setUTCDate(date.getUTCDate() + offsetDays);
         return date.toISOString().slice(0, 10);
     }
 
