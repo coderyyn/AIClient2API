@@ -83,4 +83,14 @@ describe('API Potluck token display formatting', () => {
         expect(source).not.toContain('不限量，不拦截今日调用');
         expect(source).toContain('formatLimitCompact(key.dailyLimit)');
     });
+
+    test('admin key list uses fixed identity and two-row action layout', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/potluck.html'), 'utf8');
+
+        expect(source).toContain('grid-template-columns: 280px minmax(680px, 1fr) 330px');
+        expect(source).toContain('grid-template-columns: repeat(4, minmax(150px, 1fr))');
+        expect(source).toContain('.key-actions .btn-sm');
+        expect(source).toContain('width: 96px');
+        expect(source).toContain('@media (max-width: 1500px)');
+    });
 });
