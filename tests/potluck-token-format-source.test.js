@@ -74,6 +74,9 @@ describe('API Potluck token display formatting', () => {
         expect(source).toContain('id="keyUnlimited"');
         expect(source).toContain('id="newLimitUnlimited"');
         expect(source).toContain('id="applyLimitUnlimited"');
+        expect(source.match(/class="limit-control"/g) || []).toHaveLength(3);
+        expect(source).toContain('class="limit-unlimited-option"');
+        expect(source).toContain('0 表示不限量');
         expect(source).toContain('formatLimitCompact(key.dailyLimit)');
     });
 });

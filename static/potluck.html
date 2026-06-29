@@ -665,6 +665,108 @@
             box-shadow: 0 0 0 4px var(--primary-10);
         }
         .form-group input::placeholder { color: var(--text-tertiary); }
+        .limit-control {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 10px;
+        }
+        .limit-input-wrap {
+            position: relative;
+        }
+        .limit-input-wrap input {
+            padding-right: 72px;
+            font-variant-numeric: tabular-nums;
+        }
+        .limit-input-wrap input:disabled {
+            color: var(--text-tertiary);
+            background: var(--bg-tertiary);
+            cursor: not-allowed;
+        }
+        .limit-input-suffix {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-tertiary);
+            font-size: 12px;
+            pointer-events: none;
+        }
+        .limit-unlimited-option {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 12px 14px;
+            min-height: 56px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            background: var(--bg-secondary);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .limit-unlimited-option:hover {
+            border-color: var(--primary-30);
+            background: var(--primary-10);
+        }
+        .limit-unlimited-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+        }
+        .limit-unlimited-title {
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .limit-unlimited-help {
+            color: var(--text-tertiary);
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .limit-switch {
+            position: relative;
+            width: 46px;
+            height: 26px;
+            flex: 0 0 auto;
+        }
+        .limit-switch input {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            margin: 0;
+        }
+        .limit-switch-track {
+            position: absolute;
+            inset: 0;
+            border-radius: 999px;
+            background: var(--border-color);
+            transition: var(--transition);
+        }
+        .limit-switch-track::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            left: 3px;
+            top: 3px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: var(--shadow-sm);
+            transition: var(--transition);
+        }
+        .limit-switch input:checked + .limit-switch-track {
+            background: var(--primary-color);
+        }
+        .limit-switch input:checked + .limit-switch-track::after {
+            transform: translateX(20px);
+        }
+        .limit-switch input:focus-visible + .limit-switch-track {
+            box-shadow: 0 0 0 4px var(--primary-10);
+        }
 
         /* Key 显示 */
         .key-display {
@@ -1044,11 +1146,22 @@
                 </div>
                 <div class="form-group">
                     <label>每日调用限额</label>
-                    <input type="number" id="keyLimit" placeholder="500" min="0">
-                    <label class="checkbox-label" style="margin-top: 8px;">
-                        <input type="checkbox" id="keyUnlimited" onchange="toggleLimitInput('keyLimit', 'keyUnlimited')">
-                        不限量
-                    </label>
+                    <div class="limit-control">
+                        <div class="limit-input-wrap">
+                            <input type="number" id="keyLimit" placeholder="默认 500" min="0" inputmode="numeric">
+                            <span class="limit-input-suffix">次/日</span>
+                        </div>
+                        <label class="limit-unlimited-option" for="keyUnlimited">
+                            <span class="limit-unlimited-copy">
+                                <span class="limit-unlimited-title">不限量</span>
+                                <span class="limit-unlimited-help">关闭每日调用拦截，保存时等同于填 0。默认不勾选时为 500。</span>
+                            </span>
+                            <span class="limit-switch">
+                                <input type="checkbox" id="keyUnlimited" onchange="toggleLimitInput('keyLimit', 'keyUnlimited')">
+                                <span class="limit-switch-track"></span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
                 <button class="btn btn-primary btn-block" onclick="createKey()">
                     <i class="fas fa-check"></i> 生成 Key
@@ -1084,11 +1197,22 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>新的每日限额</label>
-                    <input type="number" id="newLimit" min="0">
-                    <label class="checkbox-label" style="margin-top: 8px;">
-                        <input type="checkbox" id="newLimitUnlimited" onchange="toggleLimitInput('newLimit', 'newLimitUnlimited')">
-                        不限量
-                    </label>
+                    <div class="limit-control">
+                        <div class="limit-input-wrap">
+                            <input type="number" id="newLimit" min="0" inputmode="numeric">
+                            <span class="limit-input-suffix">次/日</span>
+                        </div>
+                        <label class="limit-unlimited-option" for="newLimitUnlimited">
+                            <span class="limit-unlimited-copy">
+                                <span class="limit-unlimited-title">不限量</span>
+                                <span class="limit-unlimited-help">0 表示不限量，Key 不再按每日调用次数拦截。</span>
+                            </span>
+                            <span class="limit-switch">
+                                <input type="checkbox" id="newLimitUnlimited" onchange="toggleLimitInput('newLimit', 'newLimitUnlimited')">
+                                <span class="limit-switch-track"></span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
                 <input type="hidden" id="editKeyId">
                 <button class="btn btn-primary btn-block" onclick="updateLimit()">
@@ -1128,11 +1252,22 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>每日调用限额</label>
-                    <input type="number" id="applyLimitValue" placeholder="500" min="0">
-                    <label class="checkbox-label" style="margin-top: 8px;">
-                        <input type="checkbox" id="applyLimitUnlimited" onchange="toggleLimitInput('applyLimitValue', 'applyLimitUnlimited')">
-                        不限量
-                    </label>
+                    <div class="limit-control">
+                        <div class="limit-input-wrap">
+                            <input type="number" id="applyLimitValue" placeholder="默认 500" min="0" inputmode="numeric">
+                            <span class="limit-input-suffix">次/日</span>
+                        </div>
+                        <label class="limit-unlimited-option" for="applyLimitUnlimited">
+                            <span class="limit-unlimited-copy">
+                                <span class="limit-unlimited-title">不限量</span>
+                                <span class="limit-unlimited-help">0 表示不限量，将覆盖所有 Key 的每日限额。</span>
+                            </span>
+                            <span class="limit-switch">
+                                <input type="checkbox" id="applyLimitUnlimited" onchange="toggleLimitInput('applyLimitValue', 'applyLimitUnlimited')">
+                                <span class="limit-switch-track"></span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
                 <div style="background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: var(--radius-lg); padding: 12px; margin-top: 12px;">
                     <p style="color: var(--danger-text); font-size: 13px; margin: 0;"><i class="fas fa-exclamation-triangle"></i> 风险提示：</p>
