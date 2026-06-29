@@ -80,6 +80,7 @@ describe('API Potluck token display formatting', () => {
         expect(source).toContain('data-limit-mode="unlimited"');
         expect(source).toContain('showCreateModal');
         expect(source).toContain('保存为 0');
+        expect(source).not.toContain('不限量，不拦截今日调用');
         expect(source).toContain('formatLimitCompact(key.dailyLimit)');
     });
 });

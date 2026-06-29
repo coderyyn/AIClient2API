@@ -2053,7 +2053,7 @@
                 const todayLimitText = `${formatCountCompact(key.todayUsage || 0)}/${formatLimitCompact(key.dailyLimit)}`;
                 const todayLimitTitle = `今日 ${formatNumber(key.todayUsage || 0)} 次 / 限额 ${isUnlimited ? '不限量' : formatNumber(dailyLimit)}`;
                 const progressMarkup = isUnlimited
-                    ? '<div class="value muted">不限量，不拦截今日调用</div>'
+                    ? ''
                     : `<div class="progress-bar"><div class="fill ${progressClass}" style="width:${usagePercent}%"></div></div>`;
 
                 const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, currentUsageRange);
