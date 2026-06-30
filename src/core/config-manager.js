@@ -135,8 +135,9 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CODEX_STICKY_HOT_SHARD_ENABLED: true, // Codex sticky 热 key 是否自动拆分到多个账号
         CODEX_STICKY_HOT_SHARD_WINDOW_MS: 600000, // 热 key 统计窗口，默认10分钟
-        CODEX_STICKY_HOT_SHARD_MIN_REQUESTS: 50, // 窗口内达到多少次请求后开始分片
-        CODEX_STICKY_HOT_SHARD_MAX_SHARDS: 3, // 单个热 key 最多拆到几个账号
+        CODEX_STICKY_HOT_SHARD_MIN_REQUESTS: 30, // 窗口内达到多少次请求后开始分片
+        CODEX_STICKY_HOT_SHARD_MAX_SHARDS: 5, // 单个热 key 最多拆到几个账号
+        CODEX_PROVIDER_SELECTION_SLOW_WARN_MS: 50, // provider 选择耗时超过该阈值时记录 warn
         CODEX_PREWARM_ENABLED: true, // 是否按固定时间对所有启用的 Codex 账号做轻量预热请求
         CODEX_PREWARM_TIMES: ['06:30', '11:30'], // Asia/Shanghai 每日预热时间
         CODEX_PREWARM_ATTEMPTS: 2, // 每个账号在每个预热时间点触发次数
@@ -225,6 +226,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--codex-sticky-hot-shard-window-ms', configKey: 'CODEX_STICKY_HOT_SHARD_WINDOW_MS', type: 'int' },
         { flag: '--codex-sticky-hot-shard-min-requests', configKey: 'CODEX_STICKY_HOT_SHARD_MIN_REQUESTS', type: 'int' },
         { flag: '--codex-sticky-hot-shard-max-shards', configKey: 'CODEX_STICKY_HOT_SHARD_MAX_SHARDS', type: 'int' },
+        { flag: '--codex-provider-selection-slow-warn-ms', configKey: 'CODEX_PROVIDER_SELECTION_SLOW_WARN_MS', type: 'int' },
         { flag: '--codex-prewarm-enabled', configKey: 'CODEX_PREWARM_ENABLED', type: 'bool' },
         { flag: '--codex-prewarm-times', configKey: 'CODEX_PREWARM_TIMES', type: 'stringList' },
         { flag: '--codex-prewarm-attempts', configKey: 'CODEX_PREWARM_ATTEMPTS', type: 'int' },

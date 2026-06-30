@@ -125,8 +125,12 @@ const DEFAULT_CODEX_53_MODEL_PATTERNS = [
 ];
 
 const DEFAULT_CODEX_STICKY_HOT_SHARD_WINDOW_MS = 10 * 60 * 1000;
-const DEFAULT_CODEX_STICKY_HOT_SHARD_MIN_REQUESTS = 50;
-const DEFAULT_CODEX_STICKY_HOT_SHARD_MAX_SHARDS = 3;
+const DEFAULT_CODEX_STICKY_HOT_SHARD_MIN_REQUESTS = 30;
+const DEFAULT_CODEX_STICKY_HOT_SHARD_MAX_SHARDS = 5;
+const DEFAULT_PROVIDER_SELECTION_SLOW_WARN_MS = 50;
+const PROVIDER_SELECTION_LOAD_BUCKET_MS = 60 * 1000;
+const PROVIDER_SELECTION_LOAD_MAX_WINDOW_MS = 60 * 60 * 1000;
+const CODEX_HOT_KEY_BUCKET_MS = 10 * 1000;
 
 function getPositivePercentLimit(value) {
     const parsed = Number(value);
@@ -362,6 +366,7 @@ export class ProviderPoolManager {
         this._selectionLocks = {};
         this._isSelecting = {}; // 同步标志位锁
         this._codexStickyHotStats = new Map();
+        this._providerSelectionLoadStats = new Map();
 
         // --- V2: 读写分离 and 异步刷新队列 ---
         // 刷新并发控制配置
@@ -409,24 +414,90 @@ export class ProviderPoolManager {
 
     _recordCodexStickyHotRequest(stickyProviderKey, now = Date.now()) {
         const config = this._getCodexStickyHotShardConfig();
-        const existing = this._codexStickyHotStats.get(stickyProviderKey) || { timestamps: [] };
+        const existing = this._codexStickyHotStats.get(stickyProviderKey) || { buckets: new Map() };
         const cutoff = now - config.windowMs;
-        const timestamps = existing.timestamps.filter(ts => ts >= cutoff);
-        timestamps.push(now);
-        const stats = { timestamps };
+        const bucketMs = Math.min(CODEX_HOT_KEY_BUCKET_MS, Math.max(1000, config.windowMs));
+        const bucket = Math.floor(now / bucketMs) * bucketMs;
+        const buckets = existing.buckets instanceof Map ? existing.buckets : new Map();
+        buckets.set(bucket, (buckets.get(bucket) || 0) + 1);
+
+        let count = 0;
+        for (const [bucketStart, bucketCount] of buckets.entries()) {
+            if (bucketStart < cutoff) {
+                buckets.delete(bucketStart);
+                continue;
+            }
+            count += bucketCount;
+        }
+
+        const stats = { buckets };
         this._codexStickyHotStats.set(stickyProviderKey, stats);
-        return { count: timestamps.length, config };
+        return { count, config };
     }
 
     _getCodexHotShardCount(requestCount, providerCount, config) {
         if (!config.enabled || providerCount < 2 || requestCount < config.minRequests) {
             return 1;
         }
-        const desired = requestCount >= config.minRequests * 2 ? 3 : 2;
+        let desired = 2;
+        if (requestCount >= config.minRequests * 12) {
+            desired = 5;
+        } else if (requestCount >= config.minRequests * 6) {
+            desired = 4;
+        } else if (requestCount >= config.minRequests * 3) {
+            desired = 3;
+        }
         return Math.max(1, Math.min(config.maxShards, providerCount, desired));
     }
 
-    _rankCodexShardProviders(providers, providerType, requestedModel, usageCache) {
+    _getProviderSelectionLoadKey(providerType, provider) {
+        const uuid = provider?.uuid || provider?.config?.uuid || '';
+        return `${providerType}:${uuid}`;
+    }
+
+    _recordProviderSelectionLoad(providerType, provider, now = Date.now()) {
+        if (!providerType || !provider) return;
+        const key = this._getProviderSelectionLoadKey(providerType, provider);
+        if (!key) return;
+
+        const bucket = Math.floor(now / PROVIDER_SELECTION_LOAD_BUCKET_MS) * PROVIDER_SELECTION_LOAD_BUCKET_MS;
+        const existing = this._providerSelectionLoadStats.get(key) || { buckets: new Map() };
+        const buckets = existing.buckets instanceof Map ? existing.buckets : new Map();
+        buckets.set(bucket, (buckets.get(bucket) || 0) + 1);
+        this._providerSelectionLoadStats.set(key, { buckets });
+        this._pruneProviderSelectionLoadStats(key, now);
+    }
+
+    _pruneProviderSelectionLoadStats(key, now = Date.now()) {
+        const stats = this._providerSelectionLoadStats.get(key);
+        if (!stats?.buckets) return;
+        const cutoff = now - PROVIDER_SELECTION_LOAD_MAX_WINDOW_MS;
+        for (const bucketStart of stats.buckets.keys()) {
+            if (bucketStart < cutoff) {
+                stats.buckets.delete(bucketStart);
+            }
+        }
+        if (stats.buckets.size === 0) {
+            this._providerSelectionLoadStats.delete(key);
+        }
+    }
+
+    _getProviderSelectionLoad(providerType, provider, windowMs, now = Date.now()) {
+        const key = this._getProviderSelectionLoadKey(providerType, provider);
+        const stats = this._providerSelectionLoadStats.get(key);
+        if (!stats?.buckets) return 0;
+
+        const cutoff = now - windowMs;
+        let count = 0;
+        for (const [bucketStart, bucketCount] of stats.buckets.entries()) {
+            if (bucketStart >= cutoff) {
+                count += bucketCount;
+            }
+        }
+        return count;
+    }
+
+    _rankCodexShardProviders(providers, providerType, requestedModel, usageCache, now = Date.now()) {
         const bucket = resolveCodexQuotaBucket(
             requestedModel,
             toStringArray(this.globalConfig?.CODEX_53_QUOTA_MODEL_PATTERNS || this.globalConfig?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS)
@@ -438,12 +509,16 @@ export class ProviderPoolManager {
                 const uuid = config.uuid || provider.uuid;
                 const weight = getProviderWeight(config);
                 const quota = getCodexCachedQuotaPressure(providerType, uuid, usageCache, bucket);
+                const recent15m = this._getProviderSelectionLoad(providerType, provider, 15 * 60 * 1000, now);
+                const recent60m = this._getProviderSelectionLoad(providerType, provider, 60 * 60 * 1000, now);
                 return {
                     score:
                         quota.primary * 0.5 +
                         quota.secondary * 0.3 +
-                        ((config.usageCount || 0) / weight) * 0.15 +
-                        ((provider.state?.activeCount || 0) * 0.05),
+                        ((config.usageCount || 0) / weight) * 0.05 +
+                        ((recent15m / weight) * 0.3) +
+                        ((recent60m / weight) * 0.15) +
+                        ((provider.state?.activeCount || 0) * 0.1),
                     lastUsed: config.lastUsed ? Date.parse(config.lastUsed) || 0 : 0
                 };
             };
@@ -468,7 +543,7 @@ export class ProviderPoolManager {
 
         const usageCache = readFreshUsageCacheSync();
         const shardProviders = this
-            ._rankCodexShardProviders(providers, providerType, requestedModel, usageCache)
+            ._rankCodexShardProviders(providers, providerType, requestedModel, usageCache, now)
             .slice(0, shardCount);
         if (shardProviders.length <= 1) {
             return null;
@@ -1630,6 +1705,8 @@ export class ProviderPoolManager {
             this._log('error', `Invalid providerType: ${providerType}`);
             return null;
         }
+
+        const selectionStartedAt = Date.now();
  
         // 使用标志位 + 异步等待实现更强力的互斥锁
         // 这种方式能更好地处理同一微任务循环内的并发
@@ -1644,7 +1721,26 @@ export class ProviderPoolManager {
             return this._doSelectProvider(providerType, requestedModel, options);
         } finally {
             this._isSelecting[providerType] = false;
+            this._logSlowProviderSelection(providerType, requestedModel, selectionStartedAt);
         }
+    }
+
+    _getProviderSelectionSlowWarnMs() {
+        return getPositiveIntegerConfig(
+            this.globalConfig?.CODEX_PROVIDER_SELECTION_SLOW_WARN_MS,
+            DEFAULT_PROVIDER_SELECTION_SLOW_WARN_MS
+        );
+    }
+
+    _logSlowProviderSelection(providerType, requestedModel, startedAt) {
+        const elapsedMs = Date.now() - startedAt;
+        const thresholdMs = this._getProviderSelectionSlowWarnMs();
+        if (elapsedMs < thresholdMs) return;
+
+        this._log(
+            'warn',
+            `Slow provider selection for ${providerType}${requestedModel ? `/${requestedModel}` : ''}: ${elapsedMs}ms (threshold=${thresholdMs}ms)`
+        );
     }
 
     /**
@@ -1759,6 +1855,7 @@ export class ProviderPoolManager {
         // 更新自增序列号，确保即使毫秒级并发，也能在下一轮排序中被区分开
         this._selectionSequence++;
         selected.config._lastSelectionSeq = this._selectionSequence;
+        this._recordProviderSelectionLoad(providerType, selected, now);
         
         // 强制打印选中日志，方便排查并发问题
         this._log('info', `[Concurrency Control] Atomic selection: ${this._getDisplayName(selected.config)} (Seq: ${this._selectionSequence})`);

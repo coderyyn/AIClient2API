@@ -3,7 +3,9 @@ import path from 'path';
 import { MODEL_PROVIDER } from './constants.js';
 
 const DEFAULT_USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_USAGE_CACHE_SNAPSHOT_TTL_MS = 5 * 1000;
 const ALLOWED_CODEX_PLANS = new Set(['pro', 'plus']);
+let usageCacheSnapshot = null;
 
 function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
@@ -16,11 +18,38 @@ function isUsageCacheFresh(cache, maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS) {
 
 export function readFreshUsageCacheSync(maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS) {
     const usageCachePath = path.join(process.cwd(), 'configs', 'usage-cache.json');
+    const now = Date.now();
     try {
-        if (!fs.existsSync(usageCachePath)) return null;
+        const fileStat = fs.statSync(usageCachePath);
+        if (
+            usageCacheSnapshot
+            && usageCacheSnapshot.path === usageCachePath
+            && usageCacheSnapshot.maxAgeMs === maxAgeMs
+            && usageCacheSnapshot.mtimeMs === fileStat.mtimeMs
+            && usageCacheSnapshot.size === fileStat.size
+            && now - usageCacheSnapshot.loadedAt <= DEFAULT_USAGE_CACHE_SNAPSHOT_TTL_MS
+            && isUsageCacheFresh(usageCacheSnapshot.cache, maxAgeMs)
+        ) {
+            return usageCacheSnapshot.cache;
+        }
+
         const cache = JSON.parse(fs.readFileSync(usageCachePath, 'utf8'));
-        return isUsageCacheFresh(cache, maxAgeMs) ? cache : null;
+        if (!isUsageCacheFresh(cache, maxAgeMs)) {
+            usageCacheSnapshot = null;
+            return null;
+        }
+
+        usageCacheSnapshot = {
+            path: usageCachePath,
+            maxAgeMs,
+            mtimeMs: fileStat.mtimeMs,
+            size: fileStat.size,
+            loadedAt: now,
+            cache
+        };
+        return cache;
     } catch {
+        usageCacheSnapshot = null;
         return null;
     }
 }

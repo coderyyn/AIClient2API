@@ -75,6 +75,27 @@ function createHotShardCodexPoolManager() {
     return manager;
 }
 
+function createNineAccountHotShardManager() {
+    return new ProviderPoolManager({
+        'openai-codex-oauth': Array.from({ length: 9 }, (_, index) => ({
+            uuid: `codex-${index + 1}`,
+            customName: `Codex ${index + 1}`,
+            lastKnownCodexPlan: 'pro',
+            supportedModels: ['gpt-5.5']
+        }))
+    }, {
+        logLevel: 'error',
+        saveDebounceTime: 60 * 60 * 1000,
+        globalConfig: {
+            PROVIDER_POOLS_FILE_PATH: 'configs/provider_pools.test.json',
+            CODEX_STICKY_HOT_SHARD_ENABLED: true,
+            CODEX_STICKY_HOT_SHARD_MIN_REQUESTS: 30,
+            CODEX_STICKY_HOT_SHARD_WINDOW_MS: 60 * 1000,
+            CODEX_STICKY_HOT_SHARD_MAX_SHARDS: 5
+        }
+    });
+}
+
 beforeEach(() => {
     consoleSpies = ['log', 'warn', 'error'].map((method) => jest.spyOn(console, method).mockImplementation(() => {}));
 });
@@ -188,5 +209,51 @@ describe('provider pool sticky affinity', () => {
         clearTimeout(manager.saveTimer);
         expect(new Set(hotSelections).size).toBeGreaterThanOrEqual(2);
         expect(new Set(hotSelections)).not.toContain('codex-hot');
+    });
+
+    test('raises very hot Codex affinity keys up to five shards when enough accounts exist', async () => {
+        const manager = createNineAccountHotShardManager();
+        const config = manager._getCodexStickyHotShardConfig();
+
+        expect(manager._getCodexHotShardCount(30, 9, config)).toBe(2);
+        expect(manager._getCodexHotShardCount(90, 9, config)).toBe(3);
+        expect(manager._getCodexHotShardCount(180, 9, config)).toBe(4);
+        expect(manager._getCodexHotShardCount(360, 9, config)).toBe(5);
+
+        clearTimeout(manager.saveTimer);
+    });
+
+    test('penalizes recently selected Codex shard providers when ranking hot shard candidates', async () => {
+        const manager = createNineAccountHotShardManager();
+        const providers = manager.providerStatus['openai-codex-oauth'];
+        const hotProvider = providers.find(provider => provider.uuid === 'codex-1');
+
+        for (let i = 0; i < 80; i++) {
+            manager._recordProviderSelectionLoad('openai-codex-oauth', hotProvider, 1000 + i);
+        }
+
+        const ranked = manager._rankCodexShardProviders(providers, 'openai-codex-oauth', 'gpt-5.5', null, 60 * 1000 + 1000);
+
+        clearTimeout(manager.saveTimer);
+        expect(ranked.slice(0, 5).map(provider => provider.uuid)).not.toContain('codex-1');
+    });
+
+    test('logs slow provider selection when selection exceeds the configured threshold', async () => {
+        const manager = createCodexPoolManager();
+        manager.globalConfig.CODEX_PROVIDER_SELECTION_SLOW_WARN_MS = 50;
+        const selected = manager.providerStatus['openai-codex-oauth'][0].config;
+        const originalDoSelectProvider = manager._doSelectProvider.bind(manager);
+        const logSpy = jest.spyOn(manager, '_log');
+        const nowSpy = jest.spyOn(Date, 'now')
+            .mockReturnValueOnce(1000)
+            .mockReturnValueOnce(1075);
+        manager._doSelectProvider = jest.fn(() => selected);
+
+        await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', { skipUsageCount: true });
+
+        manager._doSelectProvider = originalDoSelectProvider;
+        nowSpy.mockRestore();
+        clearTimeout(manager.saveTimer);
+        expect(logSpy).toHaveBeenCalledWith('warn', expect.stringContaining('Slow provider selection'));
     });
 });
