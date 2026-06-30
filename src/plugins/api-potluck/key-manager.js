@@ -15,6 +15,7 @@ import { hashSecret, sanitizeProviderName } from '../request-audit/audit-event.j
 
 // 配置文件路径
 const KEYS_STORE_FILE = path.join(process.cwd(), 'configs', 'api-potluck-keys.json');
+const MODEL_USAGE_STATS_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
 
 const KEY_PREFIX = 'maki_';
 
@@ -68,7 +69,8 @@ function createUsageBucket() {
         cachedTokens: 0,
         maxQps: 0,
         maxRpm: 0,
-        maxTps: 0
+        maxTps: 0,
+        lastUsedAt: null
     };
 }
 
@@ -96,7 +98,8 @@ function normalizeUsageBucket(bucket) {
         cachedTokens: toNumber(bucket?.cachedTokens),
         maxQps: toNumber(bucket?.maxQps),
         maxRpm: toNumber(bucket?.maxRpm),
-        maxTps: toNumber(bucket?.maxTps)
+        maxTps: toNumber(bucket?.maxTps),
+        lastUsedAt: bucket?.lastUsedAt || null
     };
 }
 
@@ -245,6 +248,19 @@ function addUsage(target, usage = {}) {
     target.maxQps = Math.max(target.maxQps || 0, toNumber(usage.maxQps));
     target.maxRpm = Math.max(target.maxRpm || 0, toNumber(usage.maxRpm));
     target.maxTps = Math.max(target.maxTps || 0, toNumber(usage.maxTps));
+    if (usage.lastUsedAt && (!target.lastUsedAt || Date.parse(usage.lastUsedAt) > Date.parse(target.lastUsedAt))) {
+        target.lastUsedAt = usage.lastUsedAt;
+    }
+}
+
+function latestTimestamp(current, candidate) {
+    if (!candidate) return current || null;
+    if (!current) return candidate;
+    const currentMs = Date.parse(current);
+    const candidateMs = Date.parse(candidate);
+    if (!Number.isFinite(candidateMs)) return current;
+    if (!Number.isFinite(currentMs)) return candidate;
+    return candidateMs > currentMs ? candidate : current;
 }
 
 function isCodexEmailAccountProvider(provider) {
@@ -546,6 +562,42 @@ function reassignAccountSummaryAliases(aliasIndex, fromKey, toKey) {
             aliasIndex.set(alias, toKey);
         }
     }
+}
+
+function getLatestUsageTimestampFromAccount(account = {}) {
+    let latest = account?.summary?.lastUsedAt || account?.lastUsedAt || null;
+    for (const usage of Object.values(account?.models || {})) {
+        latest = latestTimestamp(latest, usage?.lastUsedAt);
+    }
+    return latest;
+}
+
+function readModelUsageAccountLastUsedIndex() {
+    const index = new Map();
+    if (!existsSync(MODEL_USAGE_STATS_FILE)) return index;
+
+    try {
+        const stats = JSON.parse(readFileSync(MODEL_USAGE_STATS_FILE, 'utf8'));
+        for (const [accountKey, account] of Object.entries(stats.accounts || {})) {
+            const lastUsedAt = getLatestUsageTimestampFromAccount(account);
+            if (!lastUsedAt) continue;
+            for (const alias of getAccountSummaryAliases(accountKey, account)) {
+                index.set(alias, latestTimestamp(index.get(alias), lastUsedAt));
+            }
+        }
+    } catch (error) {
+        logger.warn(`[API Potluck] Failed to read model usage account timestamps: ${error.message}`);
+    }
+
+    return index;
+}
+
+function getIndexedAccountLastUsedAt(account, lastUsedIndex) {
+    let latest = null;
+    for (const alias of getAccountSummaryAliases(account.accountKey, account)) {
+        latest = latestTimestamp(latest, lastUsedIndex.get(alias));
+    }
+    return latest;
 }
 
 function resetUsageBucketTokens(bucket) {
@@ -1084,6 +1136,11 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     };
 
     // 更新每日和历史统计
+    const recordedAt = new Date(context.timestamp || usage.timestamp || new Date()).toISOString();
+    const usageRecord = {
+        ...usage,
+        lastUsedAt: usage.lastUsedAt || recordedAt
+    };
     const today = getTodayDateString();
     if (!keyData.usageHistory) keyData.usageHistory = {};
     if (!keyData.usageHistory[today]) {
@@ -1091,48 +1148,48 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     }
     
     const dayHistory = keyData.usageHistory[today];
-    addUsage(dayHistory.summary, usage);
+    addUsage(dayHistory.summary, usageRecord);
     updatePeaks(dayHistory.summary);
     
     if (!dayHistory.providers[pName]) dayHistory.providers[pName] = createUsageBucket();
-    addUsage(dayHistory.providers[pName], usage);
+    addUsage(dayHistory.providers[pName], usageRecord);
     updatePeaks(dayHistory.providers[pName]);
     
     if (!dayHistory.models[mName]) dayHistory.models[mName] = createUsageBucket();
-    addUsage(dayHistory.models[mName], usage);
+    addUsage(dayHistory.models[mName], usageRecord);
     updatePeaks(dayHistory.models[mName]);
 
-    const providerUuid = context.providerUuid || usage.providerUuid || null;
-    const providerName = context.providerName || usage.providerName || null;
-    const accountIdentity = context.accountIdentity || usage.accountIdentity || null;
-    const accountEmail = context.accountEmail || usage.accountEmail || null;
+    const providerUuid = context.providerUuid || usageRecord.providerUuid || null;
+    const providerName = context.providerName || usageRecord.providerName || null;
+    const accountIdentity = context.accountIdentity || usageRecord.accountIdentity || null;
+    const accountEmail = context.accountEmail || usageRecord.accountEmail || null;
     const accountUsage = ensureAccountUsage(dayHistory.accounts, pName, providerUuid, providerName, accountIdentity, accountEmail);
     if (accountUsage) {
         if (accountEmail && !accountUsage.accountEmail) accountUsage.accountEmail = accountEmail;
-        addUsage(accountUsage.summary, usage);
+        addUsage(accountUsage.summary, usageRecord);
         updatePeaks(accountUsage.summary);
         if (!accountUsage.models[mName]) accountUsage.models[mName] = createUsageBucket();
-        addUsage(accountUsage.models[mName], usage);
+        addUsage(accountUsage.models[mName], usageRecord);
         updatePeaks(accountUsage.models[mName]);
     }
 
-    const hour = getBeijingHourString(context.timestamp || usage.timestamp || new Date());
+    const hour = getBeijingHourString(recordedAt);
     const hourUsage = ensureHourUsage(dayHistory, hour);
-    addUsage(hourUsage.summary, usage);
+    addUsage(hourUsage.summary, usageRecord);
     updatePeaks(hourUsage.summary);
     if (!hourUsage.providers[pName]) hourUsage.providers[pName] = createUsageBucket();
-    addUsage(hourUsage.providers[pName], usage);
+    addUsage(hourUsage.providers[pName], usageRecord);
     updatePeaks(hourUsage.providers[pName]);
     if (!hourUsage.models[mName]) hourUsage.models[mName] = createUsageBucket();
-    addUsage(hourUsage.models[mName], usage);
+    addUsage(hourUsage.models[mName], usageRecord);
     updatePeaks(hourUsage.models[mName]);
     const hourAccountUsage = ensureAccountUsage(hourUsage.accounts, pName, providerUuid, providerName, accountIdentity, accountEmail);
     if (hourAccountUsage) {
         if (accountEmail && !hourAccountUsage.accountEmail) hourAccountUsage.accountEmail = accountEmail;
-        addUsage(hourAccountUsage.summary, usage);
+        addUsage(hourAccountUsage.summary, usageRecord);
         updatePeaks(hourAccountUsage.summary);
         if (!hourAccountUsage.models[mName]) hourAccountUsage.models[mName] = createUsageBucket();
-        addUsage(hourAccountUsage.models[mName], usage);
+        addUsage(hourAccountUsage.models[mName], usageRecord);
         updatePeaks(hourAccountUsage.models[mName]);
     }
 
@@ -1150,7 +1207,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     keyData.totalReasoningTokens += toNumber(usage.reasoningTokens);
     keyData.totalTokens += toNumber(usage.totalTokens);
     keyData.totalCachedTokens += toNumber(usage.cachedTokens);
-    keyData.lastUsedAt = new Date().toISOString();
+    keyData.lastUsedAt = recordedAt;
 
     // 同时也给 keyData 注入实时峰值（如果需要持久化）
     if (!keyData.maxQps) keyData.maxQps = 0;
@@ -1321,13 +1378,23 @@ export async function getAccountUsageSummary(now = new Date()) {
         }
     }
 
+    const modelUsageLastUsedIndex = readModelUsageAccountLastUsedIndex();
     const accountList = [...accounts.values()]
-        .map(account => ({
-            ...account,
-            today: cloneUsageBucket(account.today),
-            week: cloneUsageBucket(account.week),
-            month: cloneUsageBucket(account.month)
-        }))
+        .map(account => {
+            const today = cloneUsageBucket(account.today);
+            const week = cloneUsageBucket(account.week);
+            const month = cloneUsageBucket(account.month);
+            return {
+                ...account,
+                lastUsedAt: latestTimestamp(
+                    latestTimestamp(today.lastUsedAt, week.lastUsedAt),
+                    latestTimestamp(month.lastUsedAt, getIndexedAccountLastUsedAt(account, modelUsageLastUsedIndex))
+                ),
+                today,
+                week,
+                month
+            };
+        })
         .sort((a, b) => (
             b.month.totalTokens - a.month.totalTokens ||
             b.week.totalTokens - a.week.totalTokens ||

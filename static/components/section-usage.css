@@ -437,6 +437,28 @@
     font-weight: 500;
 }
 
+.account-usage-last-used {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: fit-content;
+    max-width: 100%;
+    margin: -0.25rem 0 0.625rem;
+    padding: 0.28rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 9999px;
+    background: var(--success-bg-light);
+    color: var(--text-secondary);
+    font-size: 0.64rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.account-usage-last-used i {
+    color: var(--primary-color);
+    flex: 0 0 auto;
+}
+
 .account-usage-identity {
     display: flex;
     align-items: center;

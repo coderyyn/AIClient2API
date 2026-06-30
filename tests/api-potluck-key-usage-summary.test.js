@@ -309,6 +309,8 @@ describe('api potluck key usage summary', () => {
         expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
         expect(account.week).toMatchObject({ requestCount: 5, totalTokens: 5500 });
         expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
+        expect(account.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');
+        expect(account.today.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');
     });
 
     test('getAccountUsageSummary merges Codex buckets by email across provider UUID and identity changes', async () => {

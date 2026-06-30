@@ -24,6 +24,15 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('account-usage-identity');
     });
 
+    test('account usage summary shows recent request only when available', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('accountSummary.lastUsedAt || accountSummary.today?.lastUsedAt');
+        expect(source).toContain('account-usage-last-used');
+        expect(source).toContain('最近请求 ${formatDate(lastUsedAt)}');
+        expect(source).not.toContain('官方未返回重置时间');
+    });
+
     test('Codex usage cards render separate general and Codex 5.3 quota health badges', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
