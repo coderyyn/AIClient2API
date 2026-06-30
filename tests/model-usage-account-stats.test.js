@@ -215,6 +215,58 @@ describe('model usage account statistics', () => {
         });
     });
 
+    test('records model usage under the actual fallback model instead of the requested 5.3 model', async () => {
+        const statsManager = await loadStatsManager();
+
+        statsManager.recordUnaryUsage({
+            requestId: 'req-codex-fallback-model',
+            model: 'gpt-5.4-mini',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
+            fromProvider: 'openai',
+            nativeResponse: {
+                usage: {
+                    prompt_tokens: 100,
+                    completion_tokens: 20,
+                    total_tokens: 120
+                }
+            }
+        });
+
+        await statsManager.finalizeRequest({
+            requestId: 'req-codex-fallback-model',
+            model: 'gpt-5.4-mini',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
+            fromProvider: 'openai',
+            isStream: false
+        });
+
+        const stats = await statsManager.getStats();
+        const accountKey = 'openai-codex-oauth:user@example.com';
+        const [dateKey] = Object.keys(stats.daily);
+
+        expect(stats.providers['openai-codex-oauth'].models['gpt-5.4-mini']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 120
+        });
+        expect(stats.providers['openai-codex-oauth'].models['gpt-5.3-codex-spark']).toBeUndefined();
+        expect(stats.accounts[accountKey].models['gpt-5.4-mini']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 120
+        });
+        expect(stats.accounts[accountKey].models['gpt-5.3-codex-spark']).toBeUndefined();
+        expect(stats.daily[dateKey].models['gpt-5.4-mini']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 120
+        });
+        expect(stats.daily[dateKey].models['gpt-5.3-codex-spark']).toBeUndefined();
+    });
+
     test('logs per-request account quota snapshot and token usage for Codex accounts', async () => {
         fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
         fs.writeFileSync(path.join(tempDir, 'configs', 'usage-cache.json'), JSON.stringify({

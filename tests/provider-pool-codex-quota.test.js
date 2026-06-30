@@ -356,4 +356,49 @@ describe('provider pool Codex token quota', () => {
         expect(provider.codexQuotaHealth.codex53.isHealthy).toBe(false);
         expect(provider.codexQuotaHealth.general?.isHealthy).not.toBe(false);
     });
+
+    test('falls back Codex 5.3 Spark requests to 5.4 mini when every 5.3 quota bucket is exhausted', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        { id: 'primary_window', percent: 20, unit: 'percent' },
+                        { id: 'secondary_window', percent: 20, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 91, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 30, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    summary: { plan: 'Plus' },
+                    items: [
+                        { id: 'primary_window', percent: 20, unit: 'percent' },
+                        { id: 'secondary_window', percent: 20, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 93, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 30, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({
+            over: { supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'] },
+            ok: { supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'] }
+        });
+
+        const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.3-codex-spark');
+
+        expect(selected).toMatchObject({
+            actualProviderType: 'openai-codex-oauth',
+            isFallback: true,
+            actualModel: 'gpt-5.4-mini'
+        });
+        expect(['aaa-codex-over', 'zzz-codex-ok']).toContain(selected.config.uuid);
+    });
 });

@@ -124,6 +124,8 @@ const DEFAULT_CODEX_53_MODEL_PATTERNS = [
     '*codex_spark*'
 ];
 
+const DEFAULT_CODEX_53_QUOTA_FALLBACK_MODEL = 'gpt-5.4-mini';
+
 const DEFAULT_CODEX_STICKY_HOT_SHARD_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_STICKY_HOT_SHARD_MIN_REQUESTS = 30;
 const DEFAULT_CODEX_STICKY_HOT_SHARD_MAX_SHARDS = 5;
@@ -311,6 +313,27 @@ function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = nul
     }
 
     return { limited: true, exceeded: false, reason: warnings.join('; ') || null };
+}
+
+function isCodex53QuotaExhaustionError(error) {
+    if (!error || (error.status !== 429 && error.code !== 429)) return false;
+    const filterReasons = error.filterReasons || {};
+    return Object.keys(filterReasons).some(reason => reason === 'codex53_quota_exceeded' || reason === 'cooldown');
+}
+
+function getCodex53QuotaFallbackModel(globalConfig = {}) {
+    return globalConfig?.codex53QuotaFallbackModel ||
+        globalConfig?.CODEX_53_QUOTA_FALLBACK_MODEL ||
+        DEFAULT_CODEX_53_QUOTA_FALLBACK_MODEL;
+}
+
+function shouldTryCodex53QuotaModelFallback(providerType, requestedModel, error, globalConfig = {}) {
+    if (!isCodexProviderType(providerType)) return false;
+    const bucket = resolveCodexQuotaBucket(
+        requestedModel,
+        toStringArray(globalConfig?.CODEX_53_QUOTA_MODEL_PATTERNS || globalConfig?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS)
+    );
+    return bucket === CODEX_QUOTA_BUCKET.CODEX_53 && isCodex53QuotaExhaustionError(error);
 }
 
 /**
@@ -1973,6 +1996,7 @@ export class ProviderPoolManager {
         if (Array.isArray(fallbackTypes)) {
             typesToTry.push(...fallbackTypes);
         }
+        let codex53QuotaFallbackReason = null;
 
         for (const currentType of typesToTry) {
             if (triedTypes.has(currentType)) continue;
@@ -2005,12 +2029,31 @@ export class ProviderPoolManager {
                     };
                 }
             } catch (err) {
+                if (shouldTryCodex53QuotaModelFallback(currentType, requestedModel, err, this.globalConfig)) {
+                    codex53QuotaFallbackReason = err.message;
+                    break;
+                }
                 if (err.status === 429) {
                     // 如果是因为 429 (并发/队列满)，尝试下一个 Fallback
                     this._log('info', `Type ${currentType} busy (429), trying next fallback...`);
                     continue;
                 }
                 throw err; // 其他错误抛出
+            }
+        }
+
+        if (codex53QuotaFallbackReason) {
+            const targetModel = getCodex53QuotaFallbackModel(this.globalConfig);
+            this._log('info', `Trying Codex 5.3 quota fallback for ${requestedModel}: -> ${providerType} (${targetModel}); reason: ${codex53QuotaFallbackReason}`);
+            const selectedConfig = await this.acquireSlot(providerType, targetModel, options);
+            if (selectedConfig) {
+                this._log('info', `Fallback Slot activated (Codex 5.3 quota): ${providerType} (${requestedModel}) -> ${providerType} (${targetModel}) (node: ${this._getDisplayName(selectedConfig)})`);
+                return {
+                    config: selectedConfig,
+                    actualProviderType: providerType,
+                    isFallback: true,
+                    actualModel: targetModel
+                };
             }
         }
 
@@ -2110,6 +2153,7 @@ export class ProviderPoolManager {
         if (Array.isArray(fallbackTypes)) {
             typesToTry.push(...fallbackTypes);
         }
+        let codex53QuotaFallbackReason = null;
 
         for (const currentType of typesToTry) {
             // 避免重复尝试
@@ -2144,7 +2188,16 @@ export class ProviderPoolManager {
             }
 
             // 尝试从当前类型选择提供商（现在是异步的）
-            const selectedConfig = await this.selectProvider(currentType, requestedModel, options);
+            let selectedConfig;
+            try {
+                selectedConfig = await this.selectProvider(currentType, requestedModel, options);
+            } catch (error) {
+                if (shouldTryCodex53QuotaModelFallback(currentType, requestedModel, error, this.globalConfig)) {
+                    codex53QuotaFallbackReason = error.message;
+                    break;
+                }
+                throw error;
+            }
             
             if (selectedConfig) {
                 if (currentType !== providerType) {
@@ -2154,6 +2207,22 @@ export class ProviderPoolManager {
                     config: selectedConfig,
                     actualProviderType: currentType,
                     isFallback: currentType !== providerType
+                };
+            }
+        }
+
+        if (codex53QuotaFallbackReason) {
+            const targetModel = getCodex53QuotaFallbackModel(this.globalConfig);
+            this._log('info', `Trying Codex 5.3 quota fallback for ${requestedModel}: -> ${providerType} (${targetModel}); reason: ${codex53QuotaFallbackReason}`);
+            const selectedConfig = await this.selectProvider(providerType, targetModel, options);
+
+            if (selectedConfig) {
+                this._log('info', `Fallback activated (Codex 5.3 quota): ${providerType} (${requestedModel}) -> ${providerType} (${targetModel}) (node: ${this._getDisplayName(selectedConfig)})`);
+                return {
+                    config: selectedConfig,
+                    actualProviderType: providerType,
+                    isFallback: true,
+                    actualModel: targetModel
                 };
             }
         }

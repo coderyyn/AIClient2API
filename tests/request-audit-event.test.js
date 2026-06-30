@@ -47,4 +47,26 @@ describe('request audit event', () => {
     expect(event.contextBreakdown.estimationMethod).toContain('calibrated');
     expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['instructions', 'tools', 'conversation']));
   });
+
+  test('keeps requested and actual model when server-side model fallback is used', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-model-fallback',
+      model: 'gpt-5.4-mini',
+      originalRequestBody: {
+        model: 'gpt-5.3-codex-spark',
+        messages: [{ role: 'user', content: 'hello' }]
+      },
+      processedRequestBody: {
+        model: 'gpt-5.4-mini',
+        messages: [{ role: 'user', content: 'hello' }]
+      },
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 }
+    });
+
+    expect(event.request).toMatchObject({
+      model: 'gpt-5.4-mini',
+      requestedModel: 'gpt-5.3-codex-spark',
+      actualModel: 'gpt-5.4-mini'
+    });
+  });
 });

@@ -129,6 +129,8 @@ export function buildRequestAuditEvent(context = {}) {
     const date = new Date(timestamp);
     const beijing = getBeijingParts(date);
     const usage = normalizeUsage(context.usage);
+    const actualModel = context.model || context.processedRequestBody?.model || context.originalRequestBody?.model || 'unknown';
+    const requestedModel = context.originalRequestBody?.model || actualModel;
     let fingerprint = null;
     try {
         fingerprint = buildRequestFingerprint({
@@ -157,7 +159,9 @@ export function buildRequestAuditEvent(context = {}) {
             path: context.path || context.requestPath || null,
             fromProvider: context.fromProvider || null,
             toProvider: context.toProvider || context.provider || null,
-            model: context.model || context.originalRequestBody?.model || context.processedRequestBody?.model || 'unknown',
+            model: actualModel,
+            requestedModel,
+            actualModel,
             stream: Boolean(context.isStream)
         },
         potluckKey: {
