@@ -124,12 +124,28 @@ const DEFAULT_CODEX_53_MODEL_PATTERNS = [
     '*codex_spark*'
 ];
 
+const DEFAULT_CODEX_STICKY_HOT_SHARD_WINDOW_MS = 10 * 60 * 1000;
+const DEFAULT_CODEX_STICKY_HOT_SHARD_MIN_REQUESTS = 50;
+const DEFAULT_CODEX_STICKY_HOT_SHARD_MAX_SHARDS = 3;
+
 function getPositivePercentLimit(value) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed <= 0) {
         return null;
     }
     return Math.min(parsed, 100);
+}
+
+function getPositiveIntegerConfig(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+    return Math.floor(parsed);
+}
+
+function isFalseConfigFlag(value) {
+    return value === false || value === 0 || value === '0' || value === 'false';
 }
 
 function normalizePercentValue(value) {
@@ -209,6 +225,15 @@ function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId, bu
     if (itemPercent !== null) return itemPercent;
 
     return getRawRateLimitWindowPercent(usage.raw || usage, windowId);
+}
+
+function getCodexCachedQuotaPressure(providerType, uuid, usageCache, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
+    const primary = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'primary_window', bucket);
+    const secondary = getCodexCachedUsagePercent(providerType, uuid, usageCache, 'secondary_window', bucket);
+    return {
+        primary: primary ?? 0,
+        secondary: secondary ?? 0
+    };
 }
 
 function getCodexQuotaLimits(config = {}, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
@@ -336,6 +361,7 @@ export class ProviderPoolManager {
         // 用于确保 selectProvider 的排序 and 更新操作是原子的
         this._selectionLocks = {};
         this._isSelecting = {}; // 同步标志位锁
+        this._codexStickyHotStats = new Map();
 
         // --- V2: 读写分离 and 异步刷新队列 ---
         // 刷新并发控制配置
@@ -361,6 +387,99 @@ export class ProviderPoolManager {
         this._selectionSequence = 0;
  
         this.initializeProviderStatus();
+    }
+
+    _getCodexStickyHotShardConfig() {
+        return {
+            enabled: !isFalseConfigFlag(this.globalConfig?.CODEX_STICKY_HOT_SHARD_ENABLED),
+            windowMs: getPositiveIntegerConfig(
+                this.globalConfig?.CODEX_STICKY_HOT_SHARD_WINDOW_MS,
+                DEFAULT_CODEX_STICKY_HOT_SHARD_WINDOW_MS
+            ),
+            minRequests: getPositiveIntegerConfig(
+                this.globalConfig?.CODEX_STICKY_HOT_SHARD_MIN_REQUESTS,
+                DEFAULT_CODEX_STICKY_HOT_SHARD_MIN_REQUESTS
+            ),
+            maxShards: getPositiveIntegerConfig(
+                this.globalConfig?.CODEX_STICKY_HOT_SHARD_MAX_SHARDS,
+                DEFAULT_CODEX_STICKY_HOT_SHARD_MAX_SHARDS
+            )
+        };
+    }
+
+    _recordCodexStickyHotRequest(stickyProviderKey, now = Date.now()) {
+        const config = this._getCodexStickyHotShardConfig();
+        const existing = this._codexStickyHotStats.get(stickyProviderKey) || { timestamps: [] };
+        const cutoff = now - config.windowMs;
+        const timestamps = existing.timestamps.filter(ts => ts >= cutoff);
+        timestamps.push(now);
+        const stats = { timestamps };
+        this._codexStickyHotStats.set(stickyProviderKey, stats);
+        return { count: timestamps.length, config };
+    }
+
+    _getCodexHotShardCount(requestCount, providerCount, config) {
+        if (!config.enabled || providerCount < 2 || requestCount < config.minRequests) {
+            return 1;
+        }
+        const desired = requestCount >= config.minRequests * 2 ? 3 : 2;
+        return Math.max(1, Math.min(config.maxShards, providerCount, desired));
+    }
+
+    _rankCodexShardProviders(providers, providerType, requestedModel, usageCache) {
+        const bucket = resolveCodexQuotaBucket(
+            requestedModel,
+            toStringArray(this.globalConfig?.CODEX_53_QUOTA_MODEL_PATTERNS || this.globalConfig?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS)
+        );
+
+        return [...providers].sort((a, b) => {
+            const rank = (provider) => {
+                const config = provider.config || {};
+                const uuid = config.uuid || provider.uuid;
+                const weight = getProviderWeight(config);
+                const quota = getCodexCachedQuotaPressure(providerType, uuid, usageCache, bucket);
+                return {
+                    score:
+                        quota.primary * 0.5 +
+                        quota.secondary * 0.3 +
+                        ((config.usageCount || 0) / weight) * 0.15 +
+                        ((provider.state?.activeCount || 0) * 0.05),
+                    lastUsed: config.lastUsed ? Date.parse(config.lastUsed) || 0 : 0
+                };
+            };
+            const rankA = rank(a);
+            const rankB = rank(b);
+            if (rankA.score !== rankB.score) return rankA.score - rankB.score;
+            if (rankA.lastUsed !== rankB.lastUsed) return rankA.lastUsed - rankB.lastUsed;
+            return getProviderStableId(a).localeCompare(getProviderStableId(b));
+        });
+    }
+
+    _selectCodexHotShardProvider(providers, providerType, requestedModel, options, now) {
+        if (!options.stickyProviderKey || !isCodexProviderType(providerType)) {
+            return null;
+        }
+
+        const { count, config } = this._recordCodexStickyHotRequest(options.stickyProviderKey, now);
+        const shardCount = this._getCodexHotShardCount(count, providers.length, config);
+        if (shardCount <= 1) {
+            return null;
+        }
+
+        const usageCache = readFreshUsageCacheSync();
+        const shardProviders = this
+            ._rankCodexShardProviders(providers, providerType, requestedModel, usageCache)
+            .slice(0, shardCount);
+        if (shardProviders.length <= 1) {
+            return null;
+        }
+
+        const discriminator = options.shardDiscriminator || count;
+        const shardUnit = stableHashToUnitInterval(`${providerType}:${requestedModel || ''}:${options.stickyProviderKey}:shard:${discriminator}`);
+        const shardIndex = Math.min(shardProviders.length - 1, Math.floor(shardUnit * shardProviders.length));
+        const selected = shardProviders[shardIndex];
+        this._log('debug', `Selected provider for ${providerType} by hot sticky shard ${shardIndex + 1}/${shardProviders.length}: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        return selected;
     }
 
     /**
@@ -1591,10 +1710,16 @@ export class ProviderPoolManager {
 
         let selected;
         if (options.stickyProviderKey && isCodexProviderType(providerType)) {
-            selected = selectWeightedStickyProvider(
+            selected = this._selectCodexHotShardProvider(
                 availableAndHealthyProviders,
-                `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
-            );
+                providerType,
+                requestedModel,
+                options,
+                now
+            ) || selectWeightedStickyProvider(
+                    availableAndHealthyProviders,
+                    `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
+                );
             this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         } else if (hasCustomProviderWeights(availableAndHealthyProviders)) {
             selected = [...availableAndHealthyProviders].sort((a, b) => {

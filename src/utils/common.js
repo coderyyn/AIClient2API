@@ -412,12 +412,30 @@ export function extractCodexCacheAffinityScope(requestBody = {}) {
             clientTurnMetadata.installation_id,
             requestTurnMetadata.installation_id
         );
+    const turnId = firstPresent(
+        requestBody?.turn_id,
+        requestBody?.request_id,
+        requestBody?.response_id,
+        clientMetadata.turn_id,
+        clientMetadata.request_id,
+        clientMetadata.response_id,
+        requestMetadata.turn_id,
+        requestMetadata.request_id,
+        requestMetadata.response_id,
+        clientTurnMetadata.turn_id,
+        clientTurnMetadata.request_id,
+        clientTurnMetadata.response_id,
+        requestTurnMetadata.turn_id,
+        requestTurnMetadata.request_id,
+        requestTurnMetadata.response_id
+    );
 
     const scope = {};
     if (promptCacheKey) scope.promptCacheKey = String(promptCacheKey);
     if (threadId) scope.threadId = String(threadId);
     if (sessionId) scope.sessionId = String(sessionId);
     if (installationId) scope.installationId = String(installationId);
+    if (turnId) scope.turnId = String(turnId);
     return Object.keys(scope).length > 0 ? scope : null;
 }
 

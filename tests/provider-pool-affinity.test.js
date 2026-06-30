@@ -44,6 +44,37 @@ function createWeightedCodexPoolManager() {
     });
 }
 
+function createHotShardCodexPoolManager() {
+    const manager = new ProviderPoolManager({
+        'openai-codex-oauth': [
+            { uuid: 'codex-hot', customName: 'Codex Hot', usageCount: 500, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-cold-a', customName: 'Codex Cold A', usageCount: 5, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-cold-b', customName: 'Codex Cold B', usageCount: 8, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'codex-cold-c', customName: 'Codex Cold C', usageCount: 12, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] }
+        ]
+    }, {
+        logLevel: 'error',
+        saveDebounceTime: 60 * 60 * 1000,
+        globalConfig: {
+            PROVIDER_POOLS_FILE_PATH: 'configs/provider_pools.test.json',
+            CODEX_STICKY_HOT_SHARD_ENABLED: true,
+            CODEX_STICKY_HOT_SHARD_MIN_REQUESTS: 3,
+            CODEX_STICKY_HOT_SHARD_WINDOW_MS: 60 * 1000,
+            CODEX_STICKY_HOT_SHARD_MAX_SHARDS: 3
+        }
+    });
+    const usageCounts = {
+        'codex-hot': 500,
+        'codex-cold-a': 5,
+        'codex-cold-b': 8,
+        'codex-cold-c': 12
+    };
+    manager.providerStatus['openai-codex-oauth'].forEach(provider => {
+        provider.config.usageCount = usageCounts[provider.uuid];
+    });
+    return manager;
+}
+
 beforeEach(() => {
     consoleSpies = ['log', 'warn', 'error'].map((method) => jest.spyOn(console, method).mockImplementation(() => {}));
 });
@@ -137,5 +168,25 @@ describe('provider pool sticky affinity', () => {
 
         clearTimeout(manager.saveTimer);
         expect(counts['codex-high']).toBeGreaterThanOrEqual(counts['codex-low'] * 2);
+    });
+
+    test('splits hot Codex affinity keys across low-usage shard providers', async () => {
+        const manager = createHotShardCodexPoolManager();
+        const stickyProviderKey = 'hot-cache-key-alpha';
+
+        const selections = [];
+        for (let i = 0; i < 12; i++) {
+            const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                shardDiscriminator: `turn-${i}`,
+                skipUsageCount: true
+            });
+            selections.push(selected.uuid);
+        }
+
+        const hotSelections = selections.slice(3);
+        clearTimeout(manager.saveTimer);
+        expect(new Set(hotSelections).size).toBeGreaterThanOrEqual(2);
+        expect(new Set(hotSelections)).not.toContain('codex-hot');
     });
 });

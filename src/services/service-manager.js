@@ -66,6 +66,7 @@ function withStickyProviderAffinity(config, providerType, options = {}) {
         if (affinity) {
             selectionOptions.stickyProviderKey = affinity.key;
             selectionOptions.stickyProviderSource = affinity.source;
+            selectionOptions.shardDiscriminator = config._codexCacheAffinityScope?.turnId;
         }
     }
     return selectionOptions;

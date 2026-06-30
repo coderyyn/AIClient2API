@@ -55,7 +55,10 @@ describe('Codex affinity scope', () => {
     test('merges Codex client metadata with request metadata', () => {
         const scope = extractCodexCacheAffinityScope({
             client_metadata: {
-                session_id: 'codex-cli-session-a'
+                session_id: 'codex-cli-session-a',
+                'x-codex-turn-metadata': JSON.stringify({
+                    request_id: 'turn-request-a'
+                })
             },
             metadata: {
                 prompt_cache_key: 'codex-cache-thread-a'
@@ -64,7 +67,8 @@ describe('Codex affinity scope', () => {
 
         expect(scope).toEqual({
             promptCacheKey: 'codex-cache-thread-a',
-            sessionId: 'codex-cli-session-a'
+            sessionId: 'codex-cli-session-a',
+            turnId: 'turn-request-a'
         });
     });
 });
