@@ -95,6 +95,21 @@ describe('Codex usage formatting', () => {
         ]));
     });
 
+    test('uses the general weekly window as the Codex summary percent instead of the highest general window', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 91, reset_at: 1780000000 },
+                secondary_window: { used_percent: 64, reset_at: 1780500000 }
+            }
+        });
+
+        expect(formatted.summary.usedPercent).toBe(64);
+        expect(formatted.summary.status).toBe('normal');
+        expect(formatted.summary.resetAt).toBe(new Date(1780500000 * 1000).toISOString());
+    });
+
     test('extracts account token usage from Codex CLI profile payload', () => {
         const formatted = formatCodexUsage({
             account: 'codex@example.com',

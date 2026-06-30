@@ -1033,6 +1033,10 @@ export function formatCodexUsage(usageData) {
         extractCodexProfileTokenUsage(usageData)
     );
     const rateLimitResetCredits = extractCodexRateLimitResetCredits(usageData);
+    const summaryUsedPercent = secondary ? secondaryUsedPercent : maxUsedPercent;
+    const summaryResetAtTimestamp = secondary
+        ? (secondary?.reset_at ?? secondary?.resetAt)
+        : worstResetAtTimestamp;
     if (tokenUsage) {
         [
             buildCodexTokenUsageItem('daily_token_usage', 'Daily Tokens', tokenUsage.daily),
@@ -1055,9 +1059,9 @@ export function formatCodexUsage(usageData) {
 
     return {
         summary: {
-            usedPercent: maxUsedPercent,
-            status: getStatus(maxUsedPercent),
-            resetAt: formatTimestamp(worstResetAtTimestamp),
+            usedPercent: summaryUsedPercent,
+            status: getStatus(summaryUsedPercent),
+            resetAt: formatTimestamp(summaryResetAtTimestamp),
             plan,
             planClass: getPlanClass(plan),
             unit: 'percent',
