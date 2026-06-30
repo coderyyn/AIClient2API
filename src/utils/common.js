@@ -364,6 +364,98 @@ export function getRateLimitCooldownRecoveryTime(error, config = {}, now = Date.
     return new Date(now + cappedCooldownMs + jitter);
 }
 
+const CODEX_QUOTA_BUCKET = {
+    GENERAL: 'general',
+    CODEX_53: 'codex53'
+};
+
+const DEFAULT_CODEX_53_MODEL_PATTERNS = [
+    '*5.3*',
+    '*codexspark*',
+    '*codex-spark*',
+    '*codex_spark*'
+];
+
+function globPatternToRegExp(pattern) {
+    const escaped = String(pattern)
+        .replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
+        .replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+}
+
+function modelMatchesAnyPattern(model, patterns) {
+    if (!model || patterns.length === 0) return false;
+    return patterns.some(pattern => globPatternToRegExp(pattern).test(model));
+}
+
+function toStringArray(value) {
+    if (Array.isArray(value)) return value.map(item => String(item)).filter(Boolean);
+    if (typeof value === 'string') {
+        return value.split(',').map(item => item.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function isCodexUsageLimitReached(error) {
+    const errorBody = error?.response?.data?.error;
+    const type = String(errorBody?.type || '').toLowerCase();
+    const message = String(errorBody?.message || error?.message || '').toLowerCase();
+    return type === 'usage_limit_reached' || message.includes('usage limit has been reached');
+}
+
+export function resolveCodexQuotaBucketForModel(requestedModel = null, patterns = DEFAULT_CODEX_53_MODEL_PATTERNS) {
+    const model = String(requestedModel || '').trim();
+    if (!model) return null;
+
+    const normalizedPatterns = toStringArray(patterns).map(pattern => pattern.toLowerCase());
+    return modelMatchesAnyPattern(model.toLowerCase(), normalizedPatterns)
+        ? CODEX_QUOTA_BUCKET.CODEX_53
+        : CODEX_QUOTA_BUCKET.GENERAL;
+}
+
+export function applyProviderRateLimitCooldown({
+    error,
+    config = {},
+    providerPoolManager,
+    providerType,
+    providerUuid,
+    requestedModel,
+    loggerPrefix = '[Provider Pool]'
+}) {
+    const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, config);
+    if (!rateLimitRecoveryTime || !providerPoolManager || !providerUuid) {
+        return false;
+    }
+
+    if (isCodexProviderType(providerType) && isCodexUsageLimitReached(error)) {
+        const bucket = resolveCodexQuotaBucketForModel(
+            requestedModel,
+            config?.CODEX_53_QUOTA_MODEL_PATTERNS || config?.codex53QuotaModelPatterns || DEFAULT_CODEX_53_MODEL_PATTERNS
+        );
+
+        if (bucket && typeof providerPoolManager.markCodexQuotaBucketUnhealthy === 'function') {
+            logger.info(`${loggerPrefix} Applying Codex ${bucket} quota cooldown for ${providerType} (${providerUuid}) until ${rateLimitRecoveryTime.toISOString()}`);
+            providerPoolManager.markCodexQuotaBucketUnhealthy(providerType, {
+                uuid: providerUuid
+            }, bucket, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+            return true;
+        }
+
+        logger.warn(`${loggerPrefix} Codex usage_limit_reached for ${providerType} (${providerUuid}) could not be mapped to a quota bucket; skipping provider-level cooldown`);
+        return true;
+    }
+
+    logger.info(`${loggerPrefix} Applying 429 cooldown for ${providerType} (${providerUuid}) until ${rateLimitRecoveryTime.toISOString()}`);
+    providerPoolManager.markProviderUnhealthyWithRecoveryTime(providerType, {
+        uuid: providerUuid
+    }, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+    return true;
+}
+
 function parseJsonObject(value) {
     if (!value || typeof value !== 'string') return {};
     try {
@@ -1179,12 +1271,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, CONFIG);
-        if (rateLimitRecoveryTime && providerPoolManager && pooluuid) {
-            logger.info(`[Provider Pool] Applying 429 cooldown for ${toProvider} (${pooluuid}) until ${rateLimitRecoveryTime.toISOString()}`);
-            providerPoolManager.markProviderUnhealthyWithRecoveryTime(toProvider, {
-                uuid: pooluuid
-            }, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+        if (applyProviderRateLimitCooldown({
+            error,
+            config: CONFIG,
+            providerPoolManager,
+            providerType: toProvider,
+            providerUuid: pooluuid,
+            requestedModel: model
+        })) {
             credentialMarkedUnhealthy = true;
         }
 
@@ -1425,12 +1519,14 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, CONFIG);
-        if (rateLimitRecoveryTime && providerPoolManager && pooluuid) {
-            logger.info(`[Provider Pool] Applying 429 cooldown for ${toProvider} (${pooluuid}) until ${rateLimitRecoveryTime.toISOString()}`);
-            providerPoolManager.markProviderUnhealthyWithRecoveryTime(toProvider, {
-                uuid: pooluuid
-            }, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+        if (applyProviderRateLimitCooldown({
+            error,
+            config: CONFIG,
+            providerPoolManager,
+            providerType: toProvider,
+            providerUuid: pooluuid,
+            requestedModel: model
+        })) {
             credentialMarkedUnhealthy = true;
         }
 

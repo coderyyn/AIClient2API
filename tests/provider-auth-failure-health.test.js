@@ -54,12 +54,32 @@ function createInvalidatedCodexTokenError() {
     return error;
 }
 
+function createCodexUsageLimitError() {
+    const error = new Error('429 Too Many Requests (non-stream): {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","resets_at":1782824810,"resets_in_seconds":4481}}');
+    error.response = {
+        status: 429,
+        data: {
+            error: {
+                type: 'usage_limit_reached',
+                message: 'The usage limit has been reached',
+                plan_type: 'pro',
+                resets_at: 1782824810,
+                resets_in_seconds: 4481
+            }
+        }
+    };
+    error.shouldSwitchCredential = true;
+    error.skipErrorCount = true;
+    return error;
+}
+
 function createProviderPoolManager() {
     return {
         markProviderHealthy: jest.fn(),
         markProviderUnhealthy: jest.fn(),
         markProviderUnhealthyImmediately: jest.fn(),
         markProviderUnhealthyWithRecoveryTime: jest.fn(),
+        markCodexQuotaBucketUnhealthy: jest.fn(),
         releaseSlot: jest.fn()
     };
 }
@@ -129,5 +149,89 @@ describe('provider auth failure health marking', () => {
         expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
         expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-1');
         expect(res.body).toContain('token has been invalidated');
+    });
+
+    test('marks a unary Codex 5.3 usage_limit_reached error as Codex 5.3 quota bucket cooldown without globally unhealthy provider', async () => {
+        const error = createCodexUsageLimitError();
+        const service = {
+            generateContent: jest.fn().mockRejectedValue(error)
+        };
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+
+        await handleUnaryRequest(
+            res,
+            service,
+            'gpt-5.3-codex-spark',
+            { messages: [{ role: 'user', content: 'ping' }] },
+            'openai',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-provider-1',
+            'Codex Provider',
+            {
+                CONFIG: {
+                    RATE_LIMIT_COOLDOWN_ENABLED: true,
+                    RATE_LIMIT_COOLDOWN_MS: 30000,
+                    RATE_LIMIT_COOLDOWN_JITTER_MS: 0
+                }
+            }
+        );
+
+        expect(providerPoolManager.markCodexQuotaBucketUnhealthy).toHaveBeenCalledWith(
+            'openai-codex-oauth',
+            { uuid: 'codex-provider-1' },
+            'codex53',
+            '429 Too Many Requests - short cooldown',
+            expect.any(Date)
+        );
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-1');
+    });
+
+    test('marks a stream Codex 5.3 usage_limit_reached error as Codex 5.3 quota bucket cooldown without globally unhealthy provider', async () => {
+        const error = createCodexUsageLimitError();
+        const service = {
+            async *generateContentStream() {
+                throw error;
+            }
+        };
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+
+        await handleStreamRequest(
+            res,
+            service,
+            'gpt-5.3-codex-spark',
+            { messages: [{ role: 'user', content: 'ping' }] },
+            'openai',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-provider-1',
+            'Codex Provider',
+            {
+                CONFIG: {
+                    RATE_LIMIT_COOLDOWN_ENABLED: true,
+                    RATE_LIMIT_COOLDOWN_MS: 30000,
+                    RATE_LIMIT_COOLDOWN_JITTER_MS: 0
+                }
+            }
+        );
+
+        expect(providerPoolManager.markCodexQuotaBucketUnhealthy).toHaveBeenCalledWith(
+            'openai-codex-oauth',
+            { uuid: 'codex-provider-1' },
+            'codex53',
+            '429 Too Many Requests - short cooldown',
+            expect.any(Date)
+        );
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-1');
     });
 });

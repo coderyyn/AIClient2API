@@ -4,7 +4,7 @@ import {
     API_ACTIONS,
     ENDPOINT_TYPE,
     getRequestBody,
-    getRateLimitCooldownRecoveryTime,
+    applyProviderRateLimitCooldown,
     getProtocolPrefix,
     MODEL_PROTOCOL_PREFIX,
     extractCodexCacheAffinityScope
@@ -432,10 +432,14 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         let cooldownApplied = false;
 
         if (providerPoolManager && slotUuid) {
-            const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, CONFIG);
-            if (rateLimitRecoveryTime) {
-                logger.info(`[Provider Pool] Applying 429 cooldown for ${slotProviderType} (${slotUuid})`);
-                providerPoolManager.markProviderUnhealthyWithRecoveryTime(slotProviderType, {uuid: slotUuid}, '429 Too Many Requests - short cooldown', rateLimitRecoveryTime);
+            if (applyProviderRateLimitCooldown({
+                error,
+                config: CONFIG,
+                providerPoolManager,
+                providerType: slotProviderType,
+                providerUuid: slotUuid,
+                requestedModel: model
+            })) {
                 credentialMarkedUnhealthy = true;
                 cooldownApplied = true;
             } else if (!credentialMarkedUnhealthy && !error.skipErrorCount) {
