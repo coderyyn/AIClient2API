@@ -851,28 +851,9 @@ function renderUsageDetails(usage, accountSummary = null) {
 function renderAccountUsageSummary(accountSummary) {
     const section = document.createElement('div');
     section.className = 'usage-section account-usage-summary';
-    const source = accountUsageSummaryMeta?.source || 'potluck/model-usage-stats';
-    const updatedAt = accountUsageSummaryMeta?.updatedAt ? formatDate(accountUsageSummaryMeta.updatedAt) : '--';
-    const providerCount = Array.isArray(accountSummary.providerUuids)
-        ? accountSummary.providerUuids.filter(Boolean).length
-        : 0;
-    const identityLabel = accountSummary.accountEmail || accountSummary.accountIdentity || accountSummary.providerUuid || '';
     const lastUsedAt = accountSummary.lastUsedAt || accountSummary.today?.lastUsedAt || accountSummary.week?.lastUsedAt || accountSummary.month?.lastUsedAt || null;
     section.innerHTML = `
-        <div class="account-usage-source-row">
-            <div class="account-usage-source">
-                <span class="source-dot"></span>
-                <span>本地统计源</span>
-                <strong>${escapeHtml(source)}</strong>
-            </div>
-            <span class="account-usage-updated">更新 ${updatedAt}</span>
-        </div>
-        <div class="account-usage-summary-title">
-            <span><i class="fas fa-database"></i> 真实使用</span>
-            <small>${providerCount > 1 ? `${providerCount} providers · ` : ''}tokens / requests</small>
-        </div>
         ${lastUsedAt ? `<div class="account-usage-last-used"><i class="fas fa-clock"></i> 最近请求 ${formatDate(lastUsedAt)}</div>` : ''}
-        ${identityLabel ? `<div class="account-usage-identity" title="${escapeHtml(identityLabel)}"><i class="fas fa-fingerprint"></i> ${escapeHtml(identityLabel)}</div>` : ''}
         <div class="account-usage-period-grid">
             ${renderAccountUsagePeriod('今日', accountSummary.today)}
             ${renderAccountUsagePeriod('本周', accountSummary.week)}

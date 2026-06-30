@@ -76,6 +76,25 @@ describe('Codex usage formatting', () => {
         expect(formatted.items.map(item => item.id)).not.toContain('total_token_usage');
     });
 
+    test('preserves primary window reset time when usage is zero percent', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit: {
+                primary_window: { used_percent: 0, reset_at: 1780000000 },
+                secondary_window: { used_percent: 60, reset_at: 1780500000 }
+            }
+        });
+
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'primary_window',
+                percent: 0,
+                resetAt: new Date(1780000000 * 1000).toISOString()
+            })
+        ]));
+    });
+
     test('extracts account token usage from Codex CLI profile payload', () => {
         const formatted = formatCodexUsage({
             account: 'codex@example.com',

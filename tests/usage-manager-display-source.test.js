@@ -21,7 +21,7 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('addIndex(getAccountUsageKey(account.provider, account.accountIdentity), account)');
         expect(source).toContain('(account.providerUuids || []).forEach(uuid =>');
         expect(source).toContain('instance.codexAccountKey');
-        expect(source).toContain('account-usage-identity');
+        expect(source).not.toContain('account-usage-identity');
     });
 
     test('account usage summary shows recent request only when available', () => {
@@ -30,6 +30,9 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('accountSummary.lastUsedAt || accountSummary.today?.lastUsedAt');
         expect(source).toContain('account-usage-last-used');
         expect(source).toContain('最近请求 ${formatDate(lastUsedAt)}');
+        expect(source).not.toContain('本地统计源');
+        expect(source).not.toContain('真实使用');
+        expect(source).not.toContain('tokens / requests');
         expect(source).not.toContain('官方未返回重置时间');
     });
 

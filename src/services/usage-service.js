@@ -1000,7 +1000,7 @@ export function formatCodexUsage(usageData) {
             percent: primaryUsedPercent,
             unit: 'percent',
             status: getStatus(primaryUsedPercent),
-            resetAt: formatTimestamp(worstResetAtTimestamp)
+            resetAt: formatTimestamp(primaryResetAt)
         });
     }
 
