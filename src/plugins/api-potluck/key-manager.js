@@ -1246,7 +1246,7 @@ export async function updateKeyName(keyId, newName) {
     return keyStore.keys[keyId];
 }
 
-// 用于防止同一请求重复统计速率，改用 Map 以支持批量清理
+// 用于防止同一 Key 下同一请求重复入账，保留短窗口覆盖 stream/fallback 重复 finalize。
 const recordedRequests = new Map();
 let lastCleanupTime = Date.now();
 
@@ -1257,11 +1257,59 @@ function cleanupRecordedRequests() {
     const now = Date.now();
     if (now - lastCleanupTime < 60000) return; // 每分钟清理一次
     
-    const cutoff = now - 60000; // 清理 1 分钟前的记录
-    for (const [id, timestamp] of recordedRequests.entries()) {
+    const cutoff = now - 5 * 60 * 1000;
+    for (const [id, entry] of recordedRequests.entries()) {
+        const timestamp = typeof entry === 'number' ? entry : entry?.timestamp;
         if (timestamp < cutoff) recordedRequests.delete(id);
     }
     lastCleanupTime = now;
+}
+
+function normalizeRecordedUsage(usage = {}) {
+    const promptTokens = toNumber(usage.promptTokens);
+    const cachedTokens = toNumber(usage.cachedTokens);
+    const completionTokens = toNumber(usage.completionTokens);
+    const reasoningTokens = toNumber(usage.reasoningTokens);
+    const totalTokens = toNumber(usage.totalTokens) || (promptTokens + completionTokens);
+    return {
+        requestCount: usage.requestCount !== undefined ? toNumber(usage.requestCount) : 1,
+        promptTokens,
+        cachedTokens,
+        completionTokens,
+        reasoningTokens,
+        totalTokens
+    };
+}
+
+function maxRecordedUsage(a = {}, b = {}) {
+    return {
+        requestCount: Math.max(toNumber(a.requestCount), toNumber(b.requestCount)),
+        promptTokens: Math.max(toNumber(a.promptTokens), toNumber(b.promptTokens)),
+        cachedTokens: Math.max(toNumber(a.cachedTokens), toNumber(b.cachedTokens)),
+        completionTokens: Math.max(toNumber(a.completionTokens), toNumber(b.completionTokens)),
+        reasoningTokens: Math.max(toNumber(a.reasoningTokens), toNumber(b.reasoningTokens)),
+        totalTokens: Math.max(toNumber(a.totalTokens), toNumber(b.totalTokens))
+    };
+}
+
+function subtractRecordedUsage(next = {}, previous = {}, { includeRequestCount = true } = {}) {
+    return {
+        requestCount: includeRequestCount ? Math.max(0, toNumber(next.requestCount) - toNumber(previous.requestCount)) : 0,
+        promptTokens: Math.max(0, toNumber(next.promptTokens) - toNumber(previous.promptTokens)),
+        cachedTokens: Math.max(0, toNumber(next.cachedTokens) - toNumber(previous.cachedTokens)),
+        completionTokens: Math.max(0, toNumber(next.completionTokens) - toNumber(previous.completionTokens)),
+        reasoningTokens: Math.max(0, toNumber(next.reasoningTokens) - toNumber(previous.reasoningTokens)),
+        totalTokens: Math.max(0, toNumber(next.totalTokens) - toNumber(previous.totalTokens))
+    };
+}
+
+function hasBillableUsage(usage = {}) {
+    return toNumber(usage.requestCount) > 0
+        || toNumber(usage.promptTokens) > 0
+        || toNumber(usage.cachedTokens) > 0
+        || toNumber(usage.completionTokens) > 0
+        || toNumber(usage.reasoningTokens) > 0
+        || toNumber(usage.totalTokens) > 0;
 }
 
 /**
@@ -1277,20 +1325,34 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     const keyData = keyStore.keys[apiKey];
     if (!keyData) return;
 
-    // 防止同一请求重复统计速率
+    let usageToApply = usage;
     let shouldRecordRate = true;
     if (requestId) {
         cleanupRecordedRequests();
-        if (recordedRequests.has(requestId)) {
-            shouldRecordRate = false;
+        const recordKey = `${apiKey}:${requestId}`;
+        const nextUsage = normalizeRecordedUsage(usage);
+        const previous = recordedRequests.get(recordKey)?.usage;
+        if (previous) {
+            const maxUsage = maxRecordedUsage(previous, nextUsage);
+            usageToApply = subtractRecordedUsage(maxUsage, previous, { includeRequestCount: false });
+            recordedRequests.set(recordKey, { timestamp: Date.now(), usage: maxUsage });
+            shouldRecordRate = hasBillableUsage(usageToApply);
         } else {
-            recordedRequests.set(requestId, Date.now());
+            usageToApply = nextUsage;
+            recordedRequests.set(recordKey, { timestamp: Date.now(), usage: nextUsage });
         }
+    }
+
+    if (!hasBillableUsage(usageToApply)) {
+        return {
+            ...keyData,
+            usedBonus: false
+        };
     }
 
     // 记录速率统计
     if (shouldRecordRate) {
-        rateManager.record(`key:${apiKey}`, usage.totalTokens);
+        rateManager.record(`key:${apiKey}`, usageToApply.totalTokens);
     }
 
     const rates = rateManager.getGlobalStats();
@@ -1303,7 +1365,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     // 更新每日和历史统计
     const recordedAt = new Date(context.timestamp || usage.timestamp || new Date()).toISOString();
     const usageRecord = {
-        ...usage,
+        ...usageToApply,
         lastUsedAt: usage.lastUsedAt || recordedAt
     };
     const today = getTodayDateString();
@@ -1364,19 +1426,19 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     }
 
     // 更新今日和累计总量 (统一处理默认调用次数)
-    const rCount = usage.requestCount !== undefined ? toNumber(usage.requestCount) : 1;
+    const rCount = usageRecord.requestCount !== undefined ? toNumber(usageRecord.requestCount) : 1;
     keyData.todayUsage += rCount;
     keyData.totalUsage += rCount;
-    keyData.todayPromptTokens += toNumber(usage.promptTokens);
-    keyData.todayCompletionTokens += toNumber(usage.completionTokens);
-    keyData.todayReasoningTokens += toNumber(usage.reasoningTokens);
-    keyData.todayTotalTokens += toNumber(usage.totalTokens);
-    keyData.todayCachedTokens += toNumber(usage.cachedTokens);
-    keyData.totalPromptTokens += toNumber(usage.promptTokens);
-    keyData.totalCompletionTokens += toNumber(usage.completionTokens);
-    keyData.totalReasoningTokens += toNumber(usage.reasoningTokens);
-    keyData.totalTokens += toNumber(usage.totalTokens);
-    keyData.totalCachedTokens += toNumber(usage.cachedTokens);
+    keyData.todayPromptTokens += toNumber(usageRecord.promptTokens);
+    keyData.todayCompletionTokens += toNumber(usageRecord.completionTokens);
+    keyData.todayReasoningTokens += toNumber(usageRecord.reasoningTokens);
+    keyData.todayTotalTokens += toNumber(usageRecord.totalTokens);
+    keyData.todayCachedTokens += toNumber(usageRecord.cachedTokens);
+    keyData.totalPromptTokens += toNumber(usageRecord.promptTokens);
+    keyData.totalCompletionTokens += toNumber(usageRecord.completionTokens);
+    keyData.totalReasoningTokens += toNumber(usageRecord.reasoningTokens);
+    keyData.totalTokens += toNumber(usageRecord.totalTokens);
+    keyData.totalCachedTokens += toNumber(usageRecord.cachedTokens);
     keyData.lastUsedAt = recordedAt;
 
     // 同时也给 keyData 注入实时峰值（如果需要持久化）

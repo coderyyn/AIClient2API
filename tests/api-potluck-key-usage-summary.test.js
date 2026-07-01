@@ -34,6 +34,68 @@ afterEach(() => {
 });
 
 describe('api potluck key usage summary', () => {
+    test('does not double count duplicate request ids and only applies usage deltas', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
+
+        const key = await createKey('Dedup Client', 1000);
+        const context = {
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountIdentity: 'acct-chatgpt-123',
+            accountEmail: 'user@example.com',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        };
+
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            cachedTokens: 400,
+            completionTokens: 120,
+            reasoningTokens: 80,
+            totalTokens: 1120
+        }, 'req-duplicate', context);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            cachedTokens: 400,
+            completionTokens: 120,
+            reasoningTokens: 80,
+            totalTokens: 1120
+        }, 'req-duplicate', context);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1300,
+            cachedTokens: 500,
+            completionTokens: 150,
+            reasoningTokens: 90,
+            totalTokens: 1450
+        }, 'req-duplicate', context);
+
+        const [listedKey] = await listKeys();
+        const stats = await getStats();
+        const accountKey = 'openai-codex-oauth:user@example.com';
+
+        expect(listedKey.usageHistory['2026-06-22'].summary).toMatchObject({
+            requestCount: 1,
+            promptTokens: 1300,
+            cachedTokens: 500,
+            completionTokens: 150,
+            reasoningTokens: 90,
+            totalTokens: 1450
+        });
+        expect(listedKey.usageHistory['2026-06-22'].accounts[accountKey].summary).toMatchObject({
+            requestCount: 1,
+            totalTokens: 1450
+        });
+        expect(stats).toMatchObject({
+            todayTotalUsage: 1,
+            todayTotalTokens: 1450,
+            totalUsage: 1,
+            totalTokens: 1450
+        });
+    });
+
     test('aggregates Codex account buckets by email across provider UUIDs', async () => {
         jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
         const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
