@@ -107,21 +107,28 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(block).not.toContain('其他账号');
     });
 
-    test('admin dashboard exposes actual-default value controls and 35 day key detail history', () => {
+    test('admin dashboard scopes value conversion controls to the key list and 35 day key detail history', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('id="conversionModelSelect"');
+        expect(source).toContain('id="keyCostModelToggle"');
+        expect(source).not.toContain('id="costActualSummary"');
+        expect(source).not.toContain('id="todayTokensCost"');
+        expect(source).not.toContain('id="totalTokensCost"');
+        expect(source.indexOf('id="keyCostModelToggle"')).toBeGreaterThan(source.indexOf('<div class="keys-header">'));
         expect(source).toContain("const ACTUAL_VALUE_MODE = 'actual'");
         expect(source).toContain("let currentConversionModel = ACTUAL_VALUE_MODE");
         expect(source).toContain('function setConversionModel(model)');
         expect(source).toContain('conversionModel=${encodeURIComponent(currentConversionModel)}');
         expect(source).toContain('function formatUsd(value)');
+        expect(source).toContain('function getActualCostUsd(cost)');
         expect(source).toContain('function getDisplayCostUsd(cost)');
         expect(source).toContain('function formatDisplayCost(cost)');
         expect(source).toContain('<option value="actual">真实</option>');
         expect(source).toContain('...models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`)');
         expect(source).not.toContain('换算 ${escapeHtml(model)}');
         expect(source).toContain('function setConversionLoading(loading)');
+        expect(source).toContain("const toggle = document.getElementById('keyCostModelToggle')");
         expect(source).toContain("toggle.classList.toggle('is-loading', loading)");
         expect(source).toContain('select.disabled = loading');
         expect(source).toContain('setConversionLoading(true)');
@@ -133,6 +140,23 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).not.toContain('价格版本：2026-07-01 官方快照');
         expect(source).toContain('节点与 Token 使用统计 (最近 35 天)');
         expect(source).not.toContain('节点与 Token 使用统计 (最近 3 个月)');
+    });
+
+    test('admin overview distributions keep actual-value totals out of the dashboard chrome', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain("document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`");
+        expect(source).toContain("document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`");
+        expect(source).not.toContain("document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost");
+        expect(source).not.toContain("document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost");
+
+        const renderDistributionStart = source.indexOf('function renderDistribution(elementId, data, total, options = {})');
+        expect(renderDistributionStart).toBeGreaterThanOrEqual(0);
+        const renderDistributionEnd = source.indexOf('function setUsageRange(range)', renderDistributionStart);
+        expect(renderDistributionEnd).toBeGreaterThan(renderDistributionStart);
+        const renderDistributionBlock = source.slice(renderDistributionStart, renderDistributionEnd);
+        expect(renderDistributionBlock).not.toContain('formatDisplayCost(cost)');
+        expect(renderDistributionBlock).not.toContain('getDisplayCostUsd(item[1]?.cost)');
     });
 
     test('admin key list defaults to sorting by current range tokens', () => {

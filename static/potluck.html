@@ -349,19 +349,6 @@
         @keyframes costModelSpin {
             to { transform: rotate(360deg); }
         }
-        .cost-summary-pill {
-            min-height: 32px;
-            display: inline-flex;
-            align-items: center;
-            padding: 0 10px;
-            border-radius: var(--radius-md);
-            background: var(--primary-color);
-            color: #fff;
-            font-size: 12px;
-            font-weight: 700;
-            font-variant-numeric: tabular-nums;
-            white-space: nowrap;
-        }
         .cost-model-select {
             min-height: 32px;
             border: none;
@@ -386,13 +373,6 @@
             white-space: nowrap;
         }
         .cost-inline.alt { color: var(--info-color); }
-        .cost-subline {
-            margin-top: 4px;
-            color: var(--text-tertiary);
-            font-size: 12px;
-            line-height: 1.45;
-            font-variant-numeric: tabular-nums;
-        }
 
         /* Key 列表 */
         .keys-section { margin-top: 10px; }
@@ -968,10 +948,6 @@
                     width: 100%;
                     overflow-x: auto;
                 }
-                .cost-summary-pill {
-                    flex: 1;
-                    justify-content: center;
-                }
                 .range-option {
                     flex: 1;
                     min-width: 64px;
@@ -1116,12 +1092,6 @@
                     <button class="range-option active" data-range="7d" onclick="setUsageRange('7d')" aria-pressed="true">近1周</button>
                     <button class="range-option" data-range="today" onclick="setUsageRange('today')" aria-pressed="false">当天</button>
                 </div>
-                <div class="cost-model-toggle" aria-label="价值口径">
-                    <span class="cost-summary-pill" id="costActualSummary">$0.00</span>
-                    <select id="conversionModelSelect" class="cost-model-select" aria-label="换算模型">
-                        <option value="actual">真实模型</option>
-                    </select>
-                </div>
                 <button class="theme-toggle" id="themeToggle" title="切换主题">
                     <i class="fas fa-sun"></i>
                     <i class="fas fa-moon"></i>
@@ -1158,7 +1128,6 @@
                 <div class="label">今日总 Tokens</div>
                 <div class="value" id="todayTokens">0</div>
                 <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">TPS: <span id="currentTps" style="font-weight:700;color:var(--primary-color)">0.00</span> (峰值: <span id="maxTps">0.00</span>)</div>
-                <div class="cost-subline" id="todayTokensCost"></div>
             </div>
             <div class="stat-card cyan">
                 <div class="label">今日缓存 Tokens</div>
@@ -1167,7 +1136,6 @@
             <div class="stat-card pink">
                 <div class="label">累计 Tokens</div>
                 <div class="value" id="totalTokens">0</div>
-                <div class="cost-subline" id="totalTokensCost"></div>
             </div>
             <div class="stat-card cyan">
                 <div class="label">累计缓存 Tokens</div>
@@ -1245,6 +1213,11 @@
                             <option value="qps-desc">QPS 速率 ↓</option>
                             <option value="rpm-desc">RPM 频率 ↓</option>
                             <option value="created-desc">创建时间 ↓</option>
+                        </select>
+                    </div>
+                    <div class="cost-model-toggle" id="keyCostModelToggle" aria-label="Key 金额口径">
+                        <select id="conversionModelSelect" class="cost-model-select" aria-label="Key 金额口径">
+                            <option value="actual">真实</option>
                         </select>
                     </div>
                     <div class="btn-limit-wrapper">
@@ -1509,10 +1482,14 @@
             if (Math.abs(number) > 0 && Math.abs(number) < 0.01) return '<$0.01';
             return `$${number.toFixed(2)}`;
         }
+        function getActualCostUsd(cost) {
+            if (!cost) return 0;
+            return Number(cost.actualUsd || 0);
+        }
         function getDisplayCostUsd(cost) {
             if (!cost) return 0;
             return currentConversionModel === ACTUAL_VALUE_MODE
-                ? Number(cost.actualUsd || 0)
+                ? getActualCostUsd(cost)
                 : Number(cost.convertedUsd || 0);
         }
         function formatDisplayCost(cost) {
@@ -1535,7 +1512,7 @@
         }
         function setConversionLoading(loading) {
             const select = document.getElementById('conversionModelSelect');
-            const toggle = document.querySelector('.cost-model-toggle');
+            const toggle = document.getElementById('keyCostModelToggle');
             if (select) {
                 select.disabled = loading;
                 select.setAttribute('aria-busy', loading ? 'true' : 'false');
@@ -1545,11 +1522,6 @@
                 toggle.setAttribute('aria-busy', loading ? 'true' : 'false');
             }
         }
-        function setElementHtml(id, html) {
-            const node = document.getElementById(id);
-            if (node) node.innerHTML = html || '';
-        }
-
         function getTodayDateKey() {
             const utc8Date = new Date(Date.now() + (8 * 60 * 60 * 1000));
             return utc8Date.toISOString().split('T')[0];
@@ -1789,10 +1761,6 @@
                 document.getElementById('maxRpm').textContent = (stats.maxRpm || 0).toFixed(2);
                 document.getElementById('currentTps').textContent = (stats.tps || 0).toFixed(2);
                 document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
-                const actualSummary = document.getElementById('costActualSummary');
-                if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(stats.cost));
-                setElementHtml('totalTokensCost', formatDisplayCost(stats.cost));
-                
                 // 渲染使用历史分布
                 renderUsageHistory(stats.usageHistory, currentUsageRange);
                 renderCalendar(stats.usageHistory || {});
@@ -1877,15 +1845,7 @@
         }
 
         function renderRangeCostHighlights(rangeSummary) {
-            const cost = rangeSummary?.summary?.cost;
-            setElementHtml('todayTokensCost', formatDisplayCost(currentStats?.usageHistory?.[getTodayDateKey()]?.summary?.cost));
-            if (currentUsageRange !== 'total') {
-                setElementHtml('totalTokensCost', formatDisplayCost(cost));
-            } else {
-                setElementHtml('totalTokensCost', formatDisplayCost(currentStats?.cost));
-            }
-            const actualSummary = document.getElementById('costActualSummary');
-            if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(currentUsageRange === 'total' ? currentStats?.cost : cost));
+            return rangeSummary;
         }
 
         /**
@@ -1913,13 +1873,13 @@
                     filter: usage => usageTokens(usage) > 0
                 });
                 document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
-                document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
+                document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
                 return;
             }
 
             // 渲染中心视角 Provider / 账号 Token 树形占比
             renderProviderAccountTokenTree('providerAccountDistribution', rangeSummary.providers, rangeSummary.accounts, totalTokens);
-            document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
+            document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
@@ -1927,7 +1887,7 @@
                 emptyText: '当前范围暂无模型数据',
                 filter: usage => usageTokens(usage) > 0
             });
-            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
+            document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
         }
 
         function isCodexOauthAccount(account) {
@@ -2112,13 +2072,12 @@
             
             container.innerHTML = topData.map(([name, item]) => {
                 const count = getCount(item);
-                const cost = typeof item === 'object' ? item.cost : null;
                 const percent = Math.round((count / total) * 100);
                 return `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name">${escapeHtml(name)}</span>
-                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)${cost ? ` · ${formatDisplayCost(cost)}` : ''}</span>
+                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${percent}%"></div>
@@ -2129,13 +2088,12 @@
             
             if (sorted.length > maxItems) {
                 const otherCount = sorted.slice(maxItems).reduce((sum, item) => sum + getCount(item[1]), 0);
-                const otherCost = sorted.slice(maxItems).reduce((sum, item) => sum + getDisplayCostUsd(item[1]?.cost), 0);
                 const otherPercent = Math.round((otherCount / total) * 100);
                 container.innerHTML += `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - maxItems} 个)</span>
-                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)${otherCost > 0 ? ` · <span class="cost-inline">${formatUsd(otherCost)}</span>` : ''}</span>
+                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
