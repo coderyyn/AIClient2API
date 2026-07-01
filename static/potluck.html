@@ -1901,17 +1901,18 @@
             document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
 
             const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
-            const allModelSummary = summarizeUsageHistoryForRange(usageHistory, 'total');
-            const allModelCalls = allModelSummary.summary.requestCount;
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
             renderRangeCostHighlights(rangeSummary);
 
             if (totalCalls === 0) {
                 document.getElementById('providerAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
-                renderDistribution('modelDistribution', allModelSummary.models, allModelCalls);
+                renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
+                    maxItems: Number.POSITIVE_INFINITY,
+                    emptyText: '当前范围暂无模型数据'
+                });
                 document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
-                document.getElementById('modelTotalCount').innerHTML = `${formatNumber(allModelCalls)} 次${allModelSummary.summary.cost ? ` · ${formatDisplayCost(allModelSummary.summary.cost)}` : ''}`;
+                document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
                 return;
             }
 
@@ -1920,8 +1921,11 @@
             document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
-            renderDistribution('modelDistribution', allModelSummary.models, allModelCalls);
-            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(allModelCalls)} 次${allModelSummary.summary.cost ? ` · ${formatDisplayCost(allModelSummary.summary.cost)}` : ''}`;
+            renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
+                maxItems: Number.POSITIVE_INFINITY,
+                emptyText: '当前范围暂无模型数据'
+            });
+            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
         }
 
         function isCodexOauthAccount(account) {
@@ -2086,17 +2090,20 @@
             }
         }
 
-        function renderDistribution(elementId, data, total) {
+        function renderDistribution(elementId, data, total, options = {}) {
             const container = document.getElementById(elementId);
             const getCount = item => typeof item === 'number' ? item : Number(item?.count || item?.requestCount || 0);
             const sorted = Object.entries(data).sort((a, b) => getCount(b[1]) - getCount(a[1]));
+            const maxItems = options.maxItems === Number.POSITIVE_INFINITY
+                ? Number.POSITIVE_INFINITY
+                : (Number.isFinite(options.maxItems) ? options.maxItems : 3);
+            const emptyText = options.emptyText || '当前范围暂无数据';
             if (total <= 0 || sorted.length === 0) {
-                container.innerHTML = '<div class="detail-empty">当前范围暂无数据</div>';
+                container.innerHTML = `<div class="detail-empty">${escapeHtml(emptyText)}</div>`;
                 return;
             }
             
-            // 最多显示前 3 个
-            const topData = sorted.slice(0, 3);
+            const topData = sorted.slice(0, maxItems);
             
             container.innerHTML = topData.map(([name, item]) => {
                 const count = getCount(item);
@@ -2115,14 +2122,14 @@
                 `;
             }).join('');
             
-            if (sorted.length > 3) {
-                const otherCount = sorted.slice(3).reduce((sum, item) => sum + getCount(item[1]), 0);
-                const otherCost = sorted.slice(3).reduce((sum, item) => sum + getDisplayCostUsd(item[1]?.cost), 0);
+            if (sorted.length > maxItems) {
+                const otherCount = sorted.slice(maxItems).reduce((sum, item) => sum + getCount(item[1]), 0);
+                const otherCost = sorted.slice(maxItems).reduce((sum, item) => sum + getDisplayCostUsd(item[1]?.cost), 0);
                 const otherPercent = Math.round((otherCount / total) * 100);
                 container.innerHTML += `
                     <div class="distribution-item">
                         <div class="dist-info">
-                            <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - 3} 个)</span>
+                            <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - maxItems} 个)</span>
                             <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)${otherCost > 0 ? ` · <span class="cost-inline">${formatUsd(otherCost)}</span>` : ''}</span>
                         </div>
                         <div class="dist-bar">

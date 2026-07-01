@@ -44,12 +44,14 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('次');
     });
 
-    test('admin model activity shows all recent models independent from selected range', () => {
+    test('admin model activity follows selected range while showing every model in that range', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('模型活跃度 (Models)');
-        expect(source).toContain('const allModelSummary = summarizeUsageHistoryForRange(usageHistory, \'total\')');
-        expect(source).toContain("renderDistribution('modelDistribution', allModelSummary.models, allModelCalls)");
+        expect(source).toContain("renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {");
+        expect(source).toContain('maxItems: Number.POSITIVE_INFINITY');
+        expect(source).toContain("emptyText: '当前范围暂无模型数据'");
+        expect(source).not.toContain('const allModelSummary = summarizeUsageHistoryForRange(usageHistory, \'total\')');
         expect(source).not.toContain("document.getElementById('modelDistribution').innerHTML = '<div class=\"detail-empty\">当前范围暂无模型数据</div>'");
     });
 
