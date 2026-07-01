@@ -871,6 +871,23 @@ function renderAccountUsagePeriod(label, usage = {}) {
             <div class="account-usage-period-label">${label}</div>
             <div class="account-usage-period-value">${tokens}</div>
             <div class="account-usage-period-sub">${requests} req</div>
+            ${renderAccountUsageCost(usage)}
+        </div>
+    `;
+}
+
+function renderAccountUsageCost(usage = {}) {
+    const cost = usage.cost;
+    if (!cost) return '';
+    const amount = Number(cost.actualUsd || 0);
+    const missingPriceTokens = Number(cost.missingPriceTokens || 0);
+    const missingBadge = missingPriceTokens > 0
+        ? `<span class="account-usage-cost-missing" title="有 ${formatTokenCompact(missingPriceTokens)} tokens 缺失模型价格">缺失价格</span>`
+        : '';
+    return `
+        <div class="account-usage-period-cost">
+            <span>${formatUsd(amount)}</span>
+            ${missingBadge}
         </div>
     `;
 }
@@ -939,6 +956,13 @@ function formatTokenCompact(num) {
     if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`;
     if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)}k`;
     return Math.round(value).toLocaleString(getCurrentLanguage());
+}
+
+function formatUsd(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return '$0.00';
+    if (num < 0.01) return `$${num.toFixed(4)}`;
+    return `$${num.toFixed(2)}`;
 }
 
 function formatDate(str) {

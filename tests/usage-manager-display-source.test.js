@@ -36,6 +36,17 @@ describe('usage manager display source regressions', () => {
         expect(source).not.toContain('官方未返回重置时间');
     });
 
+    test('account usage summary renders actual model cost and only warns for missing prices', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function renderAccountUsageCost(usage = {})');
+        expect(source).toContain('account-usage-period-cost');
+        expect(source).toContain('cost.actualUsd');
+        expect(source).toContain('missingPriceTokens > 0');
+        expect(source).toContain('account-usage-cost-missing');
+        expect(source).toContain('${renderAccountUsageCost(usage)}');
+    });
+
     test('Codex usage cards render separate general and Codex 5.3 quota health badges', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');

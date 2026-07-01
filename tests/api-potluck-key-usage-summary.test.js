@@ -309,8 +309,61 @@ describe('api potluck key usage summary', () => {
         expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
         expect(account.week).toMatchObject({ requestCount: 5, totalTokens: 5500 });
         expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
+        expect(account.today.cost).toMatchObject({
+            actualUsd: 0.024,
+            missingPriceTokens: 0
+        });
+        expect(account.week.cost).toMatchObject({
+            actualUsd: 0.04,
+            missingPriceTokens: 0
+        });
+        expect(account.month.cost).toMatchObject({
+            actualUsd: 0.048,
+            missingPriceTokens: 0
+        });
         expect(account.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');
         expect(account.today.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');
+    });
+
+    test('getAccountUsageSummary reports missing price tokens only for unknown models', async () => {
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-06-26T02:00:00.000Z'));
+        const key = await createKey('Mixed Client', 1000);
+
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-known-model', {
+            providerUuid: 'known-account',
+            providerName: 'known@example.com',
+            accountEmail: 'known@example.com'
+        });
+        await incrementUsage(key.id, 'openai-codex-oauth', 'unknown-future-model', {
+            requestCount: 1,
+            promptTokens: 2000,
+            completionTokens: 300,
+            totalTokens: 2300
+        }, 'req-unknown-model', {
+            providerUuid: 'unknown-account',
+            providerName: 'unknown@example.com',
+            accountEmail: 'unknown@example.com'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-06-26T03:00:00.000Z'));
+        const knownAccount = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:known@example.com');
+        const unknownAccount = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:unknown@example.com');
+
+        expect(knownAccount.today.cost).toMatchObject({
+            actualUsd: 0.0012,
+            missingPriceTokens: 0
+        });
+        expect(unknownAccount.today.cost).toMatchObject({
+            actualUsd: 0,
+            missingPriceTokens: 2300
+        });
     });
 
     test('getAccountUsageSummary merges Codex buckets by email across provider UUID and identity changes', async () => {

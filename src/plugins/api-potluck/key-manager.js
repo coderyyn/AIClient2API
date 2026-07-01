@@ -441,12 +441,57 @@ function getBeijingPeriodStarts(now = new Date()) {
 }
 
 function cloneUsageBucket(bucket = {}) {
-    return normalizeUsageBucket(bucket);
+    const normalized = normalizeUsageBucket(bucket);
+    if (bucket?.cost) {
+        normalized.cost = cloneCostBucket(bucket.cost);
+    }
+    return normalized;
+}
+
+function createCostBucket(sourceCost = {}) {
+    return {
+        actualUsd: 0,
+        convertedUsd: 0,
+        missingPriceTokens: 0,
+        conversionModel: sourceCost.conversionModel || DEFAULT_CONVERSION_MODEL,
+        pricingVersion: sourceCost.pricingVersion || '',
+        byModel: {}
+    };
+}
+
+function cloneCostBucket(cost = {}) {
+    return {
+        ...createCostBucket(cost),
+        ...cost,
+        actualUsd: toNumber(cost.actualUsd),
+        convertedUsd: toNumber(cost.convertedUsd),
+        missingPriceTokens: toNumber(cost.missingPriceTokens),
+        byModel: { ...(cost.byModel || {}) }
+    };
+}
+
+function addCost(targetUsage, sourceCost = null) {
+    if (!sourceCost) return;
+    if (!targetUsage.cost) targetUsage.cost = createCostBucket(sourceCost);
+    targetUsage.cost.actualUsd += toNumber(sourceCost.actualUsd);
+    targetUsage.cost.convertedUsd += toNumber(sourceCost.convertedUsd);
+    targetUsage.cost.missingPriceTokens += toNumber(sourceCost.missingPriceTokens);
+    targetUsage.cost.conversionModel = sourceCost.conversionModel || targetUsage.cost.conversionModel;
+    targetUsage.cost.pricingVersion = sourceCost.pricingVersion || targetUsage.cost.pricingVersion;
+    for (const [model, estimate] of Object.entries(sourceCost.byModel || {})) {
+        const current = targetUsage.cost.byModel[model] || {};
+        targetUsage.cost.byModel[model] = {
+            ...estimate,
+            usd: toNumber(current.usd) + toNumber(estimate.usd),
+            missingPriceTokens: toNumber(current.missingPriceTokens) + toNumber(estimate.missingPriceTokens)
+        };
+    }
 }
 
 function addAccountSummaryRange(target, rangeName, account) {
     if (!target[rangeName]) target[rangeName] = createUsageBucket();
     addUsage(target[rangeName], account?.summary);
+    addCost(target[rangeName], account?.summary?.cost);
 }
 
 function isEmailLike(value) {
