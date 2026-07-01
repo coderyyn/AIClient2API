@@ -484,6 +484,31 @@ describe('api potluck key usage summary', () => {
         expect(summary.accounts.some(item => item.accountKey === 'openai-codex-oauth:stale@example.com')).toBe(false);
     });
 
+    test('getAccountUsageSummary does not read model usage last-used index when potluck history is live', async () => {
+        fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), '{not-json', 'utf8');
+
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-07-02T02:00:00.000Z'));
+        const key = await createKey('Live Potluck Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-live-potluck-no-model-index', {
+            providerUuid: 'live-account',
+            providerName: 'Live Account',
+            accountEmail: 'live@example.com'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-07-02T03:00:00.000Z'));
+
+        expect(summary.source).toBe('potluck/model-usage-stats');
+        expect(summary.accounts[0].lastUsedAt).toBe('2026-07-02T02:00:00.000Z');
+        expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('Failed to read model usage account timestamps'));
+    });
+
     test('getAccountUsageSummary uses a rolling 30 day month window from model usage daily history', async () => {
         fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
             updatedAt: '2026-07-02T09:00:00.000Z',

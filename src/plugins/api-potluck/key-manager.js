@@ -1639,7 +1639,7 @@ export async function getAccountUsageSummary(now = new Date()) {
         }
     }
 
-    const modelUsageLastUsedIndex = readModelUsageAccountLastUsedIndex();
+    const modelUsageLastUsedIndex = modelUsageHistory ? readModelUsageAccountLastUsedIndex() : new Map();
     const accountList = [...accounts.values()]
         .map(account => {
             const today = cloneUsageBucket(account.today);
