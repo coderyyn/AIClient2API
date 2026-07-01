@@ -1460,6 +1460,24 @@
         }
         function usageCount(entry) { return typeof entry === 'number' ? entry : Number(entry?.requestCount || 0); }
         function usageTokens(entry) { return typeof entry === 'number' ? 0 : Number(entry?.totalTokens || 0); }
+        const MODEL_DISPLAY_ALIASES = {
+            'codex-auto-review': 'gpt-5.5',
+            'gpt5.5': 'gpt-5.5',
+            'gpt-5.5-fast': 'gpt-5.5',
+            'gpt-5.4-fast': 'gpt-5.4',
+            'gpt-5.4-mini-fast': 'gpt-5.4-mini',
+            'gpt-5.3-codex-fast': 'gpt-5.3-codex',
+            'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark',
+            'gpt-5.3codexspark': 'gpt-5.3-codex-spark',
+            'gpt-5.2-fast': 'gpt-5.2',
+            'gtp-5.1': 'gpt-5.1',
+            'gpt-image-2-fast': 'gpt-image-2',
+            'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite'
+        };
+        function normalizeDisplayModelName(model) {
+            const normalized = String(model || '').trim().toLowerCase();
+            return MODEL_DISPLAY_ALIASES[normalized] || normalized || 'unknown';
+        }
         function formatPercentRatio(value) {
             const ratio = Number(value || 0);
             return `${(ratio * 100).toFixed(ratio > 0 && ratio < 0.01 ? 2 : 1)}%`;
@@ -1604,6 +1622,29 @@
         function addUsageMap(target, name, usage = {}) {
             if (!target[name]) target[name] = createUsageSummaryBucket();
             addUsageBucket(target[name], usage);
+        }
+
+        function aggregateModelDistributionForDisplay(models = {}, minCalls = 100) {
+            const normalizedModels = {};
+            const lowCallLabel = `其他模型（<${minCalls}次）`;
+
+            Object.entries(models || {}).forEach(([model, usage]) => {
+                const normalizedName = normalizeDisplayModelName(model);
+                if (!normalizedModels[normalizedName]) normalizedModels[normalizedName] = createUsageSummaryBucket();
+                addUsageBucket(normalizedModels[normalizedName], usage);
+            });
+
+            const result = {};
+            Object.entries(normalizedModels).forEach(([model, usage]) => {
+                if (usageCount(usage) > 0 && usageCount(usage) < minCalls) {
+                    if (!result[lowCallLabel]) result[lowCallLabel] = createUsageSummaryBucket();
+                    addUsageBucket(result[lowCallLabel], usage);
+                } else {
+                    result[model] = usage;
+                }
+            });
+
+            return result;
         }
 
         function addAccountUsageMap(target, name, account = {}) {
@@ -1863,11 +1904,12 @@
             const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
+            const displayModels = aggregateModelDistributionForDisplay(rangeSummary.models);
             renderRangeCostHighlights(rangeSummary);
 
             if (totalCalls === 0) {
                 document.getElementById('providerAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
-                renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
+                renderDistribution('modelDistribution', displayModels, totalCalls, {
                     maxItems: Number.POSITIVE_INFINITY,
                     emptyText: '当前范围暂无模型数据',
                     filter: usage => usageTokens(usage) > 0
@@ -1882,7 +1924,7 @@
             document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
-            renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
+            renderDistribution('modelDistribution', displayModels, totalCalls, {
                 maxItems: Number.POSITIVE_INFINITY,
                 emptyText: '当前范围暂无模型数据',
                 filter: usage => usageTokens(usage) > 0

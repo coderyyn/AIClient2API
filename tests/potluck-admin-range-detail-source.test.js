@@ -44,14 +44,20 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('次');
     });
 
-    test('admin model activity follows selected range while showing every model in that range', () => {
+    test('admin model activity follows selected range while normalizing aliases and merging low call models', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('模型活跃度 (Models)');
-        expect(source).toContain("renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {");
+        expect(source).toContain('const displayModels = aggregateModelDistributionForDisplay(rangeSummary.models)');
+        expect(source).toContain("renderDistribution('modelDistribution', displayModels, totalCalls, {");
         expect(source).toContain('maxItems: Number.POSITIVE_INFINITY');
         expect(source).toContain("emptyText: '当前范围暂无模型数据'");
         expect(source).toContain('filter: usage => usageTokens(usage) > 0');
+        expect(source).toContain('const MODEL_DISPLAY_ALIASES = {');
+        expect(source).toContain("'gtp-5.1': 'gpt-5.1'");
+        expect(source).toContain("'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark'");
+        expect(source).toContain('function aggregateModelDistributionForDisplay(models = {}, minCalls = 100)');
+        expect(source).toContain("const lowCallLabel = `其他模型（<${minCalls}次）`");
         expect(source).not.toContain('const allModelSummary = summarizeUsageHistoryForRange(usageHistory, \'total\')');
         expect(source).not.toContain("document.getElementById('modelDistribution').innerHTML = '<div class=\"detail-empty\">当前范围暂无模型数据</div>'");
     });
