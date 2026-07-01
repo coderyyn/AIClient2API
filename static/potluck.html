@@ -1901,23 +1901,17 @@
             document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
 
             const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
-            const aggregatedModels = {};
+            const allModelSummary = summarizeUsageHistoryForRange(usageHistory, 'total');
+            const allModelCalls = allModelSummary.summary.requestCount;
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
             renderRangeCostHighlights(rangeSummary);
 
-            Object.entries(rangeSummary.models).forEach(([m, usage]) => {
-                aggregatedModels[m] = {
-                    count: usageCount(usage),
-                    cost: usage.cost
-                };
-            });
-
             if (totalCalls === 0) {
                 document.getElementById('providerAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
-                document.getElementById('modelDistribution').innerHTML = '<div class="detail-empty">当前范围暂无模型数据</div>';
+                renderDistribution('modelDistribution', allModelSummary.models, allModelCalls);
                 document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
-                document.getElementById('modelTotalCount').textContent = `0 次`;
+                document.getElementById('modelTotalCount').innerHTML = `${formatNumber(allModelCalls)} 次${allModelSummary.summary.cost ? ` · ${formatDisplayCost(allModelSummary.summary.cost)}` : ''}`;
                 return;
             }
 
@@ -1926,8 +1920,8 @@
             document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
-            renderDistribution('modelDistribution', aggregatedModels, totalCalls);
-            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
+            renderDistribution('modelDistribution', allModelSummary.models, allModelCalls);
+            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(allModelCalls)} 次${allModelSummary.summary.cost ? ` · ${formatDisplayCost(allModelSummary.summary.cost)}` : ''}`;
         }
 
         function isCodexOauthAccount(account) {

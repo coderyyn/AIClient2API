@@ -854,12 +854,12 @@ function renderAccountUsageSummary(accountSummary) {
     const lastUsedAt = accountSummary.lastUsedAt || accountSummary.today?.lastUsedAt || accountSummary.week?.lastUsedAt || accountSummary.month?.lastUsedAt || null;
     section.innerHTML = `
         ${lastUsedAt ? `<div class="account-usage-last-used"><i class="fas fa-clock"></i> 最近请求 ${formatDate(lastUsedAt)}</div>` : ''}
-        <div class="account-usage-period-grid">
-            ${renderAccountUsagePeriod('今日', accountSummary.today)}
-            ${renderAccountUsagePeriod('本周', accountSummary.week)}
-            ${renderAccountUsagePeriod('本月', accountSummary.month)}
-        </div>
-    `;
+            <div class="account-usage-period-grid">
+                ${renderAccountUsagePeriod('今日', accountSummary.today)}
+                ${renderAccountUsagePeriod('近1周', accountSummary.week)}
+                ${renderAccountUsagePeriod('近1月', accountSummary.month)}
+            </div>
+        `;
     return section;
 }
 

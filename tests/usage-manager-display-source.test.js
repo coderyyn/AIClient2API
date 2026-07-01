@@ -47,6 +47,15 @@ describe('usage manager display source regressions', () => {
         expect(source).toContain('${renderAccountUsageCost(usage)}');
     });
 
+    test('account usage summary labels use rolling week and month wording', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain("renderAccountUsagePeriod('近1周', accountSummary.week)");
+        expect(source).toContain("renderAccountUsagePeriod('近1月', accountSummary.month)");
+        expect(source).not.toContain("renderAccountUsagePeriod('本周', accountSummary.week)");
+        expect(source).not.toContain("renderAccountUsagePeriod('本月', accountSummary.month)");
+    });
+
     test('Codex usage cards render separate general and Codex 5.3 quota health badges', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');

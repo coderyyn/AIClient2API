@@ -44,6 +44,15 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('次');
     });
 
+    test('admin model activity shows all recent models independent from selected range', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('模型活跃度 (Models)');
+        expect(source).toContain('const allModelSummary = summarizeUsageHistoryForRange(usageHistory, \'total\')');
+        expect(source).toContain("renderDistribution('modelDistribution', allModelSummary.models, allModelCalls)");
+        expect(source).not.toContain("document.getElementById('modelDistribution').innerHTML = '<div class=\"detail-empty\">当前范围暂无模型数据</div>'");
+    });
+
     test('admin dashboard folds account token share into the provider tree view', () => {
         const source = loadPotluckSource();
 
