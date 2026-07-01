@@ -8,7 +8,7 @@ const PRICE_PER_MILLION = {
     'gpt-5.4-mini': { input: 0.75, cachedInput: 0.075, output: 4.50, provider: 'openai', source: 'official' },
     'gpt-5.4-nano': { input: 0.20, cachedInput: 0.02, output: 1.25, provider: 'openai', source: 'official' },
     'gpt-5.3-codex': { input: 1.75, cachedInput: 0.175, output: 14.00, provider: 'openai', source: 'official' },
-    'gpt-5.3-codex-spark': { input: 1.75, cachedInput: 0.175, output: 14.00, provider: 'openai', source: 'alias:gpt-5.3-codex' },
+    'gpt-5.3-codex-spark': { input: 0.75, cachedInput: 0.075, output: 4.50, provider: 'openai', source: 'temporary:gpt-5.4-mini' },
 
     'gemini-2.5-flash-lite': { input: 0.10, cachedInput: 0.01, output: 0.40, provider: 'gemini', source: 'official' },
     'gemini-2.5-flash': { input: 0.30, cachedInput: 0.03, output: 2.50, provider: 'gemini', source: 'official' },

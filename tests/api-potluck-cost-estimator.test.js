@@ -38,6 +38,22 @@ describe('api potluck cost estimator', () => {
         expect(cost.usd).toBeCloseTo(((400000 * 0.75) + (600000 * 0.075) + (300000 * 4.50)) / 1000000, 8);
     });
 
+    test('prices gpt 5.3 codex spark with the gpt 5.4 mini temporary rate', () => {
+        const usage = {
+            promptTokens: 1000000,
+            cachedTokens: 600000,
+            completionTokens: 200000,
+            reasoningTokens: 100000,
+            totalTokens: 1300000
+        };
+
+        const spark = estimateUsageCost(usage, 'gpt-5.3-codex-spark');
+        const mini = estimateUsageCost(usage, 'gpt-5.4-mini');
+
+        expect(spark.usd).toBeCloseTo(mini.usd, 8);
+        expect(spark.pricingSource).toBe('temporary:gpt-5.4-mini');
+    });
+
     test('only allows gemini conversion models from 2.5 flash-lite through 3.5 flash', () => {
         expect(getConversionModels().map(item => item.model)).toEqual([
             'gemini-2.5-flash-lite',
