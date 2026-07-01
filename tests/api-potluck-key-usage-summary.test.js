@@ -295,8 +295,8 @@ describe('api potluck key usage summary', () => {
             timezone: 'Asia/Shanghai',
             periods: {
                 today: '2026-06-26',
-                week: '2026-06-22',
-                month: '2026-06-01'
+                week: '2026-06-20',
+                month: '2026-05-28'
             }
         });
         expect(account).toMatchObject({
@@ -307,14 +307,14 @@ describe('api potluck key usage summary', () => {
             providerName: 'Codex Account A'
         });
         expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
-        expect(account.week).toMatchObject({ requestCount: 5, totalTokens: 5500 });
+        expect(account.week).toMatchObject({ requestCount: 6, totalTokens: 6600 });
         expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
         expect(account.today.cost).toMatchObject({
             actualUsd: 0.024,
             missingPriceTokens: 0
         });
         expect(account.week.cost).toMatchObject({
-            actualUsd: 0.04,
+            actualUsd: 0.048,
             missingPriceTokens: 0
         });
         expect(account.month.cost).toMatchObject({
@@ -366,10 +366,64 @@ describe('api potluck key usage summary', () => {
         });
     });
 
-    test('getAccountUsageSummary prefers model usage daily history so month includes prior days', async () => {
+    test('getAccountUsageSummary uses a rolling 30 day month window from model usage daily history', async () => {
         fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
             updatedAt: '2026-07-02T09:00:00.000Z',
             daily: {
+                '2026-06-02': {
+                    accounts: {
+                        'openai-codex-oauth:daily@example.com': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'daily@example.com',
+                            accountIdentity: 'daily@example.com',
+                            accountEmail: 'daily@example.com',
+                            providerName: 'Daily Account',
+                            summary: {
+                                requestCount: 7,
+                                promptTokens: 7000,
+                                completionTokens: 700,
+                                totalTokens: 7700,
+                                lastUsedAt: '2026-06-02T02:00:00.000Z'
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 7,
+                                    promptTokens: 7000,
+                                    completionTokens: 700,
+                                    totalTokens: 7700,
+                                    lastUsedAt: '2026-06-02T02:00:00.000Z'
+                                }
+                            }
+                        }
+                    }
+                },
+                '2026-06-03': {
+                    accounts: {
+                        'openai-codex-oauth:daily@example.com': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'daily@example.com',
+                            accountIdentity: 'daily@example.com',
+                            accountEmail: 'daily@example.com',
+                            providerName: 'Daily Account',
+                            summary: {
+                                requestCount: 5,
+                                promptTokens: 5000,
+                                completionTokens: 500,
+                                totalTokens: 5500,
+                                lastUsedAt: '2026-06-03T02:00:00.000Z'
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 5,
+                                    promptTokens: 5000,
+                                    completionTokens: 500,
+                                    totalTokens: 5500,
+                                    lastUsedAt: '2026-06-03T02:00:00.000Z'
+                                }
+                            }
+                        }
+                    }
+                },
                 '2026-07-01': {
                     accounts: {
                         'openai-codex-oauth:daily@example.com': {
@@ -436,9 +490,10 @@ describe('api potluck key usage summary', () => {
             totalTokens: 3300
         });
         expect(account.month).toMatchObject({
-            requestCount: 5,
-            totalTokens: 5500
+            requestCount: 10,
+            totalTokens: 11000
         });
+        expect(summary.periods.month).toBe('2026-06-03');
         expect(account.today.cost.missingPriceTokens).toBe(0);
     });
 

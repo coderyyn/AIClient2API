@@ -428,10 +428,10 @@ function dateKeyFromUtcDate(date) {
 function getBeijingPeriodStarts(now = new Date()) {
     const parts = getBeijingDateParts(now);
     const todayUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
-    const weekday = todayUtc.getUTCDay() || 7;
     const weekStartUtc = new Date(todayUtc);
-    weekStartUtc.setUTCDate(todayUtc.getUTCDate() - weekday + 1);
-    const monthStartUtc = new Date(Date.UTC(parts.year, parts.month - 1, 1));
+    weekStartUtc.setUTCDate(todayUtc.getUTCDate() - 6);
+    const monthStartUtc = new Date(todayUtc);
+    monthStartUtc.setUTCDate(todayUtc.getUTCDate() - 29);
 
     return {
         today: dateKeyFromUtcDate(todayUtc),

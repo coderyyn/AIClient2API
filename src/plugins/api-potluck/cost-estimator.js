@@ -9,6 +9,8 @@ const PRICE_PER_MILLION = {
     'gpt-5.4-nano': { input: 0.20, cachedInput: 0.02, output: 1.25, provider: 'openai', source: 'official' },
     'gpt-5.3-codex': { input: 1.75, cachedInput: 0.175, output: 14.00, provider: 'openai', source: 'official' },
     'gpt-5.3-codex-spark': { input: 0.75, cachedInput: 0.075, output: 4.50, provider: 'openai', source: 'temporary:gpt-5.4-mini' },
+    'gpt-5.2': { input: 1.75, cachedInput: 0.175, output: 14.00, provider: 'openai', source: 'legacy:current-gpt-5.3-codex' },
+    'gpt-5.1': { input: 1.25, cachedInput: 0.125, output: 10.00, provider: 'openai', source: 'legacy:snapshot' },
     'gpt-image-2': { input: 8.00, cachedInput: 2.00, output: 30.00, provider: 'openai', source: 'official' },
 
     'gemini-2.5-flash-lite': { input: 0.10, cachedInput: 0.01, output: 0.40, provider: 'gemini', source: 'official' },
@@ -17,6 +19,16 @@ const PRICE_PER_MILLION = {
     'gemini-3-flash-preview': { input: 0.50, cachedInput: 0.05, output: 3.00, provider: 'gemini', source: 'official' },
     'gemini-3.1-flash-lite': { input: 0.25, cachedInput: 0.025, output: 1.50, provider: 'gemini', source: 'official' },
     'gemini-3.5-flash': { input: 1.50, cachedInput: 0.15, output: 9.00, provider: 'gemini', source: 'official' }
+};
+
+const MODEL_PRICE_ALIASES = {
+    'codex-auto-review': 'gpt-5.5',
+    'gpt5.5': 'gpt-5.5',
+    'gpt-5.4-fast': 'gpt-5.4',
+    'gpt-5.4-mini-fast': 'gpt-5.4-mini',
+    'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark',
+    'gpt-5.3codexspark': 'gpt-5.3-codex-spark',
+    'gtp-5.1': 'gpt-5.1'
 };
 
 const GEMINI_CONVERSION_MODELS = [
@@ -36,6 +48,11 @@ function normalizeModelName(model) {
     return String(model || '').trim().toLowerCase();
 }
 
+function normalizePricedModelName(model) {
+    const normalized = normalizeModelName(model);
+    return MODEL_PRICE_ALIASES[normalized] || normalized;
+}
+
 export function getConversionModels() {
     return GEMINI_CONVERSION_MODELS.map(model => ({
         model,
@@ -49,11 +66,12 @@ export function normalizeConversionModel(model) {
 }
 
 export function getModelPricing(model) {
-    return PRICE_PER_MILLION[normalizeModelName(model)] || null;
+    return PRICE_PER_MILLION[normalizePricedModelName(model)] || null;
 }
 
 export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) {
-    const pricing = getModelPricing(model);
+    const normalizedModel = normalizePricedModelName(model);
+    const pricing = getModelPricing(normalizedModel);
     const promptTokens = toNumber(usage.promptTokens);
     const cachedTokens = Math.min(promptTokens, toNumber(usage.cachedTokens));
     const billableInputTokens = Math.max(0, promptTokens - cachedTokens);
@@ -63,7 +81,7 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) 
         return {
             usd: 0,
             missingPriceTokens: toNumber(usage.totalTokens) || (promptTokens + outputTokens),
-            model: normalizeModelName(model) || null,
+            model: normalizedModel || null,
             pricingVersion: PRICING_VERSION,
             pricingSource: 'missing'
         };
@@ -78,7 +96,7 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) 
     return {
         usd,
         missingPriceTokens: 0,
-        model: normalizeModelName(model),
+        model: normalizedModel,
         pricingVersion: PRICING_VERSION,
         pricingSource: pricing.source
     };
