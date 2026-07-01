@@ -12,12 +12,19 @@ import crypto from 'crypto';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
 import { hashSecret, sanitizeProviderName } from '../request-audit/audit-event.js';
+import {
+    DEFAULT_CONVERSION_MODEL,
+    buildCost,
+    getConversionModels,
+    normalizeConversionModel
+} from './cost-estimator.js';
 
 // 配置文件路径
 const KEYS_STORE_FILE = path.join(process.cwd(), 'configs', 'api-potluck-keys.json');
 const MODEL_USAGE_STATS_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
 
 const KEY_PREFIX = 'maki_';
+const USAGE_HISTORY_RETENTION_DAYS = 35;
 
 const DEFAULT_CONFIG = {
     persistInterval: 5000,
@@ -212,6 +219,7 @@ function normalizeKeyData(keyData = {}) {
         totalReasoningTokens: toNumber(keyData.totalReasoningTokens),
         totalTokens: toNumber(keyData.totalTokens),
         totalCachedTokens: toNumber(keyData.totalCachedTokens),
+        totalModels: normalizeUsageMap(keyData.totalModels),
         usageHistory: {}
     };
 
@@ -219,7 +227,22 @@ function normalizeKeyData(keyData = {}) {
         normalized.usageHistory[date] = normalizeUsageHistoryDay(day);
     }
 
+    if (Object.keys(normalized.totalModels).length === 0) {
+        normalized.totalModels = collectModelsFromUsageHistory(normalized.usageHistory);
+    }
+
+    trimUsageHistory(normalized.usageHistory, USAGE_HISTORY_RETENTION_DAYS);
+
     return normalized;
+}
+
+function trimUsageHistory(usageHistory = {}, retentionDays = USAGE_HISTORY_RETENTION_DAYS) {
+    const dates = Object.keys(usageHistory || {}).sort();
+    if (dates.length <= retentionDays) return usageHistory;
+    for (const date of dates.slice(0, dates.length - retentionDays)) {
+        delete usageHistory[date];
+    }
+    return usageHistory;
 }
 
 function normalizeStore(store = {}) {
@@ -717,13 +740,75 @@ function collectRelatedAccountNames(usageHistory = {}, limit = 2) {
         .map(account => account.name);
 }
 
-function enrichKeyUsage(keyData) {
+function collectModelsFromUsageHistory(usageHistory = {}) {
+    const models = {};
+    for (const day of Object.values(usageHistory || {})) {
+        for (const [model, usage] of Object.entries(day?.models || {})) {
+            models[model] = normalizeUsageBucket(models[model]);
+            addUsage(models[model], usage);
+        }
+    }
+    return models;
+}
+
+function addCostToUsageHistory(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
+    for (const day of Object.values(usageHistory || {})) {
+        if (!day?.summary) continue;
+        day.summary.cost = buildCost(day.summary, day.models || {}, conversionModel);
+        for (const [model, usage] of Object.entries(day.models || {})) {
+            usage.cost = buildCost(usage, { [model]: usage }, conversionModel);
+        }
+        for (const account of Object.values(day.accounts || {})) {
+            account.summary.cost = buildCost(account.summary, account.models || {}, conversionModel);
+            for (const [model, usage] of Object.entries(account.models || {})) {
+                usage.cost = buildCost(usage, { [model]: usage }, conversionModel);
+            }
+        }
+        for (const hour of Object.values(day.hours || {})) {
+            hour.summary.cost = buildCost(hour.summary, hour.models || {}, conversionModel);
+            for (const [model, usage] of Object.entries(hour.models || {})) {
+                usage.cost = buildCost(usage, { [model]: usage }, conversionModel);
+            }
+            for (const account of Object.values(hour.accounts || {})) {
+                account.summary.cost = buildCost(account.summary, account.models || {}, conversionModel);
+                for (const [model, usage] of Object.entries(account.models || {})) {
+                    usage.cost = buildCost(usage, { [model]: usage }, conversionModel);
+                }
+            }
+        }
+    }
+    return usageHistory;
+}
+
+function getCostOptions(options = {}) {
+    return {
+        conversionModel: normalizeConversionModel(options?.conversionModel)
+    };
+}
+
+function enrichKeyUsage(keyData, options = {}) {
+    const { conversionModel } = getCostOptions(options);
     const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
+    addCostToUsageHistory(usageHistory, conversionModel);
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
     const keyHash = hashSecret(keyData.id);
     const enriched = {
         ...keyData,
         usageHistory,
+        cost: buildCost(
+            {
+                promptTokens: keyData.totalPromptTokens,
+                cachedTokens: keyData.totalCachedTokens,
+                completionTokens: keyData.totalCompletionTokens,
+                reasoningTokens: keyData.totalReasoningTokens,
+                totalTokens: keyData.totalTokens
+            },
+            keyData.totalModels || collectModelsFromUsageHistory(usageHistory),
+            conversionModel
+        ),
+        pricing: {
+            conversionModels: getConversionModels()
+        },
         audit: {
             keyHash,
             summaryPath: `/api/request-audit/summary?keyHash=${encodeURIComponent(keyHash || '')}`,
@@ -890,6 +975,7 @@ export async function createKey(name = '', dailyLimit = null) {
         totalReasoningTokens: 0,
         totalTokens: 0,
         totalCachedTokens: 0,
+        totalModels: {},
         lastResetDate: today,
         lastUsedAt: null,
         enabled: true,
@@ -908,11 +994,11 @@ export async function createKey(name = '', dailyLimit = null) {
 /**
  * 获取所有 Key 列表
  */
-export async function listKeys() {
+export async function listKeys(options = {}) {
     ensureLoaded();
     const keys = [];
     for (const [keyId, keyData] of Object.entries(keyStore.keys)) {
-        const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }));
+        const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), options);
         const rates = rateManager.getStats(`key:${keyId}`);
         keys.push({
             ...updated,
@@ -931,11 +1017,11 @@ export async function listKeys() {
 /**
  * 获取单个 Key 详情
  */
-export async function getKey(keyId) {
+export async function getKey(keyId, options = {}) {
     ensureLoaded();
     const keyData = keyStore.keys[keyId];
     if (!keyData) return null;
-    const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }));
+    const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), options);
     const rates = rateManager.getStats(`key:${keyId}`);
     return {
         ...updated,
@@ -1013,6 +1099,7 @@ export async function resetKeyTokenStats(keyId) {
     keyData.totalReasoningTokens = 0;
     keyData.totalTokens = 0;
     keyData.totalCachedTokens = 0;
+    keyData.totalModels = {};
     resetUsageHistoryTokens(keyData.usageHistory);
 
     // 重置该 Key 的速率追踪器
@@ -1042,6 +1129,7 @@ export async function resetAllTokenStats() {
         keyData.totalReasoningTokens = 0;
         keyData.totalTokens = 0;
         keyData.totalCachedTokens = 0;
+        keyData.totalModels = {};
         resetUsageHistoryTokens(keyData.usageHistory);
         updated++;
     }
@@ -1159,6 +1247,11 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     addUsage(dayHistory.models[mName], usageRecord);
     updatePeaks(dayHistory.models[mName]);
 
+    if (!keyData.totalModels) keyData.totalModels = {};
+    if (!keyData.totalModels[mName]) keyData.totalModels[mName] = createUsageBucket();
+    addUsage(keyData.totalModels[mName], usageRecord);
+    updatePeaks(keyData.totalModels[mName]);
+
     const providerUuid = context.providerUuid || usageRecord.providerUuid || null;
     const providerName = context.providerName || usageRecord.providerName || null;
     const accountIdentity = context.accountIdentity || usageRecord.accountIdentity || null;
@@ -1215,12 +1308,8 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     if (!keyData.maxTps) keyData.maxTps = 0;
     updatePeaks(keyData);
 
-    // 清理该 Key 的过期历史 (保留 100 天以支持 3 个月日历)
-    const userDates = Object.keys(keyData.usageHistory).sort();
-    if (userDates.length > 100) {
-        const dropDates = userDates.slice(0, userDates.length - 100);
-        dropDates.forEach(d => delete keyData.usageHistory[d]);
-    }
+    // 清理该 Key 的过期历史。
+    trimUsageHistory(keyData.usageHistory, USAGE_HISTORY_RETENTION_DAYS);
 
     markDirty();
     
@@ -1233,13 +1322,15 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
 /**
  * 获取统计信息
  */
-export async function getStats() {
+export async function getStats(options = {}) {
     ensureLoaded();
+    const { conversionModel } = getCostOptions(options);
     const keys = Object.values(keyStore.keys);
     let enabledKeys = 0, todayTotalUsage = 0, totalUsage = 0;
     let todayPromptTokens = 0, todayCompletionTokens = 0, todayReasoningTokens = 0, todayTotalTokens = 0, todayCachedTokens = 0;
     let totalPromptTokens = 0, totalCompletionTokens = 0, totalReasoningTokens = 0, totalTokens = 0, totalCachedTokens = 0;
     const aggregatedHistory = {};
+    const aggregateModels = {};
 
     for (const key of keys) {
         checkAndResetDailyCount(key);
@@ -1256,6 +1347,10 @@ export async function getStats() {
         totalReasoningTokens += key.totalReasoningTokens || 0;
         totalTokens += key.totalTokens || 0;
         totalCachedTokens += key.totalCachedTokens || 0;
+        Object.entries(key.totalModels || collectModelsFromUsageHistory(key.usageHistory || {})).forEach(([model, usage]) => {
+            aggregateModels[model] = normalizeUsageBucket(aggregateModels[model]);
+            addUsage(aggregateModels[model], usage);
+        });
 
         // 汇总每个 Key 的历史数据
         if (key.usageHistory) {
@@ -1292,7 +1387,16 @@ export async function getStats() {
     }
 
     const globalRates = rateManager.getGlobalStats();
+    trimUsageHistory(aggregatedHistory, USAGE_HISTORY_RETENTION_DAYS);
     addUsageHistoryRatios(aggregatedHistory);
+    addCostToUsageHistory(aggregatedHistory, conversionModel);
+    const aggregateUsage = {
+        promptTokens: totalPromptTokens,
+        completionTokens: totalCompletionTokens,
+        reasoningTokens: totalReasoningTokens,
+        totalTokens,
+        cachedTokens: totalCachedTokens
+    };
     return {
         totalKeys: keys.length,
         enabledKeys,
@@ -1317,6 +1421,10 @@ export async function getStats() {
         maxQps: globalRates.maxQps,
         maxTps: globalRates.maxTps,
         maxRpm: globalRates.maxRpm,
+        cost: buildCost(aggregateUsage, aggregateModels, conversionModel),
+        pricing: {
+            conversionModels: getConversionModels()
+        },
         usageHistory: aggregatedHistory
     };
 }

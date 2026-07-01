@@ -93,4 +93,34 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(block).not.toContain('provider.accounts.length > 5');
         expect(block).not.toContain('其他账号');
     });
+
+    test('admin dashboard exposes actual-default value controls and 35 day key detail history', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('id="conversionModelSelect"');
+        expect(source).toContain("const ACTUAL_VALUE_MODE = 'actual'");
+        expect(source).toContain("let currentConversionModel = ACTUAL_VALUE_MODE");
+        expect(source).toContain('function setConversionModel(model)');
+        expect(source).toContain('conversionModel=${encodeURIComponent(currentConversionModel)}');
+        expect(source).toContain('function formatUsd(value)');
+        expect(source).toContain('function getDisplayCostUsd(cost)');
+        expect(source).toContain('function formatDisplayCost(cost)');
+        expect(source).toContain('<option value="actual">真实模型</option>');
+        expect(source).not.toContain('实际 <span class="cost-inline">');
+        expect(source).not.toContain('换算 <span class="cost-inline alt">');
+        expect(source).toContain('.slice(-35)');
+        expect(source).toContain('summary.cost');
+        expect(source).not.toContain('价格版本：2026-07-01 官方快照');
+        expect(source).toContain('节点与 Token 使用统计 (最近 35 天)');
+        expect(source).not.toContain('节点与 Token 使用统计 (最近 3 个月)');
+    });
+
+    test('admin provider account tree rolls account cost up to provider headers', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('function addCostBucket(targetCost, sourceCost)');
+        expect(source).toContain('function rollupProviderCostFromAccounts(provider)');
+        expect(source).toContain('rollupProviderCostFromAccounts(provider)');
+        expect(source).not.toContain("provider.summary?.cost ? ` · <span class=\"cost-inline\">${formatUsd(provider.summary.cost.actualUsd)}</span>`");
+    });
 });

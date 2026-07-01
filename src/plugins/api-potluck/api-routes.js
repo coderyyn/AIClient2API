@@ -36,6 +36,36 @@ function sendJson(res, statusCode, data) {
     res.end(JSON.stringify(data));
 }
 
+function getRequestCostOptions(req) {
+    try {
+        const url = new URL(req.url || '', 'http://localhost');
+        return {
+            conversionModel: url.searchParams.get('conversionModel') || undefined
+        };
+    } catch {
+        return {};
+    }
+}
+
+function compactUsageHistoryForList(usageHistory = {}) {
+    const compact = { usageHistory: {} };
+    for (const [date, day] of Object.entries(usageHistory || {})) {
+        compact.usageHistory[date] = { summary: day?.summary || {} };
+        delete compact.usageHistory[date].providers;
+        delete compact.usageHistory[date].models;
+        delete compact.usageHistory[date].accounts;
+        delete compact.usageHistory[date].hours;
+    }
+    return compact.usageHistory;
+}
+
+function compactKeyForList(key) {
+    return {
+        ...key,
+        usageHistory: compactUsageHistoryForList(key.usageHistory || {})
+    };
+}
+
 function formatDailyLimitMessage(dailyLimit) {
     return dailyLimit === 0 ? '不限量' : dailyLimit;
 }
@@ -207,7 +237,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
     try {
         // GET /api/potluck/stats - 获取统计信息
         if (method === 'GET' && path === '/api/potluck/stats') {
-            const stats = enrichPotluckStatsAccountEmails(await getStats());
+            const stats = enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)));
             sendJson(res, 200, { success: true, data: stats });
             return true;
         }
@@ -222,7 +252,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // POST /api/potluck/stats/reset-tokens - 重置全部 Key 的 Token 统计
         if (method === 'POST' && path === '/api/potluck/stats/reset-tokens') {
             const result = await resetAllTokenStats();
-            const stats = enrichPotluckStatsAccountEmails(await getStats());
+            const stats = enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)));
             sendJson(res, 200, {
                 success: true,
                 message: `已重置 ${result.updated}/${result.total} 个 Key 的 Token 统计`,
@@ -233,11 +263,12 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
 
         // GET /api/potluck/keys - 获取所有 Key 列表
         if (method === 'GET' && path === '/api/potluck/keys') {
-            const keys = await listKeys();
-            const stats = enrichPotluckStatsAccountEmails(await getStats());
+            const costOptions = getRequestCostOptions(req);
+            const keys = await listKeys(costOptions);
+            const stats = enrichPotluckStatsAccountEmails(await getStats(costOptions));
             sendJson(res, 200, { 
                 success: true, 
-                data: { keys, stats } 
+                data: { keys: keys.map(compactKeyForList), stats }
             });
             return true;
         }
@@ -282,7 +313,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
 
             // GET /api/potluck/keys/:keyId - 获取单个 Key 详情
             if (method === 'GET' && !subPath) {
-                const keyData = await getKey(keyId);
+                const keyData = await getKey(keyId, getRequestCostOptions(req));
                 if (!keyData) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;

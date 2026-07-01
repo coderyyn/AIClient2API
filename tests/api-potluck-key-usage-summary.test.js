@@ -439,4 +439,145 @@ describe('api potluck key usage summary', () => {
             reasoningTokens: 516
         });
     });
+
+    test('listKeys and getStats expose actual and gemini converted cost estimates', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
+
+        const key = await createKey('Cost Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000000,
+            cachedTokens: 200000,
+            completionTokens: 100000,
+            totalTokens: 1100000
+        }, 'req-cost-1', {
+            providerUuid: 'codex-account-a',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+
+        const [listedKey] = await listKeys({ conversionModel: 'gemini-2.5-flash' });
+        const stats = await getStats({ conversionModel: 'gemini-2.5-flash' });
+
+        expect(listedKey.cost).toMatchObject({
+            actualUsd: expect.closeTo(1.065, 6),
+            convertedUsd: expect.closeTo(0.496, 6),
+            conversionModel: 'gemini-2.5-flash',
+            pricingVersion: 'official-2026-07-01',
+            missingPriceTokens: 0
+        });
+        expect(listedKey.usageHistory['2026-06-22'].summary.cost).toMatchObject({
+            actualUsd: expect.closeTo(1.065, 6),
+            convertedUsd: expect.closeTo(0.496, 6)
+        });
+        expect(stats.cost).toMatchObject({
+            actualUsd: expect.closeTo(1.065, 6),
+            convertedUsd: expect.closeTo(0.496, 6)
+        });
+    });
+
+    test('retains 35 days of per-key usage history', async () => {
+        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
+
+        const key = await createKey('History Client', 1000);
+        for (let offset = 0; offset < 36; offset++) {
+            const date = new Date(Date.UTC(2026, 5, 1 + offset, 1, 0, 0));
+            jest.setSystemTime(date);
+            await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+                requestCount: 1,
+                promptTokens: 1000,
+                completionTokens: 100,
+                totalTokens: 1100
+            }, `req-history-${offset}`, {
+                providerUuid: 'codex-account-a',
+                timestamp: date.toISOString()
+            });
+        }
+
+        const [listedKey] = await listKeys();
+        const dates = Object.keys(listedKey.usageHistory).sort();
+
+        expect(dates).toHaveLength(35);
+        expect(dates[0]).toBe('2026-06-02');
+        expect(dates.at(-1)).toBe('2026-07-06');
+    });
+
+    test('keeps cumulative actual cost by model after old daily history is trimmed', async () => {
+        const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
+
+        const key = await createKey('Cumulative Cost Client', 1000);
+        for (let offset = 0; offset < 36; offset++) {
+            const date = new Date(Date.UTC(2026, 5, 1 + offset, 1, 0, 0));
+            jest.setSystemTime(date);
+            await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+                requestCount: 1,
+                promptTokens: 1000000,
+                completionTokens: 100000,
+                totalTokens: 1100000
+            }, `req-cumulative-cost-${offset}`, {
+                providerUuid: 'codex-account-a',
+                timestamp: date.toISOString()
+            });
+        }
+
+        const [listedKey] = await listKeys({ conversionModel: 'gemini-2.5-flash' });
+        const stats = await getStats({ conversionModel: 'gemini-2.5-flash' });
+
+        expect(Object.keys(listedKey.usageHistory)).toHaveLength(35);
+        expect(listedKey.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
+        expect(listedKey.cost.convertedUsd).toBeCloseTo(36 * 0.55, 6);
+        expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
+    });
+
+    test('trims over-retained persisted history on load while preserving cumulative model cost', async () => {
+        const usageHistory = {};
+        for (let offset = 0; offset < 36; offset++) {
+            const date = new Date(Date.UTC(2026, 5, 1 + offset)).toISOString().slice(0, 10);
+            usageHistory[date] = {
+                summary: {
+                    requestCount: 1,
+                    promptTokens: 1000000,
+                    completionTokens: 100000,
+                    totalTokens: 1100000
+                },
+                models: {
+                    'gpt-5.4-mini': {
+                        requestCount: 1,
+                        promptTokens: 1000000,
+                        completionTokens: 100000,
+                        totalTokens: 1100000
+                    }
+                }
+            };
+        }
+        fs.writeFileSync(path.join(tempDir, 'configs', 'api-potluck-keys.json'), JSON.stringify({
+            keys: {
+                maki_persisted_history: {
+                    id: 'maki_persisted_history',
+                    name: 'Persisted History',
+                    createdAt: '2026-06-01T00:00:00.000Z',
+                    dailyLimit: 1000,
+                    todayUsage: 0,
+                    totalUsage: 36,
+                    totalPromptTokens: 36000000,
+                    totalCompletionTokens: 3600000,
+                    totalTokens: 39600000,
+                    usageHistory,
+                    lastResetDate: '2026-07-06',
+                    enabled: true
+                }
+            }
+        }), 'utf8');
+
+        const { listKeys, getStats } = await loadKeyManager();
+        const [listedKey] = await listKeys({ conversionModel: 'gemini-2.5-flash' });
+        const stats = await getStats({ conversionModel: 'gemini-2.5-flash' });
+        const dates = Object.keys(listedKey.usageHistory).sort();
+
+        expect(dates).toHaveLength(35);
+        expect(dates[0]).toBe('2026-06-02');
+        expect(listedKey.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
+        expect(Object.keys(stats.usageHistory)).toHaveLength(35);
+        expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
+    });
 });

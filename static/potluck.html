@@ -321,6 +321,53 @@
             background: var(--primary-color);
             box-shadow: var(--shadow-sm);
         }
+        .cost-model-toggle {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px;
+            gap: 4px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            flex-wrap: nowrap;
+        }
+        .cost-summary-pill {
+            min-height: 32px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 10px;
+            border-radius: var(--radius-md);
+            background: var(--primary-color);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .cost-model-select {
+            min-height: 32px;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 0 8px;
+            outline: none;
+        }
+        .cost-inline {
+            color: var(--primary-color);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .cost-inline.alt { color: var(--info-color); }
+        .cost-subline {
+            margin-top: 4px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+            line-height: 1.45;
+            font-variant-numeric: tabular-nums;
+        }
 
         /* Key 列表 */
         .keys-section { margin-top: 10px; }
@@ -471,6 +518,14 @@
             margin-top: 2px;
             color: var(--text-primary);
             font-size: 11px;
+        }
+        .daily-chip small {
+            display: block;
+            margin-top: 1px;
+            color: var(--primary-color);
+            font-size: 10px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
         }
         
         .progress-bar {
@@ -884,6 +939,14 @@
                     width: 100%;
                     overflow-x: auto;
                 }
+                .cost-model-toggle {
+                    width: 100%;
+                    overflow-x: auto;
+                }
+                .cost-summary-pill {
+                    flex: 1;
+                    justify-content: center;
+                }
                 .range-option {
                     flex: 1;
                     min-width: 64px;
@@ -1028,6 +1091,12 @@
                     <button class="range-option" data-range="7d" onclick="setUsageRange('7d')" aria-pressed="false">近1周</button>
                     <button class="range-option" data-range="today" onclick="setUsageRange('today')" aria-pressed="false">当天</button>
                 </div>
+                <div class="cost-model-toggle" aria-label="价值口径">
+                    <span class="cost-summary-pill" id="costActualSummary">$0.00</span>
+                    <select id="conversionModelSelect" class="cost-model-select" aria-label="换算模型">
+                        <option value="actual">真实模型</option>
+                    </select>
+                </div>
                 <button class="theme-toggle" id="themeToggle" title="切换主题">
                     <i class="fas fa-sun"></i>
                     <i class="fas fa-moon"></i>
@@ -1064,6 +1133,7 @@
                 <div class="label">今日总 Tokens</div>
                 <div class="value" id="todayTokens">0</div>
                 <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">TPS: <span id="currentTps" style="font-weight:700;color:var(--primary-color)">0.00</span> (峰值: <span id="maxTps">0.00</span>)</div>
+                <div class="cost-subline" id="todayTokensCost"></div>
             </div>
             <div class="stat-card cyan">
                 <div class="label">今日缓存 Tokens</div>
@@ -1072,6 +1142,7 @@
             <div class="stat-card pink">
                 <div class="label">累计 Tokens</div>
                 <div class="value" id="totalTokens">0</div>
+                <div class="cost-subline" id="totalTokensCost"></div>
             </div>
             <div class="stat-card cyan">
                 <div class="label">累计缓存 Tokens</div>
@@ -1082,7 +1153,7 @@
         <!-- 使用分布统计区域 -->
         <div id="usageStatsSection" style="margin-bottom: 2.5rem; display: none;">
             <div class="section-title">
-                <i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (最近 3 个月)
+                <i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (最近 35 天)
             </div>
             <div class="usage-insights-grid">
                 <!-- Token 用量日历 -->
@@ -1134,6 +1205,7 @@
                     <div class="search-wrapper">
                         <input type="text" id="searchBox" class="search-box" placeholder="搜索名称或 Key...">
                         <select id="sortSelect" class="sort-select">
+                            <option value="rangeCost-desc">当前范围金额 ↓</option>
                             <option value="rangeTokens-desc">当前范围 Token ↓</option>
                             <option value="rangeUsage-desc">当前范围调用 ↓</option>
                             <option value="todayTokens-desc">今日 Token ↓</option>
@@ -1340,6 +1412,8 @@
         let allKeys = [];
         let currentStats = null;
         let currentUsageRange = 'total';
+        const ACTUAL_VALUE_MODE = 'actual';
+        let currentConversionModel = ACTUAL_VALUE_MODE;
         let currentDetailKeyId = null;
         let systemConfig = { defaultDailyLimit: 500 };
         const API_BASE = '/api/potluck';
@@ -1404,6 +1478,40 @@
             const parts = String(dateKey || '').split('-');
             return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : dateKey;
         }
+        function formatUsd(value) {
+            const number = Number(value || 0);
+            if (!Number.isFinite(number)) return '$0.00';
+            if (Math.abs(number) > 0 && Math.abs(number) < 0.01) return '<$0.01';
+            return `$${number.toFixed(2)}`;
+        }
+        function getDisplayCostUsd(cost) {
+            if (!cost) return 0;
+            return currentConversionModel === ACTUAL_VALUE_MODE
+                ? Number(cost.actualUsd || 0)
+                : Number(cost.convertedUsd || 0);
+        }
+        function formatDisplayCost(cost) {
+            if (!cost) return '';
+            return `<span class="cost-inline">${formatUsd(getDisplayCostUsd(cost))}</span>`;
+        }
+        function getCostQuery() {
+            return `conversionModel=${encodeURIComponent(currentConversionModel)}`;
+        }
+        function populateConversionModels(pricing) {
+            const select = document.getElementById('conversionModelSelect');
+            if (!select || !Array.isArray(pricing?.conversionModels)) return;
+            const models = pricing.conversionModels.map(item => item.model).filter(Boolean);
+            const options = [
+                '<option value="actual">真实模型</option>',
+                ...models.map(model => `<option value="${escapeHtml(model)}">换算 ${escapeHtml(model)}</option>`)
+            ];
+            select.innerHTML = options.join('');
+            select.value = currentConversionModel;
+        }
+        function setElementHtml(id, html) {
+            const node = document.getElementById(id);
+            if (node) node.innerHTML = html || '';
+        }
 
         function getTodayDateKey() {
             const utc8Date = new Date(Date.now() + (8 * 60 * 60 * 1000));
@@ -1449,7 +1557,12 @@
                 cachedTokens: 0,
                 maxQps: 0,
                 maxRpm: 0,
-                maxTps: 0
+                maxTps: 0,
+                cost: {
+                    actualUsd: 0,
+                    convertedUsd: 0,
+                    missingPriceTokens: 0
+                }
             };
         }
 
@@ -1462,6 +1575,21 @@
             target.maxQps = Math.max(target.maxQps || 0, Number(usage?.maxQps || 0));
             target.maxRpm = Math.max(target.maxRpm || 0, Number(usage?.maxRpm || 0));
             target.maxTps = Math.max(target.maxTps || 0, Number(usage?.maxTps || 0));
+            target.cost.actualUsd += Number(usage?.cost?.actualUsd || 0);
+            target.cost.convertedUsd += Number(usage?.cost?.convertedUsd || 0);
+            target.cost.missingPriceTokens += Number(usage?.cost?.missingPriceTokens || 0);
+            target.cost.conversionModel = usage?.cost?.conversionModel || target.cost.conversionModel || currentConversionModel;
+            target.cost.pricingVersion = usage?.cost?.pricingVersion || target.cost.pricingVersion || '';
+        }
+
+        function addCostBucket(targetCost, sourceCost) {
+            if (!targetCost || !sourceCost) return targetCost;
+            targetCost.actualUsd = Number(targetCost.actualUsd || 0) + Number(sourceCost.actualUsd || 0);
+            targetCost.convertedUsd = Number(targetCost.convertedUsd || 0) + Number(sourceCost.convertedUsd || 0);
+            targetCost.missingPriceTokens = Number(targetCost.missingPriceTokens || 0) + Number(sourceCost.missingPriceTokens || 0);
+            targetCost.conversionModel = sourceCost.conversionModel || targetCost.conversionModel || currentConversionModel;
+            targetCost.pricingVersion = sourceCost.pricingVersion || targetCost.pricingVersion || '';
+            return targetCost;
         }
 
         function addUsageMap(target, name, usage = {}) {
@@ -1545,25 +1673,30 @@
                     requestCount: Number(key.totalUsage || 0),
                     totalTokens: Number(key.totalTokens || 0),
                     cachedTokens: Number(key.totalCachedTokens || 0),
-                    cacheHitRatio: Number(key.totalCacheHitRatio || 0)
+                    cacheHitRatio: Number(key.totalCacheHitRatio || 0),
+                    cost: key.cost
                 };
             }
 
             if (range === 'today') {
+                const todayCost = key.usageHistory?.[getTodayDateKey()]?.summary?.cost;
                 return {
                     requestCount: Number(key.todayUsage || 0),
                     totalTokens: Number(key.todayTotalTokens || 0),
                     cachedTokens: Number(key.todayCachedTokens || 0),
-                    cacheHitRatio: Number(key.todayCacheHitRatio || 0)
+                    cacheHitRatio: Number(key.todayCacheHitRatio || 0),
+                    cost: todayCost
                 };
             }
 
             if (range === '7d') {
+                const rangeSummary = summarizeUsageHistoryForRange(key.usageHistory || {}, range).summary;
                 return {
                     requestCount: Number(key.weeklyUsage || 0),
                     totalTokens: Number(key.weeklyTotalTokens || 0),
                     cachedTokens: Number(key.weeklyCachedTokens || 0),
-                    cacheHitRatio: Number(key.weeklyCacheHitRatio || 0)
+                    cacheHitRatio: Number(key.weeklyCacheHitRatio || 0),
+                    cost: rangeSummary.cost
                 };
             }
 
@@ -1572,18 +1705,19 @@
                 requestCount: rangeSummary.requestCount,
                 totalTokens: rangeSummary.totalTokens,
                 cachedTokens: rangeSummary.cachedTokens,
-                cacheHitRatio: rangeSummary.cacheHitRatio
+                cacheHitRatio: rangeSummary.cacheHitRatio,
+                cost: rangeSummary.cost
             };
         }
 
         function renderKeyDailyUsage(usageHistory = {}, range = currentUsageRange) {
             const activeDates = getUsageRangeDates(range, usageHistory);
-            const sourceDates = range === 'total' ? Object.keys(usageHistory || {}).sort().slice(-7) : activeDates.slice(-7);
+            const sourceDates = range === 'total' ? Object.keys(usageHistory || {}).sort().slice(-35) : activeDates.slice(-35);
             const entries = sourceDates.map(date => [date, usageHistory[date]]).filter(([, day]) => day);
             if (entries.length === 0) return '';
             return `<div class="key-daily-usage">${entries.map(([date, day]) => {
                 const summary = day.summary || {};
-                return `<span class="daily-chip">${formatShortDate(date)}<b>${formatTokenCompact(summary.totalTokens || 0)}</b></span>`;
+                return `<span class="daily-chip">${formatShortDate(date)}<b>${formatTokenCompact(summary.totalTokens || 0)}</b>${summary.cost ? `<small>${formatUsd(getDisplayCostUsd(summary.cost))}</small>` : ''}</span>`;
             }).join('')}</div>`;
         }
 
@@ -1598,10 +1732,11 @@
         }
 
         async function loadData() {
-            const result = await apiRequest(`${API_BASE}/keys`);
+            const result = await apiRequest(`${API_BASE}/keys?${getCostQuery()}`);
             if (!result || !result.success) { showToast('加载失败', 'error'); return; }
             const { keys, stats } = result.data;
             currentStats = stats;
+            populateConversionModels(stats.pricing);
             document.getElementById('totalKeys').textContent = stats.totalKeys;
             document.getElementById('enabledKeys').textContent = stats.enabledKeys;
             document.getElementById('todayUsage').textContent = stats.todayTotalUsage;
@@ -1616,6 +1751,9 @@
             document.getElementById('maxRpm').textContent = (stats.maxRpm || 0).toFixed(2);
             document.getElementById('currentTps').textContent = (stats.tps || 0).toFixed(2);
             document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
+            const actualSummary = document.getElementById('costActualSummary');
+            if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(stats.cost));
+            setElementHtml('totalTokensCost', formatDisplayCost(stats.cost));
             
             // 渲染使用历史分布
             renderUsageHistory(stats.usageHistory, currentUsageRange);
@@ -1695,6 +1833,18 @@
             document.getElementById('calendarFooter').textContent = `${getUsageRangeLabel()}累计消耗: ${formatTokenCompact(currentTotal)} Tokens`;
         }
 
+        function renderRangeCostHighlights(rangeSummary) {
+            const cost = rangeSummary?.summary?.cost;
+            setElementHtml('todayTokensCost', formatDisplayCost(currentStats?.usageHistory?.[getTodayDateKey()]?.summary?.cost));
+            if (currentUsageRange !== 'total') {
+                setElementHtml('totalTokensCost', formatDisplayCost(cost));
+            } else {
+                setElementHtml('totalTokensCost', formatDisplayCost(currentStats?.cost));
+            }
+            const actualSummary = document.getElementById('costActualSummary');
+            if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(currentUsageRange === 'total' ? currentStats?.cost : cost));
+        }
+
         /**
          * 渲染当前时间范围内的使用历史分布
          */
@@ -1711,9 +1861,13 @@
             const aggregatedModels = {};
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
+            renderRangeCostHighlights(rangeSummary);
 
             Object.entries(rangeSummary.models).forEach(([m, usage]) => {
-                aggregatedModels[m] = usageCount(usage);
+                aggregatedModels[m] = {
+                    count: usageCount(usage),
+                    cost: usage.cost
+                };
             });
 
             if (totalCalls === 0) {
@@ -1726,11 +1880,11 @@
 
             // 渲染中心视角 Provider / 账号 Token 树形占比
             renderProviderAccountTokenTree('providerAccountDistribution', rangeSummary.providers, rangeSummary.accounts, totalTokens);
-            document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
+            document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
 
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', aggregatedModels, totalCalls);
-            document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
+            document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
         }
 
         function isCodexOauthAccount(account) {
@@ -1785,11 +1939,22 @@
             });
 
             return [...providerMap.values()]
-                .map(provider => ({
-                    ...provider,
-                    accounts: provider.accounts.sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary))
-                }))
+                .map(provider => {
+                    provider.accounts = provider.accounts.sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary));
+                    rollupProviderCostFromAccounts(provider);
+                    return provider;
+                })
                 .sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary));
+        }
+
+        function rollupProviderCostFromAccounts(provider) {
+            if (!provider?.accounts?.length) return provider;
+            const cost = { actualUsd: 0, convertedUsd: 0, missingPriceTokens: 0 };
+            provider.accounts.forEach(account => addCostBucket(cost, account.summary?.cost));
+            if (cost.actualUsd > 0 || cost.convertedUsd > 0 || cost.missingPriceTokens > 0) {
+                provider.summary.cost = cost;
+            }
+            return provider;
         }
 
         function renderProviderAccountRows(provider) {
@@ -1813,7 +1978,7 @@
                             <span class="account-calls">${formatNumber(calls)} 次</span>
                         </div>
                         <div class="account-token-row">
-                            <span class="account-token-value">${formatTokenCompact(tokens)} Tokens</span>
+                            <span class="account-token-value">${formatTokenCompact(tokens)} Tokens${account.summary?.cost ? ` · ${formatDisplayCost(account.summary.cost)}` : ''}</span>
                             <span class="account-token-share">${percentText}</span>
                         </div>
                         <div class="dist-bar">
@@ -1846,7 +2011,7 @@
                     <div class="distribution-item provider-account-node">
                         <div class="dist-info">
                             <span class="dist-name" title="${escapeHtml(provider.name)}">${escapeHtml(provider.name)}</span>
-                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})</span>
+                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})${provider.summary?.cost ? ` · ${formatDisplayCost(provider.summary.cost)}` : ''}</span>
                         </div>
                         <div class="dist-info" style="margin-top: -2px;">
                             <span class="dist-count">${formatNumber(calls)} 次${provider.accounts.length ? ` · ${provider.accounts.length} 个账号` : ''}</span>
@@ -1886,7 +2051,8 @@
 
         function renderDistribution(elementId, data, total) {
             const container = document.getElementById(elementId);
-            const sorted = Object.entries(data).sort((a, b) => b[1] - a[1]);
+            const getCount = item => typeof item === 'number' ? item : Number(item?.count || item?.requestCount || 0);
+            const sorted = Object.entries(data).sort((a, b) => getCount(b[1]) - getCount(a[1]));
             if (total <= 0 || sorted.length === 0) {
                 container.innerHTML = '<div class="detail-empty">当前范围暂无数据</div>';
                 return;
@@ -1895,13 +2061,15 @@
             // 最多显示前 3 个
             const topData = sorted.slice(0, 3);
             
-            container.innerHTML = topData.map(([name, count]) => {
+            container.innerHTML = topData.map(([name, item]) => {
+                const count = getCount(item);
+                const cost = typeof item === 'object' ? item.cost : null;
                 const percent = Math.round((count / total) * 100);
                 return `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name">${escapeHtml(name)}</span>
-                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)</span>
+                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)${cost ? ` · ${formatDisplayCost(cost)}` : ''}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${percent}%"></div>
@@ -1911,13 +2079,14 @@
             }).join('');
             
             if (sorted.length > 3) {
-                const otherCount = sorted.slice(3).reduce((sum, item) => sum + item[1], 0);
+                const otherCount = sorted.slice(3).reduce((sum, item) => sum + getCount(item[1]), 0);
+                const otherCost = sorted.slice(3).reduce((sum, item) => sum + getDisplayCostUsd(item[1]?.cost), 0);
                 const otherPercent = Math.round((otherCount / total) * 100);
                 container.innerHTML += `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - 3} 个)</span>
-                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)</span>
+                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)${otherCost > 0 ? ` · <span class="cost-inline">${formatUsd(otherCost)}</span>` : ''}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>
@@ -1959,6 +2128,11 @@
                 input.value = unlimited ? '' : value;
             }
             updateLimitModeView(checkboxId, unlimited);
+        }
+
+        function setConversionModel(model) {
+            currentConversionModel = model || ACTUAL_VALUE_MODE;
+            loadData();
         }
 
         function updateLimitModeView(checkboxId, unlimited) {
@@ -2047,6 +2221,7 @@
                 else if (field === 'usage') { va = a.todayUsage; vb = b.todayUsage; }
                 else if (field === 'rangeUsage') { va = getKeyRangeMetrics(a).requestCount; vb = getKeyRangeMetrics(b).requestCount; }
                 else if (field === 'rangeTokens') { va = getKeyRangeMetrics(a).totalTokens; vb = getKeyRangeMetrics(b).totalTokens; }
+                else if (field === 'rangeCost') { va = getDisplayCostUsd(getKeyRangeMetrics(a).cost); vb = getDisplayCostUsd(getKeyRangeMetrics(b).cost); }
                 else if (field === 'total') { va = a.totalUsage; vb = b.totalUsage; }
                 else if (field === 'todayTokens') { va = a.todayTotalTokens || 0; vb = b.todayTotalTokens || 0; }
                 else if (field === 'weeklyTokens') { va = a.weeklyTotalTokens || 0; vb = b.weeklyTotalTokens || 0; }
@@ -2133,12 +2308,12 @@
                             <div class="key-stat">
                                 <div class="label">${rangeLabel} Token</div>
                                 <div class="value">${formatTokenCompact(rangeMetrics.totalTokens || 0)}</div>
-                                <div class="value muted">${formatNumber(rangeMetrics.requestCount || 0)} 次 · 缓存 ${formatPercentRatio(rangeMetrics.cacheHitRatio)}</div>
+                                <div class="value muted">${formatNumber(rangeMetrics.requestCount || 0)} 次 · 缓存 ${formatPercentRatio(rangeMetrics.cacheHitRatio)}${rangeMetrics.cost ? ` · ${formatUsd(getDisplayCostUsd(rangeMetrics.cost))}` : ''}</div>
                             </div>
                             <div class="key-stat">
                             <div class="label">累计数据</div>
                             <div class="value">${key.totalUsage} 次请求</div>
-                            <div class="value muted">${formatTokenCompact(key.totalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.totalCacheHitRatio)}</div>
+                            <div class="value muted">${formatTokenCompact(key.totalTokens || 0)} Tokens · 缓存 ${formatPercentRatio(key.totalCacheHitRatio)}${key.cost ? ` · ${formatUsd(getDisplayCostUsd(key.cost))}` : ''}</div>
                         </div>
                         <div class="key-stat">
                             <div class="label">请求频率</div>
@@ -2254,7 +2429,7 @@
 
         function renderKeyDetailDailyUsage(usageHistory = {}) {
             const dates = getUsageRangeDates(currentUsageRange, usageHistory);
-            const sourceDates = (currentUsageRange === 'total' ? Object.keys(usageHistory || {}).sort() : dates).slice(-14).reverse();
+            const sourceDates = (currentUsageRange === 'total' ? Object.keys(usageHistory || {}).sort() : dates).slice(-35).reverse();
             if (sourceDates.length === 0) {
                 return '<div class="detail-empty">当前范围暂无每日明细</div>';
             }
@@ -2264,7 +2439,7 @@
                 return `
                     <div class="detail-list-item">
                         <span class="name">${formatShortDate(date)}</span>
-                        <span class="count">${formatNumber(usageCount(summary))} 次 / ${formatTokenCompact(usageTokens(summary))}</span>
+                        <span class="count">${formatNumber(usageCount(summary))} 次 / ${formatTokenCompact(usageTokens(summary))}${summary.cost ? ` · ${formatUsd(getDisplayCostUsd(summary.cost))}` : ''}</span>
                     </div>
                 `;
             }).join('')}</div>`;
@@ -2275,7 +2450,7 @@
             document.getElementById('keyDetailBody').innerHTML = '<div class="detail-empty">正在加载...</div>';
             openModal('keyDetailModal');
 
-            const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}`);
+            const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}?${getCostQuery()}`);
             if (result && result.success) {
                 renderKeyDetailModal(result.data);
                 return;
@@ -2327,7 +2502,7 @@
                     <div class="detail-metric">
                         <div class="label">${rangeLabel}Token</div>
                         <div class="value">${formatTokenCompact(rangeMetrics.totalTokens || 0)}</div>
-                        <div class="subvalue">缓存 ${formatTokenCompact(rangeMetrics.cachedTokens || 0)} · ${formatPercentRatio(rangeMetrics.cacheHitRatio)}</div>
+                        <div class="subvalue">缓存 ${formatTokenCompact(rangeMetrics.cachedTokens || 0)} · ${formatPercentRatio(rangeMetrics.cacheHitRatio)}${rangeMetrics.cost ? ` · ${formatUsd(getDisplayCostUsd(rangeMetrics.cost))}` : ''}</div>
                     </div>
                     <div class="detail-metric">
                         <div class="label">实时速率</div>
@@ -2471,6 +2646,7 @@
         document.getElementById('createKeyBtn').addEventListener('click', showCreateModal);
         document.getElementById('searchBox').addEventListener('input', applyFilterAndSort);
         document.getElementById('sortSelect').addEventListener('change', applyFilterAndSort);
+        document.getElementById('conversionModelSelect')?.addEventListener('change', (event) => setConversionModel(event.target.value));
         document.getElementById('themeToggle')?.addEventListener('click', () => {
             const currentTheme = document.documentElement.getAttribute('data-theme');
             if (currentTheme === 'dark') {

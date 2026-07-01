@@ -11,7 +11,7 @@ describe('api potluck account email enrichment source', () => {
         expect(source).toContain('extractCodexCredentialIdentity(data).codexEmail');
         expect(source).toContain('provider.codexEmail || readProviderCredentialEmail(provider)');
         expect(source).toContain('instance?.usage?.user?.email || instance?.usage?.user?.label || instance?.codexEmail');
-        expect(source).toContain('enrichPotluckStatsAccountEmails(await getStats())');
+        expect(source).toContain('enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)))');
         expect(source).toContain('enrichAccountUsageSummaryEmails(await getAccountUsageSummary())');
     });
 });
