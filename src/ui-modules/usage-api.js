@@ -175,6 +175,7 @@ function getCachedInstancesByUuid(providerCache = {}) {
 }
 
 function collectRefreshError(providerType, instance) {
+    if (instance?.skipped) return null;
     if (!instance?.error) return null;
     return {
         providerType,
@@ -344,15 +345,17 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             isDisabled: provider.isDisabled === true,
             success: false,
             usage: null,
-            error: null
+            error: null,
+            skipped: false,
+            skipReason: null
         };
 
         const scheduledRecoveryError = getScheduledRecoveryError(provider);
 
         // First check if disabled or cooling down, skip initialization for those providers
         if (provider.isDisabled) {
-            instanceResult.error = 'Provider is disabled';
-            result.errorCount++;
+            instanceResult.skipped = true;
+            instanceResult.skipReason = 'disabled';
         } else if (scheduledRecoveryError) {
             instanceResult.error = scheduledRecoveryError;
             result.errorCount++;
@@ -533,11 +536,14 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         isDisabled: provider.isDisabled === true,
         success: false,
         usage: null,
-        error: null
+        error: null,
+        skipped: false,
+        skipReason: null
     };
 
     if (provider.isDisabled) {
-        instanceResult.error = 'Provider is disabled';
+        instanceResult.skipped = true;
+        instanceResult.skipReason = 'disabled';
         return { provider, adapter: null, instanceResult };
     }
 
