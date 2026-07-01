@@ -116,6 +116,41 @@ describe('usage ledger store', () => {
         expect(rows.map(row => row.totalTokens).sort((a, b) => a - b)).toEqual([150, 200]);
     });
 
+    test('replaces a day for full rebuild without merging stale rows', async () => {
+        const store = new UsageLedgerStore({ dir: tempDir, retentionDays: 35 });
+
+        await store.recordFacts([
+            {
+                timestamp: '2026-07-01T02:00:00.000Z',
+                requestId: 'stale-row',
+                potluckKeyHash: 'sha256:key-a',
+                totalTokens: 999
+            }
+        ]);
+
+        await store.replaceFacts([
+            {
+                timestamp: '2026-07-01T03:00:00.000Z',
+                requestId: 'fresh-row',
+                potluckKeyHash: 'sha256:key-a',
+                totalTokens: 200
+            },
+            {
+                timestamp: '2026-07-01T03:00:01.000Z',
+                requestId: 'fresh-row',
+                potluckKeyHash: 'sha256:key-a',
+                totalTokens: 250
+            }
+        ]);
+
+        const rows = await store.query();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+            requestId: 'fresh-row',
+            totalTokens: 250
+        });
+    });
+
     test('cleanup removes ledger files older than the retention window', async () => {
         const store = new UsageLedgerStore({ dir: tempDir, retentionDays: 2 });
 

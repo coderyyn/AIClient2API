@@ -2022,6 +2022,9 @@ export async function getAccountUsageSummary(now = new Date()) {
             const today = cloneUsageBucket(account.today);
             const week = cloneUsageBucket(account.week);
             const month = cloneUsageBucket(account.month);
+            addCacheHitRatio(today);
+            addCacheHitRatio(week);
+            addCacheHitRatio(month);
             return {
                 ...account,
                 lastUsedAt: latestTimestamp(

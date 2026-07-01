@@ -135,6 +135,79 @@ describe('usage ledger rebuild', () => {
         });
     });
 
+    test('uses audit backup files when the canonical audit file is missing', async () => {
+        const auditDir = path.join(tempDir, 'request-audit');
+        const ledgerDir = path.join(tempDir, 'usage-ledger');
+        fs.mkdirSync(auditDir, { recursive: true });
+        fs.writeFileSync(path.join(auditDir, 'audit-2026-06-24.jsonl.before-merge.bak'), `${JSON.stringify({
+            timestamp: '2026-06-24T02:00:00.000Z',
+            requestId: 'req-backup-only',
+            request: { toProvider: 'openai-codex-oauth', model: 'gpt-5.4-mini' },
+            potluckKey: { hash: 'sha256:key-backup', name: 'Backup Client' },
+            account: { providerUuid: 'backup-provider' },
+            status: { outcome: 'success', httpStatus: 200 },
+            usage: {
+                promptTokens: 1000,
+                cachedTokens: 250,
+                completionTokens: 100,
+                totalTokens: 1100
+            }
+        })}\n`);
+
+        const result = await rebuildUsageLedger({ auditDir, ledgerDir });
+        const rows = fs.readFileSync(path.join(ledgerDir, 'usage-2026-06-24.jsonl'), 'utf8')
+            .trim()
+            .split('\n')
+            .map(line => JSON.parse(line));
+
+        expect(result.coveredDates).toEqual(['2026-06-24']);
+        expect(result.auditFacts).toBe(1);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+            requestId: 'req-backup-only',
+            potluckKeyHash: 'sha256:key-backup',
+            providerUuid: 'backup-provider',
+            totalTokens: 1100
+        });
+    });
+
+    test('prefers canonical audit files over same-day backup files', async () => {
+        const auditDir = path.join(tempDir, 'request-audit');
+        const ledgerDir = path.join(tempDir, 'usage-ledger');
+        fs.mkdirSync(auditDir, { recursive: true });
+        fs.writeFileSync(path.join(auditDir, 'audit-2026-06-25.jsonl.before-merge.bak'), `${JSON.stringify({
+            timestamp: '2026-06-25T02:00:00.000Z',
+            requestId: 'req-backup-duplicate',
+            request: { toProvider: 'openai-codex-oauth', model: 'gpt-5.4-mini' },
+            potluckKey: { hash: 'sha256:key-backup' },
+            status: { outcome: 'success', httpStatus: 200 },
+            usage: { promptTokens: 1000, completionTokens: 100, totalTokens: 1100 }
+        })}\n`);
+        fs.writeFileSync(path.join(auditDir, 'audit-2026-06-25.jsonl'), `${JSON.stringify({
+            timestamp: '2026-06-25T03:00:00.000Z',
+            requestId: 'req-canonical',
+            request: { toProvider: 'openai-codex-oauth', model: 'gpt-5.4-mini' },
+            potluckKey: { hash: 'sha256:key-canonical' },
+            status: { outcome: 'success', httpStatus: 200 },
+            usage: { promptTokens: 2000, completionTokens: 200, totalTokens: 2200 }
+        })}\n`);
+
+        const result = await rebuildUsageLedger({ auditDir, ledgerDir });
+        const rows = fs.readFileSync(path.join(ledgerDir, 'usage-2026-06-25.jsonl'), 'utf8')
+            .trim()
+            .split('\n')
+            .map(line => JSON.parse(line));
+
+        expect(result.coveredDates).toEqual(['2026-06-25']);
+        expect(result.auditFacts).toBe(1);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+            requestId: 'req-canonical',
+            potluckKeyHash: 'sha256:key-canonical',
+            totalTokens: 2200
+        });
+    });
+
     test('skips failed audit events and zero token audit events', async () => {
         const auditDir = path.join(tempDir, 'request-audit');
         const ledgerDir = path.join(tempDir, 'usage-ledger');

@@ -121,6 +121,41 @@ export class UsageLedgerStore {
         return normalizedFacts;
     }
 
+    async replaceFacts(facts = []) {
+        const normalizedFacts = facts.map(fact => normalizeFact(fact));
+        const byFile = new Map();
+        for (const fact of normalizedFacts) {
+            const filePath = this.getFilePath(fact.timestamp);
+            if (!byFile.has(filePath)) byFile.set(filePath, []);
+            byFile.get(filePath).push(fact);
+        }
+
+        for (const factsForDay of byFile.values()) {
+            await this.writeDayFacts(factsForDay[0].timestamp, factsForDay);
+        }
+
+        const latestTimestamp = normalizedFacts
+            .map(fact => toDate(fact.timestamp))
+            .sort((a, b) => b.getTime() - a.getTime())[0];
+        if (latestTimestamp) {
+            await this.cleanup(latestTimestamp);
+        }
+        return normalizedFacts;
+    }
+
+    async writeDayFacts(timestamp, facts = []) {
+        await fsp.mkdir(this.dir, { recursive: true });
+        const byId = new Map();
+        for (const fact of facts) {
+            const id = factIdentity(fact);
+            byId.set(id, mergeMaxFact(byId.get(id), fact));
+        }
+        const nextRows = [...byId.values()]
+            .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+        const content = nextRows.map(row => JSON.stringify(row)).join('\n');
+        await fsp.writeFile(this.getFilePath(timestamp), content ? `${content}\n` : '', { encoding: 'utf8', mode: 0o600 });
+    }
+
     async rewriteDay(timestamp, transform) {
         await fsp.mkdir(this.dir, { recursive: true });
         const filePath = this.getFilePath(timestamp);

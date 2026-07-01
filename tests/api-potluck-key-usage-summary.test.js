@@ -435,6 +435,7 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 1,
             promptTokens: 1000,
+            cachedTokens: 100,
             completionTokens: 100,
             totalTokens: 1100
         }, 'req-month-only', {
@@ -447,6 +448,7 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 2,
             promptTokens: 2000,
+            cachedTokens: 400,
             completionTokens: 200,
             totalTokens: 2200
         }, 'req-week', {
@@ -459,6 +461,7 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 3,
             promptTokens: 3000,
+            cachedTokens: 600,
             completionTokens: 300,
             totalTokens: 3300
         }, 'req-today', {
@@ -486,19 +489,20 @@ describe('api potluck key usage summary', () => {
             accountEmail: 'codex-a@example.com',
             providerName: 'Codex Account A'
         });
-        expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
-        expect(account.week).toMatchObject({ requestCount: 6, totalTokens: 6600 });
-        expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
+        expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300, cachedTokens: 600, cacheHitRatio: 0.2 });
+        expect(account.week).toMatchObject({ requestCount: 6, totalTokens: 6600, cachedTokens: 1100 });
+        expect(account.week.cacheHitRatio).toBeCloseTo(1100 / 6000);
+        expect(account.month.cacheHitRatio).toBeCloseTo(1100 / 6000);
         expect(account.today.cost).toMatchObject({
-            actualUsd: 0.024,
+            actualUsd: 0.0213,
             missingPriceTokens: 0
         });
         expect(account.week.cost).toMatchObject({
-            actualUsd: 0.048,
+            actualUsd: 0.043050000000000005,
             missingPriceTokens: 0
         });
         expect(account.month.cost).toMatchObject({
-            actualUsd: 0.048,
+            actualUsd: 0.043050000000000005,
             missingPriceTokens: 0
         });
         expect(account.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');

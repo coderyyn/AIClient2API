@@ -6,12 +6,16 @@ import { UsageLedgerStore } from './ledger-store.js';
 const SUMMARY_FILE = 'usage-summary.json';
 
 function isAuditFile(name) {
-    return /^audit-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name);
+    return /^audit-\d{4}-\d{2}-\d{2}\.jsonl(?:\..+\.bak)?$/.test(name);
 }
 
 function auditDateFromFile(filePath) {
-    const match = path.basename(filePath).match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+    const match = path.basename(filePath).match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl(?:\..+\.bak)?$/);
     return match ? match[1] : null;
+}
+
+function isCanonicalAuditFile(filePath) {
+    return /^audit-\d{4}-\d{2}-\d{2}\.jsonl$/.test(path.basename(filePath));
 }
 
 function splitAccountKey(accountKey = '') {
@@ -236,10 +240,25 @@ function isSuccessfulAuditEvent(event = {}) {
 async function listAuditFiles(auditDir) {
     if (!auditDir) return [];
     const entries = await fsp.readdir(auditDir, { withFileTypes: true }).catch(() => []);
-    return entries
+    const byDate = new Map();
+    for (const filePath of entries
         .filter(entry => entry.isFile() && isAuditFile(entry.name))
         .map(entry => path.join(auditDir, entry.name))
-        .sort();
+        .sort()) {
+        const date = auditDateFromFile(filePath);
+        if (!date) continue;
+        const current = byDate.get(date) || { canonical: null, backups: [] };
+        if (isCanonicalAuditFile(filePath)) {
+            current.canonical = filePath;
+        } else {
+            current.backups.push(filePath);
+        }
+        byDate.set(date, current);
+    }
+    return [...byDate.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, files]) => files.canonical || files.backups.sort().at(-1))
+        .filter(Boolean);
 }
 
 async function readJsonl(filePath) {
@@ -351,7 +370,7 @@ export async function rebuildUsageLedger({
             addFactToSummary(summary, fact);
             auditFacts += 1;
         }
-        await store.recordFacts(factsForFile);
+        await store.replaceFacts(factsForFile);
     }
 
     const stats = await readModelUsageStats(modelUsagePath);
@@ -359,7 +378,7 @@ export async function rebuildUsageLedger({
     for (const fact of fallbackFacts) {
         addFactToSummary(summary, fact);
     }
-    await store.recordFacts(fallbackFacts);
+    await store.replaceFacts(fallbackFacts);
     await writeSummary(ledgerDir, summary);
 
     return {
