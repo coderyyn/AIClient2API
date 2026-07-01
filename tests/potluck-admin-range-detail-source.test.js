@@ -55,6 +55,10 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('filter: usage => usageTokens(usage) > 0');
         expect(source).toContain('const MODEL_DISPLAY_ALIASES = {');
         expect(source).toContain("'gtp-5.1': 'gpt-5.3-codex-spark'");
+        expect(source).toContain("'gpt-5.1': 'gpt-5.3-codex-spark'");
+        expect(source).toContain("'gpt-5': 'gpt-5.3-codex-spark'");
+        expect(source).toContain("'5.4': 'gpt-5.3-codex-spark'");
+        expect(source).toContain("'5.5': 'gpt-5.3-codex-spark'");
         expect(source).not.toContain("'gpt-5.5-fast': 'gpt-5.5'");
         expect(source).toContain("'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark'");
         expect(source).toContain('function aggregateModelDistributionForDisplay(models = {}, minCalls = 100)');

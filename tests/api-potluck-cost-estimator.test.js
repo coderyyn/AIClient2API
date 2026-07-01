@@ -82,6 +82,10 @@ describe('api potluck cost estimator', () => {
         const compactGpt55 = estimateUsageCost(usage, 'gpt5.5');
         const gpt55 = estimateUsageCost(usage, 'gpt-5.5');
         const typoGpt51 = estimateUsageCost(usage, 'gtp-5.1');
+        const nonexistentGpt51 = estimateUsageCost(usage, 'gpt-5.1');
+        const nonexistentGpt5 = estimateUsageCost(usage, 'gpt-5');
+        const bareGpt54 = estimateUsageCost(usage, '5.4');
+        const bareGpt55 = estimateUsageCost(usage, '5.5');
 
         expect(sparkFast).toMatchObject({
             model: 'gpt-5.3-codex-spark',
@@ -98,6 +102,13 @@ describe('api potluck cost estimator', () => {
             missingPriceTokens: 0
         });
         expect(typoGpt51.usd).toBeCloseTo(spark.usd, 8);
+        for (const estimate of [nonexistentGpt51, nonexistentGpt5, bareGpt54, bareGpt55]) {
+            expect(estimate).toMatchObject({
+                model: 'gpt-5.3-codex-spark',
+                missingPriceTokens: 0
+            });
+            expect(estimate.usd).toBeCloseTo(spark.usd, 8);
+        }
     });
 
     test('keeps gpt 5.5 fast separate because it has different pricing', () => {

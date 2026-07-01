@@ -28,7 +28,11 @@ const MODEL_PRICE_ALIASES = {
     'gpt-5.4-mini-fast': 'gpt-5.4-mini',
     'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark',
     'gpt-5.3codexspark': 'gpt-5.3-codex-spark',
-    'gtp-5.1': 'gpt-5.3-codex-spark'
+    'gtp-5.1': 'gpt-5.3-codex-spark',
+    'gpt-5.1': 'gpt-5.3-codex-spark',
+    'gpt-5': 'gpt-5.3-codex-spark',
+    '5.4': 'gpt-5.3-codex-spark',
+    '5.5': 'gpt-5.3-codex-spark'
 };
 
 const GEMINI_CONVERSION_MODELS = [
