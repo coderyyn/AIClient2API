@@ -1909,7 +1909,8 @@
                 document.getElementById('providerAccountDistribution').innerHTML = '<div class="detail-empty">当前范围暂无 Provider / 账号 Token 数据</div>';
                 renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
                     maxItems: Number.POSITIVE_INFINITY,
-                    emptyText: '当前范围暂无模型数据'
+                    emptyText: '当前范围暂无模型数据',
+                    filter: usage => usageTokens(usage) > 0
                 });
                 document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
                 document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
@@ -1923,7 +1924,8 @@
             // 渲染模型分布 (模型总数与提供商总数一致)
             renderDistribution('modelDistribution', rangeSummary.models, totalCalls, {
                 maxItems: Number.POSITIVE_INFINITY,
-                emptyText: '当前范围暂无模型数据'
+                emptyText: '当前范围暂无模型数据',
+                filter: usage => usageTokens(usage) > 0
             });
             document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost ? ` · ${formatDisplayCost(rangeSummary.summary.cost)}` : ''}`;
         }
@@ -2093,7 +2095,10 @@
         function renderDistribution(elementId, data, total, options = {}) {
             const container = document.getElementById(elementId);
             const getCount = item => typeof item === 'number' ? item : Number(item?.count || item?.requestCount || 0);
-            const sorted = Object.entries(data).sort((a, b) => getCount(b[1]) - getCount(a[1]));
+            const filterItem = typeof options.filter === 'function' ? options.filter : () => true;
+            const sorted = Object.entries(data)
+                .filter(([, item]) => filterItem(item))
+                .sort((a, b) => getCount(b[1]) - getCount(a[1]));
             const maxItems = options.maxItems === Number.POSITIVE_INFINITY
                 ? Number.POSITIVE_INFINITY
                 : (Number.isFinite(options.maxItems) ? options.maxItems : 3);
