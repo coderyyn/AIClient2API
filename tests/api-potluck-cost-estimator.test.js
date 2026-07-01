@@ -82,7 +82,6 @@ describe('api potluck cost estimator', () => {
         const compactGpt55 = estimateUsageCost(usage, 'gpt5.5');
         const gpt55 = estimateUsageCost(usage, 'gpt-5.5');
         const typoGpt51 = estimateUsageCost(usage, 'gtp-5.1');
-        const gpt51 = estimateUsageCost(usage, 'gpt-5.1');
 
         expect(sparkFast).toMatchObject({
             model: 'gpt-5.3-codex-spark',
@@ -95,10 +94,25 @@ describe('api potluck cost estimator', () => {
         });
         expect(compactGpt55.usd).toBeCloseTo(gpt55.usd, 8);
         expect(typoGpt51).toMatchObject({
-            model: 'gpt-5.1',
+            model: 'gpt-5.3-codex-spark',
             missingPriceTokens: 0
         });
-        expect(typoGpt51.usd).toBeCloseTo(gpt51.usd, 8);
+        expect(typoGpt51.usd).toBeCloseTo(spark.usd, 8);
+    });
+
+    test('keeps gpt 5.5 fast separate because it has different pricing', () => {
+        const cost = estimateUsageCost({
+            promptTokens: 1000,
+            cachedTokens: 100,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'gpt-5.5-fast');
+
+        expect(cost).toMatchObject({
+            model: 'gpt-5.5-fast',
+            usd: 0,
+            missingPriceTokens: 1100
+        });
     });
 
     test('only allows gemini conversion models from 2.5 flash-lite through 3.5 flash', () => {
