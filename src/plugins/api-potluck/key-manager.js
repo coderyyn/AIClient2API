@@ -514,6 +514,13 @@ function normalizeEmailAlias(value) {
     return isEmailLike(value) ? value.trim().toLowerCase() : null;
 }
 
+function normalizeDisplayAlias(value) {
+    if (!value) return null;
+    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, '');
+    if (!normalized || normalized.startsWith('redacted-email:')) return null;
+    return normalized;
+}
+
 function getProviderFromAccountKey(accountKey) {
     return accountKey?.split(':')[0] || 'unknown';
 }
@@ -554,6 +561,15 @@ function getAccountSummaryAliases(accountKey, account = {}) {
     const emailAlias = normalizeEmailAlias(account.accountEmail) || normalizeEmailAlias(account.providerName);
     if (emailAlias) {
         aliases.add(`email:${provider}:${emailAlias}`);
+    }
+    for (const value of [
+        getIdentityFromAccountKey(accountKey),
+        account.providerUuid,
+        account.accountIdentity,
+        account.providerName
+    ]) {
+        const displayAlias = normalizeDisplayAlias(value);
+        if (displayAlias) aliases.add(`display:${provider}:${displayAlias}`);
     }
 
     return [...aliases];
@@ -1136,6 +1152,48 @@ function getUsageHistoryTotals(usageHistory = {}) {
     return { totals, models };
 }
 
+function cloneUsageHistoryWithCosts(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
+    const cloned = JSON.parse(JSON.stringify(usageHistory || {}));
+    addUsageHistoryRatios(cloned);
+    addCostToUsageHistory(cloned, conversionModel);
+    return cloned;
+}
+
+function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
+    const compact = {};
+    for (const [date, day] of Object.entries(usageHistory || {})) {
+        const summary = cloneUsageBucket(day?.summary);
+        addCacheHitRatio(summary);
+        if (!summary.cost) {
+            summary.cost = buildCost(summary, day?.models || {}, conversionModel);
+        }
+        compact[date] = { summary };
+    }
+    return compact;
+}
+
+function mergeKeyUsageHistory({
+    ledgerUsageHistory = null,
+    legacyUsageHistory = {},
+    conversionModel = DEFAULT_CONVERSION_MODEL,
+    summaryOnly = false
+} = {}) {
+    const usageHistory = summaryOnly
+        ? cloneUsageHistorySummaryOnly(ledgerUsageHistory || {}, conversionModel)
+        : (ledgerUsageHistory ? JSON.parse(JSON.stringify(ledgerUsageHistory)) : {});
+    const legacyHistory = summaryOnly
+        ? cloneUsageHistorySummaryOnly(legacyUsageHistory || {}, conversionModel)
+        : cloneUsageHistoryWithCosts(legacyUsageHistory || {}, conversionModel);
+
+    for (const [date, day] of Object.entries(legacyHistory || {})) {
+        if (!usageHistory[date]) usageHistory[date] = day;
+    }
+
+    trimUsageHistory(usageHistory, USAGE_HISTORY_RETENTION_DAYS);
+    addUsageHistoryRatios(usageHistory);
+    return usageHistory;
+}
+
 function hasUsageTotals(usage = {}) {
     return toNumber(usage.requestCount) > 0 ||
         toNumber(usage.promptTokens) > 0 ||
@@ -1154,12 +1212,12 @@ function getCostOptions(options = {}) {
 function enrichKeyUsage(keyData, options = {}) {
     const { conversionModel } = getCostOptions(options);
     const ledgerUsageHistory = options.ledgerUsageHistory || null;
-    const usageHistory = ledgerUsageHistory
-        ? JSON.parse(JSON.stringify(ledgerUsageHistory))
-        : addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
-    if (!ledgerUsageHistory) {
-        addCostToUsageHistory(usageHistory, conversionModel);
-    }
+    const usageHistory = mergeKeyUsageHistory({
+        ledgerUsageHistory,
+        legacyUsageHistory: keyData.usageHistory || {},
+        conversionModel,
+        summaryOnly: Boolean(options.summaryOnly)
+    });
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
     const historyTotals = getUsageHistoryTotals(usageHistory);
     const todaySummary = usageHistory[getTodayDateString()]?.summary || null;
@@ -1181,6 +1239,8 @@ function enrichKeyUsage(keyData, options = {}) {
         : historyTotals.totals;
     const cumulativeModels = Object.keys(keyData.totalModels || {}).length > 0
         ? keyData.totalModels
+        : (options.ledgerModels && Object.keys(options.ledgerModels || {}).length > 0)
+            ? options.ledgerModels
         : historyTotals.models;
     const keyHash = hashSecret(keyData.id);
     const enriched = {
@@ -1213,7 +1273,9 @@ function enrichKeyUsage(keyData, options = {}) {
         weeklyReasoningTokens: weeklySummary.reasoningTokens,
         weeklyTotalTokens: weeklySummary.totalTokens,
         weeklyCachedTokens: weeklySummary.cachedTokens,
-        todayCacheHitRatio: keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0,
+        todayCacheHitRatio: todaySummary
+            ? todaySummary.cacheHitRatio
+            : (keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0),
         weeklyCacheHitRatio: weeklySummary.cacheHitRatio,
         totalCacheHitRatio: keyData.totalPromptTokens > 0 ? keyData.totalCachedTokens / keyData.totalPromptTokens : 0
     };
@@ -1391,9 +1453,12 @@ export async function listKeys(options = {}) {
     const ledgerSnapshot = await readLedgerUsageSnapshot(options);
     for (const [keyId, keyData] of Object.entries(keyStore.keys)) {
         const keyHash = hashSecret(keyId);
+        const ledgerKeySnapshot = ledgerSnapshot?.byKeyHash.get(keyHash) || null;
         const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), {
             ...options,
-            ledgerUsageHistory: ledgerSnapshot?.byKeyHash.get(keyHash)?.usageHistory || null
+            summaryOnly: Boolean(options.summaryOnly),
+            ledgerUsageHistory: ledgerKeySnapshot?.usageHistory || null,
+            ledgerModels: ledgerKeySnapshot?.models || null
         });
         const rates = rateManager.getStats(`key:${keyId}`);
         keys.push({
@@ -1418,9 +1483,11 @@ export async function getKey(keyId, options = {}) {
     const keyData = keyStore.keys[keyId];
     if (!keyData) return null;
     const ledgerSnapshot = await readLedgerUsageSnapshot(options);
+    const ledgerKeySnapshot = ledgerSnapshot?.byKeyHash.get(hashSecret(keyId)) || null;
     const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), {
         ...options,
-        ledgerUsageHistory: ledgerSnapshot?.byKeyHash.get(hashSecret(keyId))?.usageHistory || null
+        ledgerUsageHistory: ledgerKeySnapshot?.usageHistory || null,
+        ledgerModels: ledgerKeySnapshot?.models || null
     });
     const rates = rateManager.getStats(`key:${keyId}`);
     return {

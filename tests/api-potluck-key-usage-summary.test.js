@@ -952,4 +952,190 @@ describe('api potluck key usage summary', () => {
         expect(Object.keys(stats.usageHistory)).toHaveLength(35);
         expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
     });
+
+    test('list summary mode merges ledger dates with legacy key history without returning heavy day details', async () => {
+        jest.setSystemTime(new Date('2026-07-01T04:00:00.000Z'));
+        const keyId = 'maki_legacy_fallback';
+        const keyHash = hashSecretForTest(keyId);
+        fs.writeFileSync(path.join(tempDir, 'configs', 'api-potluck-keys.json'), JSON.stringify({
+            keys: {
+                [keyId]: {
+                    id: keyId,
+                    name: 'Legacy Client',
+                    createdAt: '2026-06-20T00:00:00.000Z',
+                    dailyLimit: 1000,
+                    totalUsage: 2,
+                    totalPromptTokens: 3000,
+                    totalCompletionTokens: 300,
+                    totalTokens: 3300,
+                    totalModels: {
+                        'gpt-5.4-mini': {
+                            requestCount: 2,
+                            promptTokens: 3000,
+                            completionTokens: 300,
+                            totalTokens: 3300
+                        }
+                    },
+                    lastResetDate: '2026-07-01',
+                    enabled: true,
+                    usageHistory: {
+                        '2026-06-29': {
+                            summary: {
+                                requestCount: 1,
+                                promptTokens: 1000,
+                                cachedTokens: 200,
+                                completionTokens: 100,
+                                totalTokens: 1100
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 1,
+                                    promptTokens: 1000,
+                                    cachedTokens: 200,
+                                    completionTokens: 100,
+                                    totalTokens: 1100
+                                }
+                            },
+                            accounts: {
+                                'openai-codex-oauth:legacy@example.com': {
+                                    provider: 'openai-codex-oauth',
+                                    providerUuid: 'legacy@example.com',
+                                    summary: { requestCount: 1, totalTokens: 1100 },
+                                    models: {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }), 'utf8');
+        const ledgerDir = path.join(tempDir, 'configs', 'usage-ledger');
+        fs.mkdirSync(ledgerDir, { recursive: true });
+        fs.writeFileSync(path.join(ledgerDir, 'usage-summary.json'), JSON.stringify({
+            generatedAt: '2026-07-01T04:00:00.000Z',
+            usageHistory: {
+                '2026-07-01': {
+                    summary: {
+                        requestCount: 1,
+                        promptTokens: 2000,
+                        cachedTokens: 600,
+                        completionTokens: 200,
+                        totalTokens: 2200
+                    },
+                    models: {
+                        'gpt-5.4-mini': {
+                            requestCount: 1,
+                            promptTokens: 2000,
+                            cachedTokens: 600,
+                            completionTokens: 200,
+                            totalTokens: 2200
+                        }
+                    },
+                    accounts: {},
+                    providers: {},
+                    hours: {}
+                }
+            },
+            byKeyHash: {
+                [keyHash]: {
+                    usageHistory: {
+                        '2026-07-01': {
+                            summary: {
+                                requestCount: 1,
+                                promptTokens: 2000,
+                                cachedTokens: 600,
+                                completionTokens: 200,
+                                totalTokens: 2200
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 1,
+                                    promptTokens: 2000,
+                                    cachedTokens: 600,
+                                    completionTokens: 200,
+                                    totalTokens: 2200
+                                }
+                            },
+                            accounts: {},
+                            providers: {},
+                            hours: {}
+                        }
+                    },
+                    totals: { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 },
+                    models: {
+                        'gpt-5.4-mini': { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 }
+                    }
+                }
+            },
+            totals: { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 },
+            models: {
+                'gpt-5.4-mini': { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 }
+            }
+        }), 'utf8');
+
+        const { listKeys, getKey } = await loadKeyManager();
+        const [listedKey] = await listKeys({ summaryOnly: true });
+        const detailKey = await getKey(keyId);
+
+        expect(Object.keys(listedKey.usageHistory).sort()).toEqual(['2026-06-29', '2026-07-01']);
+        expect(listedKey.usageHistory['2026-06-29'].summary).toMatchObject({ requestCount: 1, totalTokens: 1100 });
+        expect(listedKey.usageHistory['2026-06-29'].accounts).toBeUndefined();
+        expect(listedKey.usageHistory['2026-07-01'].summary).toMatchObject({ requestCount: 1, totalTokens: 2200 });
+        expect(listedKey.usageHistory['2026-07-01'].models).toBeUndefined();
+        expect(detailKey.usageHistory['2026-06-29'].accounts['openai-codex-oauth:legacy@example.com'].summary).toMatchObject({
+            requestCount: 1,
+            totalTokens: 1100
+        });
+        expect(detailKey.usageHistory['2026-07-01'].models['gpt-5.4-mini']).toMatchObject({
+            requestCount: 1,
+            totalTokens: 2200
+        });
+    });
+
+    test('getAccountUsageSummary merges display-name aliases that differ only by case', async () => {
+        jest.setSystemTime(new Date('2026-07-01T04:00:00.000Z'));
+        const ledgerDir = path.join(tempDir, 'configs', 'usage-ledger');
+        fs.mkdirSync(ledgerDir, { recursive: true });
+        fs.writeFileSync(path.join(ledgerDir, 'usage-summary.json'), JSON.stringify({
+            generatedAt: '2026-07-01T04:00:00.000Z',
+            usageHistory: {
+                '2026-07-01': {
+                    summary: { requestCount: 2, promptTokens: 3000, completionTokens: 300, totalTokens: 3300 },
+                    models: {},
+                    providers: {},
+                    hours: {},
+                    accounts: {
+                        'openai-codex-oauth:GaulinRosiles6731': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'GaulinRosiles6731',
+                            accountIdentity: 'GaulinRosiles6731',
+                            providerName: 'GaulinRosiles6731',
+                            summary: { requestCount: 1, promptTokens: 1000, completionTokens: 100, totalTokens: 1100 },
+                            models: {}
+                        },
+                        'openai-codex-oauth:gaulinrosiles6731': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'gaulinrosiles6731',
+                            accountIdentity: 'gaulinrosiles6731',
+                            providerName: 'gaulinrosiles6731',
+                            summary: { requestCount: 1, promptTokens: 2000, completionTokens: 200, totalTokens: 2200 },
+                            models: {}
+                        }
+                    }
+                }
+            },
+            byKeyHash: {},
+            totals: { requestCount: 2, promptTokens: 3000, completionTokens: 300, totalTokens: 3300 },
+            models: {}
+        }), 'utf8');
+
+        const { getAccountUsageSummary } = await loadKeyManager();
+        const summary = await getAccountUsageSummary(new Date('2026-07-01T04:00:00.000Z'));
+
+        expect(summary.accounts).toHaveLength(1);
+        expect(summary.accounts[0].today).toMatchObject({
+            requestCount: 2,
+            totalTokens: 3300
+        });
+    });
 });
