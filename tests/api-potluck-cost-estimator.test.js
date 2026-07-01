@@ -54,6 +54,21 @@ describe('api potluck cost estimator', () => {
         expect(spark.pricingSource).toBe('temporary:gpt-5.4-mini');
     });
 
+    test('prices gpt image 2 image tokens from the official image generation rates', () => {
+        const usage = {
+            promptTokens: 1000000,
+            cachedTokens: 250000,
+            completionTokens: 100000,
+            totalTokens: 1100000
+        };
+
+        const cost = estimateUsageCost(usage, 'gpt-image-2');
+
+        expect(cost.usd).toBeCloseTo(((750000 * 8.00) + (250000 * 2.00) + (100000 * 30.00)) / 1000000, 8);
+        expect(cost.missingPriceTokens).toBe(0);
+        expect(cost.pricingSource).toBe('official');
+    });
+
     test('only allows gemini conversion models from 2.5 flash-lite through 3.5 flash', () => {
         expect(getConversionModels().map(item => item.model)).toEqual([
             'gemini-2.5-flash-lite',

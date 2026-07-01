@@ -660,6 +660,38 @@ function readModelUsageAccountLastUsedIndex() {
     return index;
 }
 
+function readModelUsageDailyHistory(conversionModel = DEFAULT_CONVERSION_MODEL) {
+    if (!existsSync(MODEL_USAGE_STATS_FILE)) return null;
+
+    try {
+        const stats = JSON.parse(readFileSync(MODEL_USAGE_STATS_FILE, 'utf8'));
+        const daily = stats.daily || {};
+        const usageHistory = {};
+        let hasAccountUsage = false;
+
+        for (const [dateKey, day] of Object.entries(daily)) {
+            const normalizedDay = normalizeUsageHistoryDay({
+                summary: day,
+                models: day?.models || {},
+                accounts: day?.accounts || {}
+            });
+            if (Object.keys(normalizedDay.accounts || {}).length > 0) {
+                hasAccountUsage = true;
+            }
+            usageHistory[dateKey] = normalizedDay;
+        }
+
+        if (!hasAccountUsage) return null;
+        trimUsageHistory(usageHistory, USAGE_HISTORY_RETENTION_DAYS);
+        addUsageHistoryRatios(usageHistory);
+        addCostToUsageHistory(usageHistory, conversionModel);
+        return usageHistory;
+    } catch (error) {
+        logger.warn(`[API Potluck] Failed to read model usage daily account history: ${error.message}`);
+        return null;
+    }
+}
+
 function getIndexedAccountLastUsedAt(account, lastUsedIndex) {
     let latest = null;
     for (const alias of getAccountSummaryAliases(account.accountKey, account)) {
@@ -1479,12 +1511,16 @@ export async function getStats(options = {}) {
  * 用量查询页只需要轻量摘要，避免拉取全部 Potluck Key 历史。
  */
 export async function getAccountUsageSummary(now = new Date()) {
-    const stats = await getStats();
+    const { conversionModel } = getCostOptions();
+    const modelUsageHistory = readModelUsageDailyHistory(conversionModel);
+    const stats = modelUsageHistory ? null : await getStats({ conversionModel });
+    const usageHistory = modelUsageHistory || stats.usageHistory || {};
+    const source = modelUsageHistory ? 'model-usage-stats/daily' : 'potluck/model-usage-stats';
     const starts = getBeijingPeriodStarts(now);
     const accounts = new Map();
     const aliasIndex = new Map();
 
-    for (const [dateKey, day] of Object.entries(stats.usageHistory || {})) {
+    for (const [dateKey, day] of Object.entries(usageHistory)) {
         const inToday = dateKey === starts.today;
         const inWeek = dateKey >= starts.week;
         const inMonth = dateKey >= starts.month;
@@ -1556,7 +1592,7 @@ export async function getAccountUsageSummary(now = new Date()) {
         ));
 
     return {
-        source: 'potluck/model-usage-stats',
+        source,
         timezone: 'Asia/Shanghai',
         periods: starts,
         updatedAt: new Date().toISOString(),

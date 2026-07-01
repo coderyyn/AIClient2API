@@ -366,6 +366,82 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('getAccountUsageSummary prefers model usage daily history so month includes prior days', async () => {
+        fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
+            updatedAt: '2026-07-02T09:00:00.000Z',
+            daily: {
+                '2026-07-01': {
+                    accounts: {
+                        'openai-codex-oauth:daily@example.com': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'daily@example.com',
+                            accountIdentity: 'daily@example.com',
+                            accountEmail: 'daily@example.com',
+                            providerName: 'Daily Account',
+                            summary: {
+                                requestCount: 2,
+                                promptTokens: 2000,
+                                completionTokens: 200,
+                                totalTokens: 2200,
+                                lastUsedAt: '2026-07-01T02:00:00.000Z'
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 2,
+                                    promptTokens: 2000,
+                                    completionTokens: 200,
+                                    totalTokens: 2200,
+                                    lastUsedAt: '2026-07-01T02:00:00.000Z'
+                                }
+                            }
+                        }
+                    }
+                },
+                '2026-07-02': {
+                    accounts: {
+                        'openai-codex-oauth:daily@example.com': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'daily@example.com',
+                            accountIdentity: 'daily@example.com',
+                            accountEmail: 'daily@example.com',
+                            providerName: 'Daily Account',
+                            summary: {
+                                requestCount: 3,
+                                promptTokens: 3000,
+                                completionTokens: 300,
+                                totalTokens: 3300,
+                                lastUsedAt: '2026-07-02T02:00:00.000Z'
+                            },
+                            models: {
+                                'gpt-image-2': {
+                                    requestCount: 3,
+                                    promptTokens: 3000,
+                                    completionTokens: 300,
+                                    totalTokens: 3300,
+                                    lastUsedAt: '2026-07-02T02:00:00.000Z'
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }), 'utf8');
+
+        const { getAccountUsageSummary } = await loadKeyManager();
+        const summary = await getAccountUsageSummary(new Date('2026-07-02T03:00:00.000Z'));
+        const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:daily@example.com');
+
+        expect(account.today).toMatchObject({
+            requestCount: 3,
+            totalTokens: 3300
+        });
+        expect(account.month).toMatchObject({
+            requestCount: 5,
+            totalTokens: 5500
+        });
+        expect(account.today.cost.missingPriceTokens).toBe(0);
+    });
+
     test('getAccountUsageSummary merges Codex buckets by email across provider UUID and identity changes', async () => {
         const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
 
