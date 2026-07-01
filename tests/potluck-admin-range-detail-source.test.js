@@ -105,7 +105,14 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function formatUsd(value)');
         expect(source).toContain('function getDisplayCostUsd(cost)');
         expect(source).toContain('function formatDisplayCost(cost)');
-        expect(source).toContain('<option value="actual">真实模型</option>');
+        expect(source).toContain('<option value="actual">真实</option>');
+        expect(source).toContain('...models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`)');
+        expect(source).not.toContain('换算 ${escapeHtml(model)}');
+        expect(source).toContain('function setConversionLoading(loading)');
+        expect(source).toContain("toggle.classList.toggle('is-loading', loading)");
+        expect(source).toContain('select.disabled = loading');
+        expect(source).toContain('setConversionLoading(true)');
+        expect(source).toContain('setConversionLoading(false)');
         expect(source).not.toContain('实际 <span class="cost-inline">');
         expect(source).not.toContain('换算 <span class="cost-inline alt">');
         expect(source).toContain('.slice(-35)');
@@ -113,6 +120,16 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).not.toContain('价格版本：2026-07-01 官方快照');
         expect(source).toContain('节点与 Token 使用统计 (最近 35 天)');
         expect(source).not.toContain('节点与 Token 使用统计 (最近 3 个月)');
+    });
+
+    test('admin key list defaults to sorting by current range tokens', () => {
+        const source = loadPotluckSource();
+        const rangeTokenOption = '<option value="rangeTokens-desc">当前范围 Token ↓</option>';
+        const rangeCostOption = '<option value="rangeCost-desc">当前范围金额 ↓</option>';
+
+        expect(source.indexOf(rangeTokenOption)).toBeGreaterThanOrEqual(0);
+        expect(source.indexOf(rangeTokenOption)).toBeLessThan(source.indexOf(rangeCostOption));
+        expect(source).toContain("else if (field === 'rangeTokens') { va = getKeyRangeMetrics(a).totalTokens; vb = getKeyRangeMetrics(b).totalTokens; }");
     });
 
     test('admin provider account tree rolls account cost up to provider headers', () => {

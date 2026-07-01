@@ -324,12 +324,30 @@
         .cost-model-toggle {
             display: inline-flex;
             align-items: center;
+            position: relative;
             padding: 3px;
             gap: 4px;
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
             flex-wrap: nowrap;
+        }
+        .cost-model-toggle.is-loading {
+            box-shadow: 0 0 0 3px var(--primary-10);
+        }
+        .cost-model-toggle.is-loading::after {
+            content: '';
+            width: 14px;
+            height: 14px;
+            margin: 0 8px 0 2px;
+            border: 2px solid var(--primary-20);
+            border-top-color: var(--primary-color);
+            border-radius: var(--radius-full);
+            animation: costModelSpin 0.8s linear infinite;
+            flex: 0 0 auto;
+        }
+        @keyframes costModelSpin {
+            to { transform: rotate(360deg); }
         }
         .cost-summary-pill {
             min-height: 32px;
@@ -353,6 +371,13 @@
             font-weight: 600;
             padding: 0 8px;
             outline: none;
+            text-align: center;
+            text-align-last: center;
+        }
+        .cost-model-select option { text-align: center; }
+        .cost-model-select:disabled {
+            cursor: wait;
+            opacity: 0.72;
         }
         .cost-inline {
             color: var(--primary-color);
@@ -1205,8 +1230,8 @@
                     <div class="search-wrapper">
                         <input type="text" id="searchBox" class="search-box" placeholder="搜索名称或 Key...">
                         <select id="sortSelect" class="sort-select">
-                            <option value="rangeCost-desc">当前范围金额 ↓</option>
                             <option value="rangeTokens-desc">当前范围 Token ↓</option>
+                            <option value="rangeCost-desc">当前范围金额 ↓</option>
                             <option value="rangeUsage-desc">当前范围调用 ↓</option>
                             <option value="todayTokens-desc">今日 Token ↓</option>
                             <option value="weeklyTokens-desc">本周 Token ↓</option>
@@ -1502,11 +1527,23 @@
             if (!select || !Array.isArray(pricing?.conversionModels)) return;
             const models = pricing.conversionModels.map(item => item.model).filter(Boolean);
             const options = [
-                '<option value="actual">真实模型</option>',
-                ...models.map(model => `<option value="${escapeHtml(model)}">换算 ${escapeHtml(model)}</option>`)
+                '<option value="actual">真实</option>',
+                ...models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`)
             ];
             select.innerHTML = options.join('');
             select.value = currentConversionModel;
+        }
+        function setConversionLoading(loading) {
+            const select = document.getElementById('conversionModelSelect');
+            const toggle = document.querySelector('.cost-model-toggle');
+            if (select) {
+                select.disabled = loading;
+                select.setAttribute('aria-busy', loading ? 'true' : 'false');
+            }
+            if (toggle) {
+                toggle.classList.toggle('is-loading', loading);
+                toggle.setAttribute('aria-busy', loading ? 'true' : 'false');
+            }
         }
         function setElementHtml(id, html) {
             const node = document.getElementById(id);
@@ -1732,35 +1769,41 @@
         }
 
         async function loadData() {
-            const result = await apiRequest(`${API_BASE}/keys?${getCostQuery()}`);
-            if (!result || !result.success) { showToast('加载失败', 'error'); return; }
-            const { keys, stats } = result.data;
-            currentStats = stats;
-            populateConversionModels(stats.pricing);
-            document.getElementById('totalKeys').textContent = stats.totalKeys;
-            document.getElementById('enabledKeys').textContent = stats.enabledKeys;
-            document.getElementById('todayUsage').textContent = stats.todayTotalUsage;
-            document.getElementById('totalUsage').textContent = stats.totalUsage;
-            document.getElementById('todayTokens').textContent = formatTokenCompact(stats.todayTotalTokens);
-            document.getElementById('todayCachedTokens').textContent = formatTokenCompact(stats.todayCachedTokens || 0);
-            document.getElementById('totalTokens').textContent = formatTokenCompact(stats.totalTokens);
-            document.getElementById('totalCachedTokens').textContent = formatTokenCompact(stats.totalCachedTokens || 0);
-            document.getElementById('currentQps').textContent = (stats.qps || 0).toFixed(2);
-            document.getElementById('maxQps').textContent = (stats.maxQps || 0).toFixed(2);
-            document.getElementById('currentRpm').textContent = (stats.rpm || 0).toFixed(2);
-            document.getElementById('maxRpm').textContent = (stats.maxRpm || 0).toFixed(2);
-            document.getElementById('currentTps').textContent = (stats.tps || 0).toFixed(2);
-            document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
-            const actualSummary = document.getElementById('costActualSummary');
-            if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(stats.cost));
-            setElementHtml('totalTokensCost', formatDisplayCost(stats.cost));
-            
-            // 渲染使用历史分布
-            renderUsageHistory(stats.usageHistory, currentUsageRange);
-            renderCalendar(stats.usageHistory || {});
-            
-            allKeys = keys;
-            applyFilterAndSort();
+            try {
+                const result = await apiRequest(`${API_BASE}/keys?${getCostQuery()}`);
+                if (!result || !result.success) { showToast('加载失败', 'error'); return false; }
+                const { keys, stats } = result.data;
+                currentStats = stats;
+                populateConversionModels(stats.pricing);
+                document.getElementById('totalKeys').textContent = stats.totalKeys;
+                document.getElementById('enabledKeys').textContent = stats.enabledKeys;
+                document.getElementById('todayUsage').textContent = stats.todayTotalUsage;
+                document.getElementById('totalUsage').textContent = stats.totalUsage;
+                document.getElementById('todayTokens').textContent = formatTokenCompact(stats.todayTotalTokens);
+                document.getElementById('todayCachedTokens').textContent = formatTokenCompact(stats.todayCachedTokens || 0);
+                document.getElementById('totalTokens').textContent = formatTokenCompact(stats.totalTokens);
+                document.getElementById('totalCachedTokens').textContent = formatTokenCompact(stats.totalCachedTokens || 0);
+                document.getElementById('currentQps').textContent = (stats.qps || 0).toFixed(2);
+                document.getElementById('maxQps').textContent = (stats.maxQps || 0).toFixed(2);
+                document.getElementById('currentRpm').textContent = (stats.rpm || 0).toFixed(2);
+                document.getElementById('maxRpm').textContent = (stats.maxRpm || 0).toFixed(2);
+                document.getElementById('currentTps').textContent = (stats.tps || 0).toFixed(2);
+                document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
+                const actualSummary = document.getElementById('costActualSummary');
+                if (actualSummary) actualSummary.textContent = formatUsd(getDisplayCostUsd(stats.cost));
+                setElementHtml('totalTokensCost', formatDisplayCost(stats.cost));
+                
+                // 渲染使用历史分布
+                renderUsageHistory(stats.usageHistory, currentUsageRange);
+                renderCalendar(stats.usageHistory || {});
+                
+                allKeys = keys;
+                applyFilterAndSort();
+                return true;
+            } catch (error) {
+                showToast('加载失败', 'error');
+                return false;
+            }
         }
 
         function renderCalendar(usageHistory = {}) {
@@ -2130,9 +2173,19 @@
             updateLimitModeView(checkboxId, unlimited);
         }
 
-        function setConversionModel(model) {
-            currentConversionModel = model || ACTUAL_VALUE_MODE;
-            loadData();
+        async function setConversionModel(model) {
+            const nextModel = model || ACTUAL_VALUE_MODE;
+            if (nextModel === currentConversionModel) return;
+            const previousModel = currentConversionModel;
+            currentConversionModel = nextModel;
+            setConversionLoading(true);
+            const loaded = await loadData();
+            if (!loaded) {
+                currentConversionModel = previousModel;
+                const select = document.getElementById('conversionModelSelect');
+                if (select) select.value = previousModel;
+            }
+            setConversionLoading(false);
         }
 
         function updateLimitModeView(checkboxId, unlimited) {
