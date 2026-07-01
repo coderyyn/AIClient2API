@@ -79,7 +79,7 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) 
     const promptTokens = toNumber(usage.promptTokens);
     const cachedTokens = Math.min(promptTokens, toNumber(usage.cachedTokens));
     const billableInputTokens = Math.max(0, promptTokens - cachedTokens);
-    const outputTokens = toNumber(usage.completionTokens) + toNumber(usage.reasoningTokens);
+    const outputTokens = toNumber(usage.completionTokens);
 
     if (!pricing) {
         return {

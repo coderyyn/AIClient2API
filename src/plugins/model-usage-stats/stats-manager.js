@@ -601,7 +601,7 @@ function normalizeUsageCandidate(candidate) {
         usage?.output_tokens ??
         usage?.candidatesTokenCount ??
         usage?.outputTokenCount
-    ) + reasoningTokens;
+    );
     const totalTokens = toNumber(
         candidate.total_tokens ??
         usage?.total_tokens ??

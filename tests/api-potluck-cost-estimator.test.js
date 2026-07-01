@@ -28,7 +28,7 @@ describe('api potluck cost estimator', () => {
         const usage = {
             promptTokens: 1000000,
             cachedTokens: 600000,
-            completionTokens: 200000,
+            completionTokens: 300000,
             reasoningTokens: 100000,
             totalTokens: 1300000
         };
@@ -42,7 +42,7 @@ describe('api potluck cost estimator', () => {
         const usage = {
             promptTokens: 1000000,
             cachedTokens: 600000,
-            completionTokens: 200000,
+            completionTokens: 300000,
             reasoningTokens: 100000,
             totalTokens: 1300000
         };

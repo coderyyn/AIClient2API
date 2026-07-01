@@ -619,7 +619,10 @@ describe('api potluck key usage summary', () => {
         const accountKey = 'openai-codex-oauth:codex-a@example.com';
 
         expect(listedKey.todayReasoningTokens).toBe(516);
+        expect(listedKey.todayCompletionTokens).toBe(120);
+        expect(listedKey.todayTotalTokens).toBe(1120);
         expect(listedKey.usageHistory[dateKey].accounts[accountKey].models['gpt-5.5']).toMatchObject({
+            completionTokens: 120,
             reasoningTokens: 516
         });
     });

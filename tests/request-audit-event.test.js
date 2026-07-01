@@ -69,4 +69,26 @@ describe('request audit event', () => {
       actualModel: 'gpt-5.4-mini'
     });
   });
+
+  test('does not add reasoning tokens to completion tokens when normalizing usage', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-reasoning-usage',
+      model: 'gpt-5.5',
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 120,
+        output_tokens_details: {
+          reasoning_tokens: 80
+        },
+        total_tokens: 1120
+      }
+    });
+
+    expect(event.usage).toMatchObject({
+      promptTokens: 1000,
+      completionTokens: 120,
+      reasoningTokens: 80,
+      totalTokens: 1120
+    });
+  });
 });

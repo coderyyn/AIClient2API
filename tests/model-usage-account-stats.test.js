@@ -175,7 +175,9 @@ describe('model usage account statistics', () => {
         expect(stats.summary).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            completionTokens: 120,
             reasoningTokens: 516,
+            totalTokens: 1120,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
@@ -190,14 +192,18 @@ describe('model usage account statistics', () => {
         expect(stats.accounts[accountKey].summary).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            completionTokens: 120,
             reasoningTokens: 516,
+            totalTokens: 1120,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
         expect(stats.accounts[accountKey].models['gpt-5.5']).toMatchObject({
             requestCount: 1,
             promptTokens: 1000,
+            completionTokens: 120,
             reasoningTokens: 516,
+            totalTokens: 1120,
             cachedTokens: 400,
             cacheHitRatio: 0.4
         });
@@ -331,7 +337,7 @@ describe('model usage account statistics', () => {
         expect(logged).toContain('Weekly: 37% used/63% remaining');
         expect(logged).toContain('UsageCacheAgeMs:');
         expect(logged).toContain('Prompt: 1000');
-        expect(logged).toContain('Completion: 636');
+        expect(logged).toContain('Completion: 120');
         expect(logged).toContain('Total: 1120');
         expect(logged).toContain('Cached: 400');
         expect(logged).toContain('Reasoning: 516');

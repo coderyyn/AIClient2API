@@ -51,7 +51,7 @@ export function normalizeUsage(usage = {}) {
         usage.completion_tokens_details?.reasoning_tokens ??
         usage.output_tokens_details?.reasoning_tokens
     );
-    const completionTokens = toNumber(usage.completionTokens ?? usage.completion_tokens ?? usage.output_tokens) + reasoningTokens;
+    const completionTokens = toNumber(usage.completionTokens ?? usage.completion_tokens ?? usage.output_tokens);
     const totalTokens = toNumber(usage.totalTokens ?? usage.total_tokens) || promptTokens + completionTokens;
     return {
         promptTokens,
