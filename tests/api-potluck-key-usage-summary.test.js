@@ -428,6 +428,62 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('getAccountUsageSummary prefers live potluck history over stale model usage daily history', async () => {
+        fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
+            updatedAt: '2026-07-01T13:43:00.000Z',
+            daily: {
+                '2026-07-01': {
+                    accounts: {
+                        'openai-codex-oauth:stale@example.com': {
+                            provider: 'openai-codex-oauth',
+                            providerUuid: 'stale@example.com',
+                            accountIdentity: 'stale@example.com',
+                            accountEmail: 'stale@example.com',
+                            providerName: 'Stale Account',
+                            summary: {
+                                requestCount: 9,
+                                promptTokens: 9000,
+                                completionTokens: 900,
+                                totalTokens: 9900,
+                                lastUsedAt: '2026-07-01T13:43:00.000Z'
+                            },
+                            models: {
+                                'gpt-5.4-mini': {
+                                    requestCount: 9,
+                                    promptTokens: 9000,
+                                    completionTokens: 900,
+                                    totalTokens: 9900
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }), 'utf8');
+
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-07-02T02:00:00.000Z'));
+        const key = await createKey('Live Potluck Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 2,
+            promptTokens: 2000,
+            completionTokens: 200,
+            totalTokens: 2200
+        }, 'req-live-potluck', {
+            providerUuid: 'live-account',
+            providerName: 'Live Account',
+            accountEmail: 'live@example.com'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-07-02T03:00:00.000Z'));
+        const liveAccount = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:live@example.com');
+
+        expect(summary.source).toBe('potluck/model-usage-stats');
+        expect(liveAccount.today).toMatchObject({ requestCount: 2, totalTokens: 2200 });
+        expect(summary.accounts.some(item => item.accountKey === 'openai-codex-oauth:stale@example.com')).toBe(false);
+    });
+
     test('getAccountUsageSummary uses a rolling 30 day month window from model usage daily history', async () => {
         fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
             updatedAt: '2026-07-02T09:00:00.000Z',

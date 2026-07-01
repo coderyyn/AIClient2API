@@ -692,6 +692,14 @@ function readModelUsageDailyHistory(conversionModel = DEFAULT_CONVERSION_MODEL) 
     }
 }
 
+function hasAccountUsageInSummaryWindow(usageHistory = {}, starts = {}) {
+    for (const [dateKey, day] of Object.entries(usageHistory || {})) {
+        if (dateKey !== starts.today && dateKey < starts.week && dateKey < starts.month) continue;
+        if (Object.keys(day?.accounts || {}).length > 0) return true;
+    }
+    return false;
+}
+
 function getIndexedAccountLastUsedAt(account, lastUsedIndex) {
     let latest = null;
     for (const alias of getAccountSummaryAliases(account.accountKey, account)) {
@@ -1574,11 +1582,13 @@ export async function getStats(options = {}) {
  */
 export async function getAccountUsageSummary(now = new Date()) {
     const { conversionModel } = getCostOptions();
-    const modelUsageHistory = readModelUsageDailyHistory(conversionModel);
-    const stats = modelUsageHistory ? null : await getStats({ conversionModel });
-    const usageHistory = modelUsageHistory || stats.usageHistory || {};
-    const source = modelUsageHistory ? 'model-usage-stats/daily' : 'potluck/model-usage-stats';
     const starts = getBeijingPeriodStarts(now);
+    const stats = await getStats({ conversionModel });
+    const potluckUsageHistory = stats.usageHistory || {};
+    const usePotluckHistory = hasAccountUsageInSummaryWindow(potluckUsageHistory, starts);
+    const modelUsageHistory = usePotluckHistory ? null : readModelUsageDailyHistory(conversionModel);
+    const usageHistory = usePotluckHistory ? potluckUsageHistory : (modelUsageHistory || potluckUsageHistory);
+    const source = usePotluckHistory || !modelUsageHistory ? 'potluck/model-usage-stats' : 'model-usage-stats/daily';
     const accounts = new Map();
     const aliasIndex = new Map();
 
