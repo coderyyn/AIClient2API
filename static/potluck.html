@@ -1111,9 +1111,9 @@
             </div>
             <div class="navbar-actions" style="display: flex; align-items: center; gap: 12px;">
                 <div class="usage-range-toggle" id="usageRangeToggle" aria-label="用量时间范围">
-                    <button class="range-option active" data-range="total" onclick="setUsageRange('total')" aria-pressed="true">累计</button>
+                    <button class="range-option" data-range="total" onclick="setUsageRange('total')" aria-pressed="false">累计</button>
                     <button class="range-option" data-range="30d" onclick="setUsageRange('30d')" aria-pressed="false">近30天</button>
-                    <button class="range-option" data-range="7d" onclick="setUsageRange('7d')" aria-pressed="false">近1周</button>
+                    <button class="range-option active" data-range="7d" onclick="setUsageRange('7d')" aria-pressed="true">近1周</button>
                     <button class="range-option" data-range="today" onclick="setUsageRange('today')" aria-pressed="false">当天</button>
                 </div>
                 <div class="cost-model-toggle" aria-label="价值口径">
@@ -1436,7 +1436,7 @@
         let currentNewKey = '';
         let allKeys = [];
         let currentStats = null;
-        let currentUsageRange = 'total';
+        let currentUsageRange = '7d';
         const ACTUAL_VALUE_MODE = 'actual';
         let currentConversionModel = ACTUAL_VALUE_MODE;
         let currentDetailKeyId = null;

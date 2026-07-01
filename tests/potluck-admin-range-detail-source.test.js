@@ -10,9 +10,10 @@ describe('API Potluck admin range and key detail UI source', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('id="usageRangeToggle"');
-        expect(source).toContain("let currentUsageRange = 'total'");
-        expect(source).toContain("data-range=\"total\"");
+        expect(source).toContain("let currentUsageRange = '7d'");
+        expect(source).toContain('<button class="range-option" data-range="total" onclick="setUsageRange(\'total\')" aria-pressed="false">累计</button>');
         expect(source).toContain("data-range=\"7d\"");
+        expect(source).toContain('<button class="range-option active" data-range="7d" onclick="setUsageRange(\'7d\')" aria-pressed="true">近1周</button>');
         expect(source).toContain("data-range=\"today\"");
         expect(source).toContain('function setUsageRange(range)');
         expect(source).toContain('function getUsageRangeDates(range, usageHistory = {})');
