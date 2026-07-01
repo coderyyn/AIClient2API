@@ -264,7 +264,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // GET /api/potluck/keys - 获取所有 Key 列表
         if (method === 'GET' && path === '/api/potluck/keys') {
             const costOptions = getRequestCostOptions(req);
-            const keys = await listKeys(costOptions);
+            const keys = await listKeys({ ...costOptions, summaryOnly: true });
             const stats = enrichPotluckStatsAccountEmails(await getStats(costOptions));
             sendJson(res, 200, { 
                 success: true, 

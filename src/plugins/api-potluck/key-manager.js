@@ -865,6 +865,17 @@ function addCostToUsageHistory(usageHistory = {}, conversionModel = DEFAULT_CONV
     return usageHistory;
 }
 
+function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
+    const compact = {};
+    for (const [date, day] of Object.entries(usageHistory || {})) {
+        const summary = cloneUsageBucket(day?.summary || {});
+        addCacheHitRatio(summary);
+        summary.cost = buildCost(summary, day?.models || {}, conversionModel);
+        compact[date] = { summary };
+    }
+    return compact;
+}
+
 function getCostOptions(options = {}) {
     return {
         conversionModel: normalizeConversionModel(options?.conversionModel)
@@ -873,10 +884,15 @@ function getCostOptions(options = {}) {
 
 function enrichKeyUsage(keyData, options = {}) {
     const { conversionModel } = getCostOptions(options);
-    const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
-    addCostToUsageHistory(usageHistory, conversionModel);
+    const usageHistory = options.summaryOnly
+        ? cloneUsageHistorySummaryOnly(keyData.usageHistory || {}, conversionModel)
+        : addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
+    if (!options.summaryOnly) {
+        addCostToUsageHistory(usageHistory, conversionModel);
+    }
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
     const keyHash = hashSecret(keyData.id);
+    const relatedAccountHistory = options.summaryOnly ? keyData.usageHistory || {} : usageHistory;
     const enriched = {
         ...keyData,
         usageHistory,
@@ -899,7 +915,7 @@ function enrichKeyUsage(keyData, options = {}) {
             summaryPath: `/api/request-audit/summary?keyHash=${encodeURIComponent(keyHash || '')}`,
             requestsPath: `/api/request-audit/requests?keyHash=${encodeURIComponent(keyHash || '')}`,
             defaultWindow: 'last20m',
-            relatedNames: collectRelatedAccountNames(usageHistory)
+            relatedNames: collectRelatedAccountNames(relatedAccountHistory)
         },
         weeklyUsage: weeklySummary.requestCount,
         weeklyPromptTokens: weeklySummary.promptTokens,

@@ -859,6 +859,46 @@ describe('api potluck key usage summary', () => {
         expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
     });
 
+    test('summary-only key list keeps daily summaries without heavy per-day details', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
+
+        const key = await createKey('Compact List Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000000,
+            cachedTokens: 250000,
+            completionTokens: 100000,
+            totalTokens: 1100000
+        }, 'req-compact-list', {
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+
+        const [fullKey] = await listKeys({ conversionModel: 'gemini-2.5-flash' });
+        const [summaryKey] = await listKeys({ conversionModel: 'gemini-2.5-flash', summaryOnly: true });
+        const fullDay = fullKey.usageHistory['2026-06-22'];
+        const compactDay = summaryKey.usageHistory['2026-06-22'];
+
+        expect(fullDay.accounts['openai-codex-oauth:user@example.com'].summary.totalTokens).toBe(1100000);
+        expect(compactDay.summary).toMatchObject({
+            requestCount: 1,
+            promptTokens: 1000000,
+            cachedTokens: 250000,
+            completionTokens: 100000,
+            totalTokens: 1100000,
+            cacheHitRatio: 0.25
+        });
+        expect(compactDay.summary.cost.actualUsd).toBeCloseTo(fullDay.summary.cost.actualUsd, 6);
+        expect(compactDay.summary.cost.convertedUsd).toBeCloseTo(fullDay.summary.cost.convertedUsd, 6);
+        expect(compactDay).not.toHaveProperty('providers');
+        expect(compactDay).not.toHaveProperty('models');
+        expect(compactDay).not.toHaveProperty('accounts');
+        expect(compactDay).not.toHaveProperty('hours');
+    });
+
     test('trims over-retained persisted history on load while preserving cumulative model cost', async () => {
         const usageHistory = {};
         for (let offset = 0; offset < 36; offset++) {
