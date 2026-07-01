@@ -12,7 +12,6 @@ import crypto from 'crypto';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
 import { hashSecret, sanitizeProviderName } from '../request-audit/audit-event.js';
-import { UsageLedgerStore } from '../usage-ledger/ledger-store.js';
 import {
     DEFAULT_CONVERSION_MODEL,
     buildCost,
@@ -26,8 +25,6 @@ const MODEL_USAGE_STATS_FILE = path.join(process.cwd(), 'configs', 'model-usage-
 
 const KEY_PREFIX = 'maki_';
 const USAGE_HISTORY_RETENTION_DAYS = 35;
-const USAGE_LEDGER_SNAPSHOT_CACHE_TTL_MS = 60 * 1000;
-const USAGE_LEDGER_SUMMARY_FILE = 'usage-summary.json';
 
 const DEFAULT_CONFIG = {
     persistInterval: 5000,
@@ -66,17 +63,8 @@ let isDirty = false;
 let isWriting = false;
 let persistTimer = null;
 let currentPersistInterval = DEFAULT_CONFIG.persistInterval;
-let usageLedgerStore = null;
-let usageLedgerSnapshotCache = null;
 
 const rateManager = new RateManager(60);
-
-function getUsageLedgerStore() {
-    if (!usageLedgerStore) {
-        usageLedgerStore = new UsageLedgerStore();
-    }
-    return usageLedgerStore;
-}
 
 function createUsageBucket() {
     return {
@@ -514,13 +502,6 @@ function normalizeEmailAlias(value) {
     return isEmailLike(value) ? value.trim().toLowerCase() : null;
 }
 
-function normalizeDisplayAlias(value) {
-    if (!value) return null;
-    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, '');
-    if (!normalized || normalized.startsWith('redacted-email:')) return null;
-    return normalized;
-}
-
 function getProviderFromAccountKey(accountKey) {
     return accountKey?.split(':')[0] || 'unknown';
 }
@@ -561,15 +542,6 @@ function getAccountSummaryAliases(accountKey, account = {}) {
     const emailAlias = normalizeEmailAlias(account.accountEmail) || normalizeEmailAlias(account.providerName);
     if (emailAlias) {
         aliases.add(`email:${provider}:${emailAlias}`);
-    }
-    for (const value of [
-        getIdentityFromAccountKey(accountKey),
-        account.providerUuid,
-        account.accountIdentity,
-        account.providerName
-    ]) {
-        const displayAlias = normalizeDisplayAlias(value);
-        if (displayAlias) aliases.add(`display:${provider}:${displayAlias}`);
     }
 
     return [...aliases];
@@ -625,7 +597,7 @@ function mergeAccountSummaryMeta(target, account = {}, accountKey = null) {
     if (canonical?.accountEmail) {
         target.accountEmail = canonical.accountEmail;
     }
-    if (account.providerName && (!target.providerName || String(target.providerName).startsWith('redacted-email:'))) {
+    if (account.providerName && !target.providerName) {
         target.providerName = account.providerName;
     }
     if (account.accountEmail && !target.accountEmail) {
@@ -885,324 +857,6 @@ function addCostToUsageHistory(usageHistory = {}, conversionModel = DEFAULT_CONV
     return usageHistory;
 }
 
-function getBeijingDateHourParts(timestamp = new Date()) {
-    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-    const validDate = Number.isFinite(date.getTime()) ? date : new Date();
-    const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        hour12: false
-    }).formatToParts(validDate);
-    const value = type => parts.find(part => part.type === type)?.value;
-    return {
-        date: `${value('year')}-${value('month')}-${value('day')}`,
-        hour: value('hour') || '00'
-    };
-}
-
-function getLedgerFactModel(fact = {}) {
-    return fact.actualModel || fact.requestedModel || 'unknown';
-}
-
-function getLedgerFactUsage(fact = {}) {
-    return {
-        requestCount: toNumber(fact.requestCount) || 1,
-        promptTokens: toNumber(fact.promptTokens),
-        cachedTokens: toNumber(fact.cachedTokens),
-        completionTokens: toNumber(fact.completionTokens),
-        reasoningTokens: toNumber(fact.reasoningTokens),
-        totalTokens: toNumber(fact.totalTokens),
-        lastUsedAt: fact.timestamp || null
-    };
-}
-
-function hasLedgerFactTokenUsage(fact = {}) {
-    return toNumber(fact.promptTokens) > 0 ||
-        toNumber(fact.cachedTokens) > 0 ||
-        toNumber(fact.completionTokens) > 0 ||
-        toNumber(fact.reasoningTokens) > 0 ||
-        toNumber(fact.totalTokens) > 0;
-}
-
-function getLedgerAccountProviderName(fact = {}) {
-    if (fact.accountDisplay && !String(fact.accountDisplay).startsWith('redacted-email:')) {
-        return fact.accountDisplay;
-    }
-    return fact.accountEmail || fact.accountDisplay || null;
-}
-
-function ensureLedgerFactAccountUsage(map, fact = {}) {
-    const provider = fact.provider || 'unknown';
-    const providerUuid = fact.providerUuid || fact.accountEmail || null;
-    const providerName = getLedgerAccountProviderName(fact);
-    const accountUsage = ensureAccountUsage(
-        map,
-        provider,
-        providerUuid,
-        providerName,
-        fact.accountEmail || null,
-        fact.accountEmail || null
-    );
-    if (accountUsage) return accountUsage;
-
-    const identity = providerUuid || providerName;
-    if (!identity) return null;
-    const accountKey = `${provider}:${identity}`;
-    if (!map[accountKey]) {
-        map[accountKey] = {
-            provider,
-            providerUuid: identity,
-            accountIdentity: providerUuid || null,
-            accountEmail: fact.accountEmail || null,
-            providerUuids: providerUuid ? [providerUuid] : [],
-            providerName,
-            summary: createUsageBucket(),
-            models: {}
-        };
-    }
-    return map[accountKey];
-}
-
-function addLedgerFactToHistory(usageHistory, fact = {}) {
-    const { date, hour } = getBeijingDateHourParts(fact.timestamp);
-    const dateKey = fact.beijingDate || date;
-    if (!usageHistory[dateKey]) {
-        usageHistory[dateKey] = normalizeUsageHistoryDay();
-    }
-
-    const day = usageHistory[dateKey];
-    const usage = getLedgerFactUsage(fact);
-    const provider = fact.provider || 'unknown';
-    const model = getLedgerFactModel(fact);
-
-    addUsage(day.summary, usage);
-    day.providers[provider] = normalizeUsageBucket(day.providers[provider]);
-    addUsage(day.providers[provider], usage);
-    day.models[model] = normalizeUsageBucket(day.models[model]);
-    addUsage(day.models[model], usage);
-
-    const accountUsage = ensureLedgerFactAccountUsage(day.accounts, fact);
-    if (accountUsage) {
-        addUsage(accountUsage.summary, usage);
-        accountUsage.models[model] = normalizeUsageBucket(accountUsage.models[model]);
-        addUsage(accountUsage.models[model], usage);
-    }
-
-    const hourUsage = ensureHourUsage(day, hour);
-    addUsage(hourUsage.summary, usage);
-    hourUsage.providers[provider] = normalizeUsageBucket(hourUsage.providers[provider]);
-    addUsage(hourUsage.providers[provider], usage);
-    hourUsage.models[model] = normalizeUsageBucket(hourUsage.models[model]);
-    addUsage(hourUsage.models[model], usage);
-    const hourAccountUsage = ensureLedgerFactAccountUsage(hourUsage.accounts, fact);
-    if (hourAccountUsage) {
-        addUsage(hourAccountUsage.summary, usage);
-        hourAccountUsage.models[model] = normalizeUsageBucket(hourAccountUsage.models[model]);
-        addUsage(hourAccountUsage.models[model], usage);
-    }
-}
-
-function createLedgerSnapshot(conversionModel = DEFAULT_CONVERSION_MODEL) {
-    return {
-        usageHistory: {},
-        byKeyHash: new Map(),
-        totals: createUsageBucket(),
-        models: {}
-    };
-}
-
-function getLedgerKeySnapshot(snapshot, keyHash) {
-    if (!snapshot.byKeyHash.has(keyHash)) {
-        snapshot.byKeyHash.set(keyHash, {
-            usageHistory: {},
-            totals: createUsageBucket(),
-            models: {}
-        });
-    }
-    return snapshot.byKeyHash.get(keyHash);
-}
-
-function addLedgerFactToSnapshot(snapshot, fact = {}) {
-    if (!hasLedgerFactTokenUsage(fact)) return;
-    const usage = getLedgerFactUsage(fact);
-    const model = getLedgerFactModel(fact);
-    addUsage(snapshot.totals, usage);
-    snapshot.models[model] = normalizeUsageBucket(snapshot.models[model]);
-    addUsage(snapshot.models[model], usage);
-    addLedgerFactToHistory(snapshot.usageHistory, fact);
-
-    if (!fact.potluckKeyHash) return;
-    const keySnapshot = getLedgerKeySnapshot(snapshot, fact.potluckKeyHash);
-    addUsage(keySnapshot.totals, usage);
-    keySnapshot.models[model] = normalizeUsageBucket(keySnapshot.models[model]);
-    addUsage(keySnapshot.models[model], usage);
-    addLedgerFactToHistory(keySnapshot.usageHistory, fact);
-}
-
-function finalizeLedgerUsageHistory(usageHistory, conversionModel) {
-    trimUsageHistory(usageHistory, USAGE_HISTORY_RETENTION_DAYS);
-    addUsageHistoryRatios(usageHistory);
-    addCostToUsageHistory(usageHistory, conversionModel);
-    return usageHistory;
-}
-
-async function readLedgerUsageSnapshot(options = {}) {
-    const { conversionModel } = getCostOptions(options);
-    if (
-        usageLedgerSnapshotCache?.conversionModel === conversionModel &&
-        Date.now() - usageLedgerSnapshotCache.createdAt < USAGE_LEDGER_SNAPSHOT_CACHE_TTL_MS
-    ) {
-        return usageLedgerSnapshotCache.snapshot;
-    }
-
-    const store = getUsageLedgerStore();
-    const summarySnapshot = await readLedgerSummarySnapshot(store, conversionModel);
-    if (summarySnapshot) return summarySnapshot;
-
-    const files = await store.listFiles().catch(error => {
-        logger.warn(`[API Potluck] Failed to list usage ledger files: ${error.message}`);
-        return [];
-    });
-    if (!files.length) return null;
-
-    const fileStats = await Promise.all(files.map(async filePath => {
-        const stat = await fs.stat(filePath).catch(() => null);
-        return stat ? `${filePath}:${stat.size}:${stat.mtimeMs}` : `${filePath}:missing`;
-    }));
-    const signature = `${conversionModel}|${fileStats.join('|')}`;
-    if (usageLedgerSnapshotCache?.signature === signature) {
-        usageLedgerSnapshotCache.createdAt = Date.now();
-        return usageLedgerSnapshotCache.snapshot;
-    }
-
-    let facts = [];
-    try {
-        facts = await store.query();
-    } catch (error) {
-        logger.warn(`[API Potluck] Failed to read usage ledger: ${error.message}`);
-        return null;
-    }
-    if (!facts.length) return null;
-
-    const snapshot = createLedgerSnapshot(conversionModel);
-    for (const fact of facts) {
-        addLedgerFactToSnapshot(snapshot, fact);
-    }
-
-    finalizeLedgerUsageHistory(snapshot.usageHistory, conversionModel);
-    for (const keySnapshot of snapshot.byKeyHash.values()) {
-        finalizeLedgerUsageHistory(keySnapshot.usageHistory, conversionModel);
-    }
-    usageLedgerSnapshotCache = { signature, conversionModel, createdAt: Date.now(), snapshot };
-    return snapshot;
-}
-
-async function readLedgerSummarySnapshot(store, conversionModel) {
-    const summaryPath = path.join(store.dir, USAGE_LEDGER_SUMMARY_FILE);
-    const summaryStat = await fs.stat(summaryPath).catch(() => null);
-    if (!summaryStat) return null;
-
-    const signature = `${conversionModel}|${summaryPath}:${summaryStat.size}:${summaryStat.mtimeMs}`;
-    let summary;
-    try {
-        summary = JSON.parse(await fs.readFile(summaryPath, 'utf8'));
-    } catch (error) {
-        logger.warn(`[API Potluck] Failed to read usage ledger summary: ${error.message}`);
-        return null;
-    }
-
-    const snapshot = {
-        usageHistory: summary.usageHistory || {},
-        byKeyHash: new Map(Object.entries(summary.byKeyHash || {})),
-        totals: normalizeUsageBucket(summary.totals),
-        models: normalizeUsageMap(summary.models || {})
-    };
-
-    const incrementalFacts = summary.generatedAt
-        ? await store.query({ since: summary.generatedAt }).catch(error => {
-            logger.warn(`[API Potluck] Failed to read usage ledger increments: ${error.message}`);
-            return [];
-        })
-        : [];
-    for (const fact of incrementalFacts) {
-        addLedgerFactToSnapshot(snapshot, fact);
-    }
-
-    finalizeLedgerUsageHistory(snapshot.usageHistory, conversionModel);
-    for (const keySnapshot of snapshot.byKeyHash.values()) {
-        finalizeLedgerUsageHistory(keySnapshot.usageHistory, conversionModel);
-    }
-    usageLedgerSnapshotCache = { signature, conversionModel, createdAt: Date.now(), snapshot };
-    return snapshot;
-}
-
-function getUsageHistoryTotals(usageHistory = {}) {
-    const totals = createUsageBucket();
-    const models = {};
-    for (const day of Object.values(usageHistory || {})) {
-        addUsage(totals, day?.summary);
-        for (const [model, usage] of Object.entries(day?.models || {})) {
-            models[model] = normalizeUsageBucket(models[model]);
-            addUsage(models[model], usage);
-        }
-    }
-    return { totals, models };
-}
-
-function cloneUsageHistoryWithCosts(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
-    const cloned = JSON.parse(JSON.stringify(usageHistory || {}));
-    addUsageHistoryRatios(cloned);
-    addCostToUsageHistory(cloned, conversionModel);
-    return cloned;
-}
-
-function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
-    const compact = {};
-    for (const [date, day] of Object.entries(usageHistory || {})) {
-        const summary = cloneUsageBucket(day?.summary);
-        addCacheHitRatio(summary);
-        if (!summary.cost) {
-            summary.cost = buildCost(summary, day?.models || {}, conversionModel);
-        }
-        compact[date] = { summary };
-    }
-    return compact;
-}
-
-function mergeKeyUsageHistory({
-    ledgerUsageHistory = null,
-    legacyUsageHistory = {},
-    conversionModel = DEFAULT_CONVERSION_MODEL,
-    summaryOnly = false
-} = {}) {
-    const usageHistory = summaryOnly
-        ? cloneUsageHistorySummaryOnly(ledgerUsageHistory || {}, conversionModel)
-        : (ledgerUsageHistory ? JSON.parse(JSON.stringify(ledgerUsageHistory)) : {});
-    const legacyHistory = summaryOnly
-        ? cloneUsageHistorySummaryOnly(legacyUsageHistory || {}, conversionModel)
-        : cloneUsageHistoryWithCosts(legacyUsageHistory || {}, conversionModel);
-
-    for (const [date, day] of Object.entries(legacyHistory || {})) {
-        if (!usageHistory[date]) usageHistory[date] = day;
-    }
-
-    trimUsageHistory(usageHistory, USAGE_HISTORY_RETENTION_DAYS);
-    addUsageHistoryRatios(usageHistory);
-    return usageHistory;
-}
-
-function hasUsageTotals(usage = {}) {
-    return toNumber(usage.requestCount) > 0 ||
-        toNumber(usage.promptTokens) > 0 ||
-        toNumber(usage.completionTokens) > 0 ||
-        toNumber(usage.reasoningTokens) > 0 ||
-        toNumber(usage.totalTokens) > 0 ||
-        toNumber(usage.cachedTokens) > 0;
-}
-
 function getCostOptions(options = {}) {
     return {
         conversionModel: normalizeConversionModel(options?.conversionModel)
@@ -1211,50 +865,22 @@ function getCostOptions(options = {}) {
 
 function enrichKeyUsage(keyData, options = {}) {
     const { conversionModel } = getCostOptions(options);
-    const ledgerUsageHistory = options.ledgerUsageHistory || null;
-    const usageHistory = mergeKeyUsageHistory({
-        ledgerUsageHistory,
-        legacyUsageHistory: keyData.usageHistory || {},
-        conversionModel,
-        summaryOnly: Boolean(options.summaryOnly)
-    });
+    const usageHistory = addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
+    addCostToUsageHistory(usageHistory, conversionModel);
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
-    const historyTotals = getUsageHistoryTotals(usageHistory);
-    const todaySummary = usageHistory[getTodayDateString()]?.summary || null;
-    const cumulativeUsage = hasUsageTotals({
-        requestCount: keyData.totalUsage,
-        promptTokens: keyData.totalPromptTokens,
-        cachedTokens: keyData.totalCachedTokens,
-        completionTokens: keyData.totalCompletionTokens,
-        reasoningTokens: keyData.totalReasoningTokens,
-        totalTokens: keyData.totalTokens
-    })
-        ? {
-            promptTokens: keyData.totalPromptTokens,
-            cachedTokens: keyData.totalCachedTokens,
-            completionTokens: keyData.totalCompletionTokens,
-            reasoningTokens: keyData.totalReasoningTokens,
-            totalTokens: keyData.totalTokens
-        }
-        : historyTotals.totals;
-    const cumulativeModels = Object.keys(keyData.totalModels || {}).length > 0
-        ? keyData.totalModels
-        : (options.ledgerModels && Object.keys(options.ledgerModels || {}).length > 0)
-            ? options.ledgerModels
-        : historyTotals.models;
     const keyHash = hashSecret(keyData.id);
     const enriched = {
         ...keyData,
-        todayUsage: todaySummary ? toNumber(todaySummary.requestCount) : keyData.todayUsage,
-        todayPromptTokens: todaySummary ? toNumber(todaySummary.promptTokens) : keyData.todayPromptTokens,
-        todayCompletionTokens: todaySummary ? toNumber(todaySummary.completionTokens) : keyData.todayCompletionTokens,
-        todayReasoningTokens: todaySummary ? toNumber(todaySummary.reasoningTokens) : keyData.todayReasoningTokens,
-        todayTotalTokens: todaySummary ? toNumber(todaySummary.totalTokens) : keyData.todayTotalTokens,
-        todayCachedTokens: todaySummary ? toNumber(todaySummary.cachedTokens) : keyData.todayCachedTokens,
         usageHistory,
         cost: buildCost(
-            cumulativeUsage,
-            cumulativeModels,
+            {
+                promptTokens: keyData.totalPromptTokens,
+                cachedTokens: keyData.totalCachedTokens,
+                completionTokens: keyData.totalCompletionTokens,
+                reasoningTokens: keyData.totalReasoningTokens,
+                totalTokens: keyData.totalTokens
+            },
+            keyData.totalModels || collectModelsFromUsageHistory(usageHistory),
             conversionModel
         ),
         pricing: {
@@ -1273,9 +899,7 @@ function enrichKeyUsage(keyData, options = {}) {
         weeklyReasoningTokens: weeklySummary.reasoningTokens,
         weeklyTotalTokens: weeklySummary.totalTokens,
         weeklyCachedTokens: weeklySummary.cachedTokens,
-        todayCacheHitRatio: todaySummary
-            ? todaySummary.cacheHitRatio
-            : (keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0),
+        todayCacheHitRatio: keyData.todayPromptTokens > 0 ? keyData.todayCachedTokens / keyData.todayPromptTokens : 0,
         weeklyCacheHitRatio: weeklySummary.cacheHitRatio,
         totalCacheHitRatio: keyData.totalPromptTokens > 0 ? keyData.totalCachedTokens / keyData.totalPromptTokens : 0
     };
@@ -1450,16 +1074,8 @@ export async function createKey(name = '', dailyLimit = null) {
 export async function listKeys(options = {}) {
     ensureLoaded();
     const keys = [];
-    const ledgerSnapshot = await readLedgerUsageSnapshot(options);
     for (const [keyId, keyData] of Object.entries(keyStore.keys)) {
-        const keyHash = hashSecret(keyId);
-        const ledgerKeySnapshot = ledgerSnapshot?.byKeyHash.get(keyHash) || null;
-        const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), {
-            ...options,
-            summaryOnly: Boolean(options.summaryOnly),
-            ledgerUsageHistory: ledgerKeySnapshot?.usageHistory || null,
-            ledgerModels: ledgerKeySnapshot?.models || null
-        });
+        const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), options);
         const rates = rateManager.getStats(`key:${keyId}`);
         keys.push({
             ...updated,
@@ -1482,13 +1098,7 @@ export async function getKey(keyId, options = {}) {
     ensureLoaded();
     const keyData = keyStore.keys[keyId];
     if (!keyData) return null;
-    const ledgerSnapshot = await readLedgerUsageSnapshot(options);
-    const ledgerKeySnapshot = ledgerSnapshot?.byKeyHash.get(hashSecret(keyId)) || null;
-    const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), {
-        ...options,
-        ledgerUsageHistory: ledgerKeySnapshot?.usageHistory || null,
-        ledgerModels: ledgerKeySnapshot?.models || null
-    });
+    const updated = enrichKeyUsage(checkAndResetDailyCount({ ...keyData }), options);
     const rates = rateManager.getStats(`key:${keyId}`);
     return {
         ...updated,
@@ -1636,7 +1246,7 @@ export async function updateKeyName(keyId, newName) {
     return keyStore.keys[keyId];
 }
 
-// 用于防止同一 Key 下同一请求重复入账，改用 Map 以支持批量清理。
+// 用于防止同一请求重复统计速率，改用 Map 以支持批量清理
 const recordedRequests = new Map();
 let lastCleanupTime = Date.now();
 
@@ -1647,58 +1257,11 @@ function cleanupRecordedRequests() {
     const now = Date.now();
     if (now - lastCleanupTime < 60000) return; // 每分钟清理一次
     
-    const cutoff = now - 5 * 60 * 1000; // 保留短窗口，覆盖 stream/fallback 重复 finalize
-    for (const [id, entry] of recordedRequests.entries()) {
-        const timestamp = typeof entry === 'number' ? entry : entry?.timestamp;
+    const cutoff = now - 60000; // 清理 1 分钟前的记录
+    for (const [id, timestamp] of recordedRequests.entries()) {
         if (timestamp < cutoff) recordedRequests.delete(id);
     }
     lastCleanupTime = now;
-}
-
-function normalizeRecordedUsage(usage = {}) {
-    return {
-        requestCount: usage.requestCount !== undefined ? toNumber(usage.requestCount) : 1,
-        promptTokens: toNumber(usage.promptTokens),
-        completionTokens: toNumber(usage.completionTokens),
-        reasoningTokens: toNumber(usage.reasoningTokens),
-        totalTokens: toNumber(usage.totalTokens),
-        cachedTokens: toNumber(usage.cachedTokens)
-    };
-}
-
-function maxRecordedUsage(a = {}, b = {}) {
-    const left = normalizeRecordedUsage(a);
-    const right = normalizeRecordedUsage(b);
-    return {
-        requestCount: Math.max(left.requestCount, right.requestCount),
-        promptTokens: Math.max(left.promptTokens, right.promptTokens),
-        completionTokens: Math.max(left.completionTokens, right.completionTokens),
-        reasoningTokens: Math.max(left.reasoningTokens, right.reasoningTokens),
-        totalTokens: Math.max(left.totalTokens, right.totalTokens),
-        cachedTokens: Math.max(left.cachedTokens, right.cachedTokens)
-    };
-}
-
-function subtractRecordedUsage(current = {}, previous = {}, { includeRequestCount = false } = {}) {
-    const next = normalizeRecordedUsage(current);
-    const old = normalizeRecordedUsage(previous);
-    return {
-        requestCount: includeRequestCount ? Math.max(0, next.requestCount - old.requestCount) : 0,
-        promptTokens: Math.max(0, next.promptTokens - old.promptTokens),
-        completionTokens: Math.max(0, next.completionTokens - old.completionTokens),
-        reasoningTokens: Math.max(0, next.reasoningTokens - old.reasoningTokens),
-        totalTokens: Math.max(0, next.totalTokens - old.totalTokens),
-        cachedTokens: Math.max(0, next.cachedTokens - old.cachedTokens)
-    };
-}
-
-function hasBillableUsage(usage = {}) {
-    return toNumber(usage.requestCount) > 0 ||
-        toNumber(usage.promptTokens) > 0 ||
-        toNumber(usage.completionTokens) > 0 ||
-        toNumber(usage.reasoningTokens) > 0 ||
-        toNumber(usage.totalTokens) > 0 ||
-        toNumber(usage.cachedTokens) > 0;
 }
 
 /**
@@ -1714,37 +1277,20 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     const keyData = keyStore.keys[apiKey];
     if (!keyData) return;
 
-    const recordedAt = new Date(context.timestamp || usage.timestamp || new Date()).toISOString();
-    let usageToApply = usage;
-    let ledgerUsageSnapshot = normalizeRecordedUsage(usage);
+    // 防止同一请求重复统计速率
     let shouldRecordRate = true;
     if (requestId) {
         cleanupRecordedRequests();
-        const recordKey = `${apiKey}:${requestId}`;
-        const nextUsage = normalizeRecordedUsage(usage);
-        const previous = recordedRequests.get(recordKey)?.usage;
-        if (previous) {
-            const maxUsage = maxRecordedUsage(previous, nextUsage);
-            usageToApply = subtractRecordedUsage(maxUsage, previous, { includeRequestCount: false });
-            ledgerUsageSnapshot = maxUsage;
-            recordedRequests.set(recordKey, { timestamp: Date.now(), usage: maxUsage });
-            shouldRecordRate = hasBillableUsage(usageToApply);
+        if (recordedRequests.has(requestId)) {
+            shouldRecordRate = false;
         } else {
-            ledgerUsageSnapshot = nextUsage;
-            recordedRequests.set(recordKey, { timestamp: Date.now(), usage: nextUsage });
+            recordedRequests.set(requestId, Date.now());
         }
-    }
-
-    if (!hasBillableUsage(usageToApply)) {
-        return {
-            ...keyData,
-            usedBonus: false
-        };
     }
 
     // 记录速率统计
     if (shouldRecordRate) {
-        rateManager.record(`key:${apiKey}`, usageToApply.totalTokens);
+        rateManager.record(`key:${apiKey}`, usage.totalTokens);
     }
 
     const rates = rateManager.getGlobalStats();
@@ -1755,12 +1301,9 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     };
 
     // 更新每日和历史统计
+    const recordedAt = new Date(context.timestamp || usage.timestamp || new Date()).toISOString();
     const usageRecord = {
-        ...usageToApply,
-        lastUsedAt: usage.lastUsedAt || recordedAt
-    };
-    const ledgerUsageRecord = {
-        ...ledgerUsageSnapshot,
+        ...usage,
         lastUsedAt: usage.lastUsedAt || recordedAt
     };
     const today = getTodayDateString();
@@ -1821,46 +1364,20 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     }
 
     // 更新今日和累计总量 (统一处理默认调用次数)
-    const rCount = usageRecord.requestCount !== undefined ? toNumber(usageRecord.requestCount) : 1;
+    const rCount = usage.requestCount !== undefined ? toNumber(usage.requestCount) : 1;
     keyData.todayUsage += rCount;
     keyData.totalUsage += rCount;
-    keyData.todayPromptTokens += toNumber(usageRecord.promptTokens);
-    keyData.todayCompletionTokens += toNumber(usageRecord.completionTokens);
-    keyData.todayReasoningTokens += toNumber(usageRecord.reasoningTokens);
-    keyData.todayTotalTokens += toNumber(usageRecord.totalTokens);
-    keyData.todayCachedTokens += toNumber(usageRecord.cachedTokens);
-    keyData.totalPromptTokens += toNumber(usageRecord.promptTokens);
-    keyData.totalCompletionTokens += toNumber(usageRecord.completionTokens);
-    keyData.totalReasoningTokens += toNumber(usageRecord.reasoningTokens);
-    keyData.totalTokens += toNumber(usageRecord.totalTokens);
-    keyData.totalCachedTokens += toNumber(usageRecord.cachedTokens);
+    keyData.todayPromptTokens += toNumber(usage.promptTokens);
+    keyData.todayCompletionTokens += toNumber(usage.completionTokens);
+    keyData.todayReasoningTokens += toNumber(usage.reasoningTokens);
+    keyData.todayTotalTokens += toNumber(usage.totalTokens);
+    keyData.todayCachedTokens += toNumber(usage.cachedTokens);
+    keyData.totalPromptTokens += toNumber(usage.promptTokens);
+    keyData.totalCompletionTokens += toNumber(usage.completionTokens);
+    keyData.totalReasoningTokens += toNumber(usage.reasoningTokens);
+    keyData.totalTokens += toNumber(usage.totalTokens);
+    keyData.totalCachedTokens += toNumber(usage.cachedTokens);
     keyData.lastUsedAt = recordedAt;
-
-    try {
-        await getUsageLedgerStore().recordFact({
-            timestamp: recordedAt,
-            requestId,
-            potluckKeyHash: hashSecret(apiKey),
-            potluckKeyId: keyData.id || apiKey,
-            potluckKeyName: keyData.name || null,
-            provider: pName,
-            providerUuid,
-            accountEmail,
-            accountDisplay: sanitizeProviderName(providerName),
-            requestedModel: context.requestedModel || mName,
-            actualModel: context.actualModel || mName,
-            requestCount: ledgerUsageRecord.requestCount,
-            promptTokens: ledgerUsageRecord.promptTokens,
-            cachedTokens: ledgerUsageRecord.cachedTokens,
-            completionTokens: ledgerUsageRecord.completionTokens,
-            reasoningTokens: ledgerUsageRecord.reasoningTokens,
-            totalTokens: ledgerUsageRecord.totalTokens,
-            stream: Boolean(context.isStream),
-            source: 'api-potluck'
-        });
-    } catch (error) {
-        logger.warn('[API Potluck] Failed to record usage ledger fact:', error.message);
-    }
 
     // 同时也给 keyData 注入实时峰值（如果需要持久化）
     if (!keyData.maxQps) keyData.maxQps = 0;
@@ -1885,13 +1402,12 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
 export async function getStats(options = {}) {
     ensureLoaded();
     const { conversionModel } = getCostOptions(options);
-    const ledgerSnapshot = await readLedgerUsageSnapshot(options);
     const keys = Object.values(keyStore.keys);
     let enabledKeys = 0, todayTotalUsage = 0, totalUsage = 0;
     let todayPromptTokens = 0, todayCompletionTokens = 0, todayReasoningTokens = 0, todayTotalTokens = 0, todayCachedTokens = 0;
     let totalPromptTokens = 0, totalCompletionTokens = 0, totalReasoningTokens = 0, totalTokens = 0, totalCachedTokens = 0;
-    let aggregatedHistory = {};
-    let aggregateModels = {};
+    const aggregatedHistory = {};
+    const aggregateModels = {};
 
     for (const key of keys) {
         checkAndResetDailyCount(key);
@@ -1948,45 +1464,17 @@ export async function getStats(options = {}) {
     }
 
     const globalRates = rateManager.getGlobalStats();
-    if (ledgerSnapshot) {
-        aggregatedHistory = ledgerSnapshot.usageHistory;
-        const todaySummary = aggregatedHistory[getTodayDateString()]?.summary || createUsageBucket();
-        todayTotalUsage = toNumber(todaySummary.requestCount);
-        todayPromptTokens = toNumber(todaySummary.promptTokens);
-        todayCompletionTokens = toNumber(todaySummary.completionTokens);
-        todayReasoningTokens = toNumber(todaySummary.reasoningTokens);
-        todayTotalTokens = toNumber(todaySummary.totalTokens);
-        todayCachedTokens = toNumber(todaySummary.cachedTokens);
-    } else {
-        trimUsageHistory(aggregatedHistory, USAGE_HISTORY_RETENTION_DAYS);
-        addUsageHistoryRatios(aggregatedHistory);
-        addCostToUsageHistory(aggregatedHistory, conversionModel);
-    }
-    const keyStoreAggregateUsage = {
+    trimUsageHistory(aggregatedHistory, USAGE_HISTORY_RETENTION_DAYS);
+    addUsageHistoryRatios(aggregatedHistory);
+    addCostToUsageHistory(aggregatedHistory, conversionModel);
+    const aggregateUsage = {
         promptTokens: totalPromptTokens,
         completionTokens: totalCompletionTokens,
         reasoningTokens: totalReasoningTokens,
         totalTokens,
         cachedTokens: totalCachedTokens
     };
-    const useLedgerTotals = ledgerSnapshot && !hasUsageTotals({
-        ...keyStoreAggregateUsage,
-        requestCount: totalUsage
-    });
-    const aggregateUsage = useLedgerTotals ? ledgerSnapshot.totals : keyStoreAggregateUsage;
-    const costModels = Object.keys(aggregateModels || {}).length > 0
-        ? aggregateModels
-        : (ledgerSnapshot?.models || aggregateModels);
-    if (useLedgerTotals) {
-        totalUsage = toNumber(ledgerSnapshot.totals.requestCount);
-        totalPromptTokens = toNumber(ledgerSnapshot.totals.promptTokens);
-        totalCompletionTokens = toNumber(ledgerSnapshot.totals.completionTokens);
-        totalReasoningTokens = toNumber(ledgerSnapshot.totals.reasoningTokens);
-        totalTokens = toNumber(ledgerSnapshot.totals.totalTokens);
-        totalCachedTokens = toNumber(ledgerSnapshot.totals.cachedTokens);
-    }
     return {
-        usageFactSource: ledgerSnapshot ? 'usage-ledger' : 'api-potluck-keys',
         totalKeys: keys.length,
         enabledKeys,
         disabledKeys: keys.length - enabledKeys,
@@ -2010,7 +1498,7 @@ export async function getStats(options = {}) {
         maxQps: globalRates.maxQps,
         maxTps: globalRates.maxTps,
         maxRpm: globalRates.maxRpm,
-        cost: buildCost(aggregateUsage, costModels, conversionModel),
+        cost: buildCost(aggregateUsage, aggregateModels, conversionModel),
         pricing: {
             conversionModels: getConversionModels()
         },
@@ -2024,11 +1512,10 @@ export async function getStats(options = {}) {
  */
 export async function getAccountUsageSummary(now = new Date()) {
     const { conversionModel } = getCostOptions();
-    const ledgerSnapshot = await readLedgerUsageSnapshot({ conversionModel });
-    const modelUsageHistory = ledgerSnapshot ? null : readModelUsageDailyHistory(conversionModel);
-    const stats = ledgerSnapshot || modelUsageHistory ? null : await getStats({ conversionModel });
-    const usageHistory = ledgerSnapshot?.usageHistory || modelUsageHistory || stats?.usageHistory || {};
-    const source = ledgerSnapshot ? 'usage-ledger' : (modelUsageHistory ? 'model-usage-stats/daily' : 'potluck/model-usage-stats');
+    const modelUsageHistory = readModelUsageDailyHistory(conversionModel);
+    const stats = modelUsageHistory ? null : await getStats({ conversionModel });
+    const usageHistory = modelUsageHistory || stats.usageHistory || {};
+    const source = modelUsageHistory ? 'model-usage-stats/daily' : 'potluck/model-usage-stats';
     const starts = getBeijingPeriodStarts(now);
     const accounts = new Map();
     const aliasIndex = new Map();
@@ -2049,10 +1536,7 @@ export async function getAccountUsageSummary(now = new Date()) {
             } else {
                 const current = accounts.get(targetKey);
                 const currentPreferredKey = getSummaryCanonicalAccountKey(targetKey, current);
-                const shouldPromoteToIncomingIdentity = account.accountIdentity && (
-                    !current?.accountIdentity ||
-                    (account.accountEmail && current.accountIdentity !== account.accountEmail)
-                );
+                const shouldPromoteToIncomingIdentity = account.accountIdentity && !current?.accountIdentity;
                 const nextKey = shouldPromoteToIncomingIdentity ? preferredKey : currentPreferredKey;
                 if (nextKey && nextKey !== targetKey) {
                     accounts.delete(targetKey);
@@ -2089,9 +1573,6 @@ export async function getAccountUsageSummary(now = new Date()) {
             const today = cloneUsageBucket(account.today);
             const week = cloneUsageBucket(account.week);
             const month = cloneUsageBucket(account.month);
-            addCacheHitRatio(today);
-            addCacheHitRatio(week);
-            addCacheHitRatio(month);
             return {
                 ...account,
                 lastUsedAt: latestTimestamp(

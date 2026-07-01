@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globa
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import crypto from 'crypto';
 
 const originalCwd = process.cwd();
 let tempDir;
@@ -16,10 +15,6 @@ async function loadKeyManager() {
 async function loadPotluckPlugin() {
     jest.resetModules();
     return await import('../src/plugins/api-potluck/index.js');
-}
-
-function hashSecretForTest(value, length = 16) {
-    return `sha256:${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, length)}`;
 }
 
 beforeEach(() => {
@@ -39,181 +34,6 @@ afterEach(() => {
 });
 
 describe('api potluck key usage summary', () => {
-    test('uses usage ledger as the shared fact source for key and account summaries', async () => {
-        jest.setSystemTime(new Date('2026-07-01T04:00:00.000Z'));
-        const keyId = 'maki_ledger_shared_fact';
-        const keyHash = hashSecretForTest(keyId);
-        fs.writeFileSync(path.join(tempDir, 'configs', 'api-potluck-keys.json'), JSON.stringify({
-            keys: {
-                [keyId]: {
-                    id: keyId,
-                    name: 'Ledger Client',
-                    createdAt: '2026-07-01T00:00:00.000Z',
-                    dailyLimit: 1000,
-                    todayUsage: 0,
-                    totalUsage: 0,
-                    lastResetDate: '2026-07-01',
-                    enabled: true,
-                    usageHistory: {}
-                }
-            }
-        }), 'utf8');
-        const ledgerDir = path.join(tempDir, 'configs', 'usage-ledger');
-        fs.mkdirSync(ledgerDir, { recursive: true });
-        fs.writeFileSync(path.join(ledgerDir, 'usage-2026-07-01.jsonl'), [
-            {
-                schemaVersion: 1,
-                timestamp: '2026-07-01T02:00:00.000Z',
-                beijingDate: '2026-07-01',
-                requestId: 'req-ledger-1',
-                potluckKeyHash: keyHash,
-                potluckKeyId: keyId,
-                potluckKeyName: 'Ledger Client',
-                provider: 'openai-codex-oauth',
-                providerUuid: 'provider-a',
-                accountEmail: 'ledger@example.com',
-                accountDisplay: 'Ledger Account',
-                requestedModel: 'gpt-5.3-codex-spark',
-                actualModel: 'gpt-5.4-mini',
-                requestCount: 1,
-                promptTokens: 1000,
-                cachedTokens: 400,
-                completionTokens: 100,
-                totalTokens: 1100,
-                source: 'api-potluck'
-            },
-            {
-                schemaVersion: 1,
-                timestamp: '2026-07-01T03:00:00.000Z',
-                beijingDate: '2026-07-01',
-                requestId: 'req-ledger-2',
-                potluckKeyHash: keyHash,
-                potluckKeyId: keyId,
-                potluckKeyName: 'Ledger Client',
-                provider: 'openai-codex-oauth',
-                providerUuid: 'provider-a',
-                accountEmail: 'ledger@example.com',
-                accountDisplay: 'Ledger Account',
-                requestedModel: 'gpt-image-2',
-                actualModel: 'gpt-image-2',
-                requestCount: 1,
-                promptTokens: 200,
-                completionTokens: 100,
-                totalTokens: 300,
-                source: 'api-potluck'
-            }
-        ].map(row => JSON.stringify(row)).join('\n') + '\n', 'utf8');
-
-        const { listKeys, getStats, getAccountUsageSummary } = await loadKeyManager();
-        const [listedKey] = await listKeys();
-        const stats = await getStats();
-        const accountSummary = await getAccountUsageSummary(new Date('2026-07-01T04:00:00.000Z'));
-        const account = accountSummary.accounts.find(item => item.accountKey === 'openai-codex-oauth:ledger@example.com');
-
-        expect(listedKey.usageHistory['2026-07-01'].summary).toMatchObject({
-            requestCount: 2,
-            promptTokens: 1200,
-            cachedTokens: 400,
-            completionTokens: 200,
-            totalTokens: 1400
-        });
-        expect(stats).toMatchObject({
-            usageFactSource: 'usage-ledger',
-            todayTotalUsage: 2,
-            todayTotalTokens: 1400,
-            totalTokens: 1400
-        });
-        expect(stats.usageHistory['2026-07-01'].summary).toMatchObject({
-            requestCount: 2,
-            totalTokens: 1400
-        });
-        expect(accountSummary.source).toBe('usage-ledger');
-        expect(account.today).toMatchObject({
-            requestCount: 2,
-            totalTokens: 1400
-        });
-        expect(account.week).toMatchObject({
-            requestCount: 2,
-            totalTokens: 1400
-        });
-    });
-
-    test('does not double count duplicate request ids and only applies usage deltas', async () => {
-        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
-        const { createKey, incrementUsage, listKeys } = await loadKeyManager();
-
-        const key = await createKey('Dedup Client', 1000);
-        const context = {
-            providerUuid: 'provider-a',
-            providerName: 'user@example.com',
-            accountEmail: 'user@example.com',
-            timestamp: '2026-06-22T02:15:30.000Z'
-        };
-
-        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
-            requestCount: 1,
-            promptTokens: 1000,
-            cachedTokens: 400,
-            completionTokens: 120,
-            reasoningTokens: 80,
-            totalTokens: 1120
-        }, 'req-duplicate', context);
-        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
-            requestCount: 1,
-            promptTokens: 1000,
-            cachedTokens: 400,
-            completionTokens: 120,
-            reasoningTokens: 80,
-            totalTokens: 1120
-        }, 'req-duplicate', context);
-        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
-            requestCount: 1,
-            promptTokens: 1300,
-            cachedTokens: 500,
-            completionTokens: 150,
-            reasoningTokens: 90,
-            totalTokens: 1450
-        }, 'req-duplicate', context);
-
-        const [listedKey] = await listKeys();
-        const accountKey = 'openai-codex-oauth:user@example.com';
-
-        expect(listedKey.todayUsage).toBe(1);
-        expect(listedKey.todayPromptTokens).toBe(1300);
-        expect(listedKey.todayCompletionTokens).toBe(150);
-        expect(listedKey.todayReasoningTokens).toBe(90);
-        expect(listedKey.todayTotalTokens).toBe(1450);
-        expect(listedKey.usageHistory['2026-06-22'].summary).toMatchObject({
-            requestCount: 1,
-            promptTokens: 1300,
-            completionTokens: 150,
-            reasoningTokens: 90,
-            totalTokens: 1450,
-            cachedTokens: 500
-        });
-        expect(listedKey.usageHistory['2026-06-22'].accounts[accountKey].summary).toMatchObject({
-            requestCount: 1,
-            totalTokens: 1450
-        });
-
-        const ledgerRows = fs.readFileSync(path.join(tempDir, 'configs', 'usage-ledger', 'usage-2026-06-22.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .map(line => JSON.parse(line));
-        expect(ledgerRows).toHaveLength(1);
-        expect(ledgerRows[0]).toMatchObject({
-            requestId: 'req-duplicate',
-            potluckKeyId: key.id,
-            provider: 'openai-codex-oauth',
-            accountEmail: 'user@example.com',
-            actualModel: 'gpt-5.4-mini',
-            promptTokens: 1300,
-            completionTokens: 150,
-            reasoningTokens: 90,
-            totalTokens: 1450
-        });
-    });
-
     test('aggregates Codex account buckets by email across provider UUIDs', async () => {
         jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
         const { createKey, incrementUsage, listKeys, getStats } = await loadKeyManager();
@@ -435,7 +255,6 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 1,
             promptTokens: 1000,
-            cachedTokens: 100,
             completionTokens: 100,
             totalTokens: 1100
         }, 'req-month-only', {
@@ -448,7 +267,6 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 2,
             promptTokens: 2000,
-            cachedTokens: 400,
             completionTokens: 200,
             totalTokens: 2200
         }, 'req-week', {
@@ -461,7 +279,6 @@ describe('api potluck key usage summary', () => {
         await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.5', {
             requestCount: 3,
             promptTokens: 3000,
-            cachedTokens: 600,
             completionTokens: 300,
             totalTokens: 3300
         }, 'req-today', {
@@ -474,7 +291,7 @@ describe('api potluck key usage summary', () => {
         const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:codex-a@example.com');
 
         expect(summary).toMatchObject({
-            source: 'usage-ledger',
+            source: 'potluck/model-usage-stats',
             timezone: 'Asia/Shanghai',
             periods: {
                 today: '2026-06-26',
@@ -489,20 +306,19 @@ describe('api potluck key usage summary', () => {
             accountEmail: 'codex-a@example.com',
             providerName: 'Codex Account A'
         });
-        expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300, cachedTokens: 600, cacheHitRatio: 0.2 });
-        expect(account.week).toMatchObject({ requestCount: 6, totalTokens: 6600, cachedTokens: 1100 });
-        expect(account.week.cacheHitRatio).toBeCloseTo(1100 / 6000);
-        expect(account.month.cacheHitRatio).toBeCloseTo(1100 / 6000);
+        expect(account.today).toMatchObject({ requestCount: 3, totalTokens: 3300 });
+        expect(account.week).toMatchObject({ requestCount: 6, totalTokens: 6600 });
+        expect(account.month).toMatchObject({ requestCount: 6, totalTokens: 6600 });
         expect(account.today.cost).toMatchObject({
-            actualUsd: 0.0213,
+            actualUsd: 0.024,
             missingPriceTokens: 0
         });
         expect(account.week.cost).toMatchObject({
-            actualUsd: 0.043050000000000005,
+            actualUsd: 0.048,
             missingPriceTokens: 0
         });
         expect(account.month.cost).toMatchObject({
-            actualUsd: 0.043050000000000005,
+            actualUsd: 0.048,
             missingPriceTokens: 0
         });
         expect(account.lastUsedAt).toBe('2026-06-26T02:00:00.000Z');
@@ -765,7 +581,6 @@ describe('api potluck key usage summary', () => {
         const [listedKey] = await listKeys();
 
         expect(listedKey.audit.relatedNames).toEqual([
-            'Codex Account A',
             expect.stringMatching(/^redacted-email:/)
         ]);
         expect(JSON.stringify(listedKey.audit.relatedNames)).not.toContain('user@example.com');
@@ -951,191 +766,5 @@ describe('api potluck key usage summary', () => {
         expect(listedKey.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
         expect(Object.keys(stats.usageHistory)).toHaveLength(35);
         expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
-    });
-
-    test('list summary mode merges ledger dates with legacy key history without returning heavy day details', async () => {
-        jest.setSystemTime(new Date('2026-07-01T04:00:00.000Z'));
-        const keyId = 'maki_legacy_fallback';
-        const keyHash = hashSecretForTest(keyId);
-        fs.writeFileSync(path.join(tempDir, 'configs', 'api-potluck-keys.json'), JSON.stringify({
-            keys: {
-                [keyId]: {
-                    id: keyId,
-                    name: 'Legacy Client',
-                    createdAt: '2026-06-20T00:00:00.000Z',
-                    dailyLimit: 1000,
-                    totalUsage: 2,
-                    totalPromptTokens: 3000,
-                    totalCompletionTokens: 300,
-                    totalTokens: 3300,
-                    totalModels: {
-                        'gpt-5.4-mini': {
-                            requestCount: 2,
-                            promptTokens: 3000,
-                            completionTokens: 300,
-                            totalTokens: 3300
-                        }
-                    },
-                    lastResetDate: '2026-07-01',
-                    enabled: true,
-                    usageHistory: {
-                        '2026-06-29': {
-                            summary: {
-                                requestCount: 1,
-                                promptTokens: 1000,
-                                cachedTokens: 200,
-                                completionTokens: 100,
-                                totalTokens: 1100
-                            },
-                            models: {
-                                'gpt-5.4-mini': {
-                                    requestCount: 1,
-                                    promptTokens: 1000,
-                                    cachedTokens: 200,
-                                    completionTokens: 100,
-                                    totalTokens: 1100
-                                }
-                            },
-                            accounts: {
-                                'openai-codex-oauth:legacy@example.com': {
-                                    provider: 'openai-codex-oauth',
-                                    providerUuid: 'legacy@example.com',
-                                    summary: { requestCount: 1, totalTokens: 1100 },
-                                    models: {}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }), 'utf8');
-        const ledgerDir = path.join(tempDir, 'configs', 'usage-ledger');
-        fs.mkdirSync(ledgerDir, { recursive: true });
-        fs.writeFileSync(path.join(ledgerDir, 'usage-summary.json'), JSON.stringify({
-            generatedAt: '2026-07-01T04:00:00.000Z',
-            usageHistory: {
-                '2026-07-01': {
-                    summary: {
-                        requestCount: 1,
-                        promptTokens: 2000,
-                        cachedTokens: 600,
-                        completionTokens: 200,
-                        totalTokens: 2200
-                    },
-                    models: {
-                        'gpt-5.4-mini': {
-                            requestCount: 1,
-                            promptTokens: 2000,
-                            cachedTokens: 600,
-                            completionTokens: 200,
-                            totalTokens: 2200
-                        }
-                    },
-                    accounts: {},
-                    providers: {},
-                    hours: {}
-                }
-            },
-            byKeyHash: {
-                [keyHash]: {
-                    usageHistory: {
-                        '2026-07-01': {
-                            summary: {
-                                requestCount: 1,
-                                promptTokens: 2000,
-                                cachedTokens: 600,
-                                completionTokens: 200,
-                                totalTokens: 2200
-                            },
-                            models: {
-                                'gpt-5.4-mini': {
-                                    requestCount: 1,
-                                    promptTokens: 2000,
-                                    cachedTokens: 600,
-                                    completionTokens: 200,
-                                    totalTokens: 2200
-                                }
-                            },
-                            accounts: {},
-                            providers: {},
-                            hours: {}
-                        }
-                    },
-                    totals: { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 },
-                    models: {
-                        'gpt-5.4-mini': { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 }
-                    }
-                }
-            },
-            totals: { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 },
-            models: {
-                'gpt-5.4-mini': { requestCount: 1, promptTokens: 2000, cachedTokens: 600, completionTokens: 200, totalTokens: 2200 }
-            }
-        }), 'utf8');
-
-        const { listKeys, getKey } = await loadKeyManager();
-        const [listedKey] = await listKeys({ summaryOnly: true });
-        const detailKey = await getKey(keyId);
-
-        expect(Object.keys(listedKey.usageHistory).sort()).toEqual(['2026-06-29', '2026-07-01']);
-        expect(listedKey.usageHistory['2026-06-29'].summary).toMatchObject({ requestCount: 1, totalTokens: 1100 });
-        expect(listedKey.usageHistory['2026-06-29'].accounts).toBeUndefined();
-        expect(listedKey.usageHistory['2026-07-01'].summary).toMatchObject({ requestCount: 1, totalTokens: 2200 });
-        expect(listedKey.usageHistory['2026-07-01'].models).toBeUndefined();
-        expect(detailKey.usageHistory['2026-06-29'].accounts['openai-codex-oauth:legacy@example.com'].summary).toMatchObject({
-            requestCount: 1,
-            totalTokens: 1100
-        });
-        expect(detailKey.usageHistory['2026-07-01'].models['gpt-5.4-mini']).toMatchObject({
-            requestCount: 1,
-            totalTokens: 2200
-        });
-    });
-
-    test('getAccountUsageSummary merges display-name aliases that differ only by case', async () => {
-        jest.setSystemTime(new Date('2026-07-01T04:00:00.000Z'));
-        const ledgerDir = path.join(tempDir, 'configs', 'usage-ledger');
-        fs.mkdirSync(ledgerDir, { recursive: true });
-        fs.writeFileSync(path.join(ledgerDir, 'usage-summary.json'), JSON.stringify({
-            generatedAt: '2026-07-01T04:00:00.000Z',
-            usageHistory: {
-                '2026-07-01': {
-                    summary: { requestCount: 2, promptTokens: 3000, completionTokens: 300, totalTokens: 3300 },
-                    models: {},
-                    providers: {},
-                    hours: {},
-                    accounts: {
-                        'openai-codex-oauth:GaulinRosiles6731': {
-                            provider: 'openai-codex-oauth',
-                            providerUuid: 'GaulinRosiles6731',
-                            accountIdentity: 'GaulinRosiles6731',
-                            providerName: 'GaulinRosiles6731',
-                            summary: { requestCount: 1, promptTokens: 1000, completionTokens: 100, totalTokens: 1100 },
-                            models: {}
-                        },
-                        'openai-codex-oauth:gaulinrosiles6731': {
-                            provider: 'openai-codex-oauth',
-                            providerUuid: 'gaulinrosiles6731',
-                            accountIdentity: 'gaulinrosiles6731',
-                            providerName: 'gaulinrosiles6731',
-                            summary: { requestCount: 1, promptTokens: 2000, completionTokens: 200, totalTokens: 2200 },
-                            models: {}
-                        }
-                    }
-                }
-            },
-            byKeyHash: {},
-            totals: { requestCount: 2, promptTokens: 3000, completionTokens: 300, totalTokens: 3300 },
-            models: {}
-        }), 'utf8');
-
-        const { getAccountUsageSummary } = await loadKeyManager();
-        const summary = await getAccountUsageSummary(new Date('2026-07-01T04:00:00.000Z'));
-
-        expect(summary.accounts).toHaveLength(1);
-        expect(summary.accounts[0].today).toMatchObject({
-            requestCount: 2,
-            totalTokens: 3300
-        });
     });
 });
