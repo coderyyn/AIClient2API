@@ -12,7 +12,6 @@ let flushPromise = null;
 let lastCleanupAt = 0;
 let cleanupTimer = null;
 let cleanupInFlight = false;
-let deepContextBreakdown = false;
 let analyzerRunner = null;
 let rawCaptureStore = null;
 let rawCaptureOptions = { enabled: false, keyHashes: [] };
@@ -194,7 +193,6 @@ const requestAuditPlugin = {
 
     async init(config = {}) {
         enabled = config.REQUEST_AUDIT_ENABLED !== false && config.REQUEST_AUDIT_ENABLED !== 'false';
-        deepContextBreakdown = config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === true || config.REQUEST_AUDIT_DEEP_CONTEXT_BREAKDOWN === 'true';
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
         const materializedStore = config._requestAuditAnalysisStore || getAnalysisStore(config);
@@ -223,7 +221,7 @@ const requestAuditPlugin = {
             });
             analyzerRunner.start();
         }
-        logger.info(`[Request Audit] Initialized enabled=${enabled} deepContextBreakdown=${deepContextBreakdown}`);
+        logger.info(`[Request Audit] Initialized enabled=${enabled}`);
     },
 
     async destroy() {
@@ -266,7 +264,6 @@ const requestAuditPlugin = {
                     ...context,
                     requestId,
                     usage,
-                    deepContextBreakdown,
                     timestamp: new Date().toISOString()
                 });
             } catch (error) {

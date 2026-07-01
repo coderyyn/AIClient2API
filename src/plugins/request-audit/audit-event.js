@@ -1,6 +1,4 @@
 import crypto from 'crypto';
-import { buildContextBreakdown } from './context-breakdown.js';
-import { buildRequestFingerprint } from './fingerprint.js';
 
 function toNumber(value) {
     const number = Number(value);
@@ -88,51 +86,6 @@ function getBeijingParts(date) {
     };
 }
 
-function buildUsageOnlyContextBreakdown(usage = {}) {
-    const promptTokens = toNumber(usage.promptTokens);
-    const cachedTokens = toNumber(usage.cachedTokens);
-    const completionTokens = toNumber(usage.completionTokens);
-    const reasoningTokens = toNumber(usage.reasoningTokens);
-    const conversationTokens = Math.max(0, promptTokens - cachedTokens);
-    const sections = [];
-
-    if (conversationTokens > 0) {
-        sections.push({
-            id: 'conversation',
-            label: 'Conversation',
-            calibratedTokens: conversationTokens,
-            percentOfPrompt: promptTokens > 0 ? conversationTokens / promptTokens : 0
-        });
-    }
-    if (cachedTokens > 0) {
-        sections.push({
-            id: 'cached_input',
-            label: 'Cached input',
-            tokens: cachedTokens,
-            percentOfPrompt: promptTokens > 0 ? cachedTokens / promptTokens : 0
-        });
-    }
-    if (completionTokens > 0) {
-        sections.push({
-            id: 'output',
-            label: 'Output',
-            tokens: completionTokens
-        });
-    }
-    if (reasoningTokens > 0) {
-        sections.push({
-            id: 'reasoning',
-            label: 'Reasoning',
-            tokens: reasoningTokens
-        });
-    }
-
-    return {
-        estimationMethod: 'usage-only-fast',
-        sections
-    };
-}
-
 export function buildRequestAuditEvent(context = {}) {
     const timestamp = context.timestamp || new Date().toISOString();
     const date = new Date(timestamp);
@@ -140,22 +93,6 @@ export function buildRequestAuditEvent(context = {}) {
     const usage = normalizeUsage(context.usage);
     const actualModel = context.model || context.processedRequestBody?.model || context.originalRequestBody?.model || 'unknown';
     const requestedModel = context.originalRequestBody?.model || actualModel;
-    let fingerprint = null;
-    try {
-        fingerprint = buildRequestFingerprint({
-            originalRequestBody: context.originalRequestBody,
-            processedRequestBody: context.processedRequestBody
-        });
-    } catch (error) {
-        fingerprint = {
-            version: 1,
-            payloadHash: null,
-            shapeHash: null,
-            sections: {},
-            prefixHashes: [],
-            warnings: [`fingerprint_failed:${error.message}`]
-        };
-    }
 
     return {
         schemaVersion: 1,
@@ -190,14 +127,6 @@ export function buildRequestAuditEvent(context = {}) {
             retryCount: toNumber(context.retryCount),
             cooldownApplied: Boolean(context.cooldownApplied)
         },
-        usage,
-        fingerprint,
-        contextBreakdown: context.deepContextBreakdown === true
-            ? buildContextBreakdown({
-                originalRequestBody: context.originalRequestBody,
-                processedRequestBody: context.processedRequestBody,
-                usage
-            })
-            : buildUsageOnlyContextBreakdown(usage)
+        usage
     };
 }

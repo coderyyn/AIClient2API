@@ -54,7 +54,8 @@ describe('request audit plugin', () => {
       completionTokens: 20,
       totalTokens: 1020
     });
-    expect(auditStore.append.mock.calls[0][0].fingerprint.payloadHash).toMatch(/^sha256:/);
+    expect(auditStore.append.mock.calls[0][0]).not.toHaveProperty('fingerprint');
+    expect(auditStore.append.mock.calls[0][0]).not.toHaveProperty('contextBreakdown');
     expect(JSON.stringify(auditStore.append.mock.calls[0][0])).not.toContain('hello');
   });
 
@@ -97,7 +98,7 @@ describe('request audit plugin', () => {
     resolveAppend();
   });
 
-  test('does not block content generation when fingerprint input is large', async () => {
+  test('does not block content generation when audit input is large', async () => {
     const auditStore = {
       append: jest.fn(),
       cleanup: jest.fn()
@@ -134,7 +135,8 @@ describe('request audit plugin', () => {
     await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1), 1500);
     const eventJson = JSON.stringify(auditStore.append.mock.calls[0][0]);
     expect(eventJson).not.toContain('secret-large');
-    expect(auditStore.append.mock.calls[0][0].fingerprint.warnings).toEqual(expect.arrayContaining(['payload_truncated_for_fingerprint']));
+    expect(auditStore.append.mock.calls[0][0]).not.toHaveProperty('fingerprint');
+    expect(auditStore.append.mock.calls[0][0]).not.toHaveProperty('contextBreakdown');
   });
 
   test('captures raw request only when scoped raw capture is enabled for key hash', async () => {

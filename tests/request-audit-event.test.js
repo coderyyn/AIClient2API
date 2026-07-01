@@ -25,13 +25,11 @@ describe('request audit event', () => {
     expect(serialized).not.toContain('maki_4734b4e5fe29dc2af36d8296a46f3462');
     expect(serialized).not.toContain('secret prompt text');
     expect(event.account.accountEmail).toBe('user@example.com');
-    expect(event.contextBreakdown.estimationMethod).toBe('usage-only-fast');
-    expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['conversation', 'cached_input']));
-    expect(event.fingerprint.payloadHash).toMatch(/^sha256:/);
-    expect(event.fingerprint.sections.conversation.charLength).toBeGreaterThan(0);
+    expect(event).not.toHaveProperty('fingerprint');
+    expect(event).not.toHaveProperty('contextBreakdown');
   });
 
-  test('uses deep context breakdown only when explicitly requested', () => {
+  test('omits diagnostic payload fields even when deep context breakdown is requested', () => {
     const event = buildRequestAuditEvent({
       requestId: 'req-deep',
       model: 'gpt-5.5',
@@ -45,8 +43,8 @@ describe('request audit event', () => {
       usage: { promptTokens: 1000, cachedTokens: 100, totalTokens: 1100 }
     });
 
-    expect(event.contextBreakdown.estimationMethod).toContain('calibrated');
-    expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['instructions', 'tools', 'conversation']));
+    expect(event).not.toHaveProperty('fingerprint');
+    expect(event).not.toHaveProperty('contextBreakdown');
   });
 
   test('keeps requested and actual model when server-side model fallback is used', () => {
