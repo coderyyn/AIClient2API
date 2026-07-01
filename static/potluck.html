@@ -2118,11 +2118,15 @@
             container.innerHTML = topData.map(([name, item]) => {
                 const count = getCount(item);
                 const percent = Math.round((count / total) * 100);
+                const costHtml = item?.cost ? ` · ${formatDisplayCost(item.cost)}` : '';
+                const missingCostHtml = Number(item?.cost?.missingPriceTokens || 0) > 0
+                    ? ` <span class="cost-inline alt" title="有 ${formatTokenCompact(item.cost.missingPriceTokens)} Tokens 缺失模型价格">缺失价格</span>`
+                    : '';
                 return `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name">${escapeHtml(name)}</span>
-                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)</span>
+                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)${costHtml}${missingCostHtml}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${percent}%"></div>
@@ -2132,13 +2136,24 @@
             }).join('');
             
             if (sorted.length > maxItems) {
-                const otherCount = sorted.slice(maxItems).reduce((sum, item) => sum + getCount(item[1]), 0);
+                const other = sorted.slice(maxItems).reduce((sum, item) => {
+                    sum.count += getCount(item[1]);
+                    addCostBucket(sum.cost, item[1]?.cost);
+                    return sum;
+                }, { count: 0, cost: { actualUsd: 0, convertedUsd: 0, missingPriceTokens: 0 } });
+                const otherCount = other.count;
                 const otherPercent = Math.round((otherCount / total) * 100);
+                const otherCostHtml = other.cost.actualUsd > 0 || other.cost.convertedUsd > 0 || other.cost.missingPriceTokens > 0
+                    ? ` · ${formatDisplayCost(other.cost)}`
+                    : '';
+                const otherMissingCostHtml = Number(other.cost.missingPriceTokens || 0) > 0
+                    ? ` <span class="cost-inline alt" title="有 ${formatTokenCompact(other.cost.missingPriceTokens)} Tokens 缺失模型价格">缺失价格</span>`
+                    : '';
                 container.innerHTML += `
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - maxItems} 个)</span>
-                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)</span>
+                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)${otherCostHtml}${otherMissingCostHtml}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>

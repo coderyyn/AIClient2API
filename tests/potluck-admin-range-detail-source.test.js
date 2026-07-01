@@ -153,7 +153,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).not.toContain('节点与 Token 使用统计 (最近 3 个月)');
     });
 
-    test('admin overview distributions keep actual-value totals out of the dashboard chrome', () => {
+    test('admin overview model distribution shows row cost while keeping totals out of the dashboard chrome', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain("document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`");
@@ -166,8 +166,9 @@ describe('API Potluck admin range and key detail UI source', () => {
         const renderDistributionEnd = source.indexOf('function setUsageRange(range)', renderDistributionStart);
         expect(renderDistributionEnd).toBeGreaterThan(renderDistributionStart);
         const renderDistributionBlock = source.slice(renderDistributionStart, renderDistributionEnd);
-        expect(renderDistributionBlock).not.toContain('formatDisplayCost(cost)');
-        expect(renderDistributionBlock).not.toContain('getDisplayCostUsd(item[1]?.cost)');
+        expect(renderDistributionBlock).toContain('const costHtml = item?.cost ? ` · ${formatDisplayCost(item.cost)}` :');
+        expect(renderDistributionBlock).toContain('const missingCostHtml = Number(item?.cost?.missingPriceTokens || 0) > 0');
+        expect(renderDistributionBlock).toContain('${costHtml}${missingCostHtml}');
     });
 
     test('admin key list defaults to sorting by current range tokens', () => {
