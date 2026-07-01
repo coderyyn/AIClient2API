@@ -37,6 +37,15 @@ export function sanitizeProviderName(name) {
     return `redacted-name:${crypto.createHash('sha256').update(text).digest('hex').slice(0, 8)}`;
 }
 
+export function extractAccountEmail(...candidates) {
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        const email = String(candidate).match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+        if (email) return email[0].toLowerCase();
+    }
+    return null;
+}
+
 export function normalizeUsage(usage = {}) {
     const promptTokens = toNumber(usage.promptTokens ?? usage.prompt_tokens ?? usage.input_tokens);
     const cachedTokens = toNumber(
@@ -170,6 +179,7 @@ export function buildRequestAuditEvent(context = {}) {
         },
         account: {
             providerUuid: context.providerUuid || null,
+            accountEmail: extractAccountEmail(context.accountEmail, context.accountIdentity, context.providerName),
             providerNameHash: hashSecret(context.providerName),
             providerNameDisplay: sanitizeProviderName(context.providerName)
         },

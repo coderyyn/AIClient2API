@@ -1,4 +1,5 @@
 import { buildRequestAuditEvent } from '../src/plugins/request-audit/audit-event.js';
+import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
 
 describe('request audit event', () => {
   test('builds sanitized audit event with key hash and no raw prompt', () => {
@@ -23,7 +24,7 @@ describe('request audit event', () => {
     expect(event.account.providerNameDisplay).toMatch(/^redacted-email:/);
     expect(serialized).not.toContain('maki_4734b4e5fe29dc2af36d8296a46f3462');
     expect(serialized).not.toContain('secret prompt text');
-    expect(serialized).not.toContain('user@example.com');
+    expect(event.account.accountEmail).toBe('user@example.com');
     expect(event.contextBreakdown.estimationMethod).toBe('usage-only-fast');
     expect(event.contextBreakdown.sections.map(section => section.id)).toEqual(expect.arrayContaining(['conversation', 'cached_input']));
     expect(event.fingerprint.payloadHash).toMatch(/^sha256:/);
@@ -68,6 +69,41 @@ describe('request audit event', () => {
       requestedModel: 'gpt-5.3-codex-spark',
       actualModel: 'gpt-5.4-mini'
     });
+  });
+
+  test('records real account email when routing context provides it', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-account-email',
+      providerName: 'codex-account-a',
+      providerUuid: 'uuid-1',
+      accountEmail: 'Codex.User@Example.COM',
+      model: 'gpt-5.5',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 }
+    });
+
+    expect(event.account).toMatchObject({
+      providerUuid: 'uuid-1',
+      accountEmail: 'codex.user@example.com'
+    });
+  });
+
+  test('uses account email as the summary account key when present', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-summary-account-email',
+      providerName: 'codex-account-a',
+      providerUuid: 'uuid-1',
+      accountEmail: 'codex.user@example.com',
+      model: 'gpt-5.5',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 }
+    });
+
+    const summary = buildAuditSummary([event]);
+
+    expect(summary.accounts['codex.user@example.com']).toMatchObject({
+      requestCount: 1,
+      totalTokens: 12
+    });
+    expect(summary.accounts['codex-account-a']).toBeUndefined();
   });
 
   test('does not add reasoning tokens to completion tokens when normalizing usage', () => {
