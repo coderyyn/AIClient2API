@@ -51,7 +51,7 @@ function getRequestCostOptions(req) {
 }
 
 function getStatsCacheKey(costOptions = {}) {
-    return costOptions.conversionModel || '';
+    return `${costOptions.conversionModel || ''}:${costOptions.compactAccounts ? 'compact-accounts' : 'full'}`;
 }
 
 function clearStatsCache() {
@@ -297,7 +297,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         if (method === 'GET' && path === '/api/potluck/keys') {
             const costOptions = getRequestCostOptions(req);
             const keys = await listKeys({ ...costOptions, summaryOnly: true });
-            const stats = enrichPotluckStatsAccountEmails(await getCachedStats(costOptions));
+            const stats = enrichPotluckStatsAccountEmails(await getCachedStats({ ...costOptions, compactAccounts: true }));
             sendJson(res, 200, { 
                 success: true, 
                 data: { keys: keys.map(compactKeyForList), stats }

@@ -899,6 +899,35 @@ describe('api potluck key usage summary', () => {
         expect(compactDay).not.toHaveProperty('hours');
     });
 
+    test('compact stats keeps summary provider and model totals without account details', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, getStats } = await loadKeyManager();
+
+        const key = await createKey('Compact Stats Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-compact-stats', {
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+
+        const fullStats = await getStats();
+        const compactStats = await getStats({ compactAccounts: true });
+        const fullDay = fullStats.usageHistory['2026-06-22'];
+        const compactDay = compactStats.usageHistory['2026-06-22'];
+
+        expect(fullDay.accounts['openai-codex-oauth:user@example.com'].summary.totalTokens).toBe(1100);
+        expect(compactDay.summary.totalTokens).toBe(1100);
+        expect(compactDay.providers['openai-codex-oauth'].totalTokens).toBe(1100);
+        expect(compactDay.models['gpt-5.4-mini'].totalTokens).toBe(1100);
+        expect(compactDay.accounts).toEqual({});
+    });
+
     test('trims over-retained persisted history on load while preserving cumulative model cost', async () => {
         const usageHistory = {};
         for (let offset = 0; offset < 36; offset++) {

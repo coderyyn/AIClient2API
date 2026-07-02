@@ -11,8 +11,9 @@ describe('api potluck keys list compact source', () => {
         expect(source).toContain('const STATS_CACHE_TTL_MS = 30 * 1000');
         expect(source).toContain('function getCachedStats(costOptions = {})');
         expect(source).toContain('if (entry?.promise) return entry.promise');
+        expect(source).toContain('await getCachedStats(getRequestCostOptions(req))');
         expect(source).toContain('listKeys({ ...costOptions, summaryOnly: true })');
-        expect(source).toContain('await getCachedStats(costOptions)');
+        expect(source).toContain('getCachedStats({ ...costOptions, compactAccounts: true })');
         expect(source).toContain('keys.map(compactKeyForList)');
         expect(source).toContain('delete compact.usageHistory[date].providers');
         expect(source).toContain('delete compact.usageHistory[date].models');

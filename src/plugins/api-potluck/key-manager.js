@@ -1540,7 +1540,7 @@ export async function getStats(options = {}) {
                 }
 
                 // 汇总账号维度，供管理页展示 Codex OAuth 账号 Token 占比。
-                if (history.accounts) {
+                if (!options.compactAccounts && history.accounts) {
                     Object.values(history.accounts).forEach((account) => {
                         addAccountUsage(aggregatedHistory[date].accounts, account);
                     });
