@@ -182,6 +182,7 @@ async function restartWorker() {
 function scheduleRestart() {
     if (workerStatus.restartCount >= config.maxRestartAttempts) {
         logger.error('[Master] Max restart attempts reached, giving up');
+        process.exit(1);
         return;
     }
 
@@ -299,10 +300,11 @@ function createMasterServer() {
 
         // 健康检查
         if (method === 'GET' && path === '/master/health') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
+            const workerRunning = workerProcess !== null;
+            res.writeHead(workerRunning ? 200 : 503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
-                status: 'healthy',
-                workerRunning: workerProcess !== null,
+                status: workerRunning ? 'healthy' : 'unhealthy',
+                workerRunning,
                 timestamp: new Date().toISOString()
             }));
             return;

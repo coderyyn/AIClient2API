@@ -28,6 +28,9 @@ import logger from '../../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
 
+const STATS_CACHE_TTL_MS = 30 * 1000;
+const statsCache = new Map();
+
 /**
  * 发送 JSON 响应
  */
@@ -45,6 +48,34 @@ function getRequestCostOptions(req) {
     } catch {
         return {};
     }
+}
+
+function getStatsCacheKey(costOptions = {}) {
+    return costOptions.conversionModel || '';
+}
+
+function clearStatsCache() {
+    statsCache.clear();
+}
+
+function getCachedStats(costOptions = {}) {
+    const cacheKey = getStatsCacheKey(costOptions);
+    const now = Date.now();
+    const entry = statsCache.get(cacheKey);
+    if (entry?.value && now - entry.createdAt < STATS_CACHE_TTL_MS) return entry.value;
+    if (entry?.promise) return entry.promise;
+
+    const promise = getStats(costOptions)
+        .then(stats => {
+            statsCache.set(cacheKey, { value: stats, createdAt: Date.now() });
+            return stats;
+        })
+        .catch(error => {
+            statsCache.delete(cacheKey);
+            throw error;
+        });
+    statsCache.set(cacheKey, { promise, createdAt: now });
+    return promise;
 }
 
 function compactUsageHistoryForList(usageHistory = {}) {
@@ -237,7 +268,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
     try {
         // GET /api/potluck/stats - 获取统计信息
         if (method === 'GET' && path === '/api/potluck/stats') {
-            const stats = enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)));
+            const stats = enrichPotluckStatsAccountEmails(await getCachedStats(getRequestCostOptions(req)));
             sendJson(res, 200, { success: true, data: stats });
             return true;
         }
@@ -252,6 +283,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // POST /api/potluck/stats/reset-tokens - 重置全部 Key 的 Token 统计
         if (method === 'POST' && path === '/api/potluck/stats/reset-tokens') {
             const result = await resetAllTokenStats();
+            clearStatsCache();
             const stats = enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)));
             sendJson(res, 200, {
                 success: true,
@@ -265,7 +297,7 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         if (method === 'GET' && path === '/api/potluck/keys') {
             const costOptions = getRequestCostOptions(req);
             const keys = await listKeys({ ...costOptions, summaryOnly: true });
-            const stats = enrichPotluckStatsAccountEmails(await getStats(costOptions));
+            const stats = enrichPotluckStatsAccountEmails(await getCachedStats(costOptions));
             sendJson(res, 200, { 
                 success: true, 
                 data: { keys: keys.map(compactKeyForList), stats }
