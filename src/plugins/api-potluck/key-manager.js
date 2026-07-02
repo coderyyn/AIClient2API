@@ -865,12 +865,16 @@ function addCostToUsageHistory(usageHistory = {}, conversionModel = DEFAULT_CONV
     return usageHistory;
 }
 
-function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
+function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL, options = {}) {
     const compact = {};
     for (const [date, day] of Object.entries(usageHistory || {})) {
         const summary = cloneUsageBucket(day?.summary || {});
         addCacheHitRatio(summary);
-        summary.cost = buildCost(summary, day?.models || {}, conversionModel);
+        if (!options.compactCosts) {
+            summary.cost = buildCost(summary, day?.models || {}, conversionModel);
+        } else {
+            delete summary.cost;
+        }
         compact[date] = { summary };
     }
     return compact;
@@ -885,7 +889,7 @@ function getCostOptions(options = {}) {
 function enrichKeyUsage(keyData, options = {}) {
     const { conversionModel } = getCostOptions(options);
     const usageHistory = options.summaryOnly
-        ? cloneUsageHistorySummaryOnly(keyData.usageHistory || {}, conversionModel)
+        ? cloneUsageHistorySummaryOnly(keyData.usageHistory || {}, conversionModel, options)
         : addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
     if (!options.summaryOnly) {
         addCostToUsageHistory(usageHistory, conversionModel);
@@ -1488,6 +1492,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
 export async function getStats(options = {}) {
     ensureLoaded();
     const { conversionModel } = getCostOptions(options);
+    const compactHistory = Boolean(options.compactHistory);
     const keys = Object.values(keyStore.keys);
     let enabledKeys = 0, todayTotalUsage = 0, totalUsage = 0;
     let todayPromptTokens = 0, todayCompletionTokens = 0, todayReasoningTokens = 0, todayTotalTokens = 0, todayCachedTokens = 0;
@@ -1510,10 +1515,12 @@ export async function getStats(options = {}) {
         totalReasoningTokens += key.totalReasoningTokens || 0;
         totalTokens += key.totalTokens || 0;
         totalCachedTokens += key.totalCachedTokens || 0;
-        Object.entries(key.totalModels || collectModelsFromUsageHistory(key.usageHistory || {})).forEach(([model, usage]) => {
-            aggregateModels[model] = normalizeUsageBucket(aggregateModels[model]);
-            addUsage(aggregateModels[model], usage);
-        });
+        if (!compactHistory) {
+            Object.entries(key.totalModels || collectModelsFromUsageHistory(key.usageHistory || {})).forEach(([model, usage]) => {
+                aggregateModels[model] = normalizeUsageBucket(aggregateModels[model]);
+                addUsage(aggregateModels[model], usage);
+            });
+        }
 
         // 汇总每个 Key 的历史数据
         if (key.usageHistory) {
@@ -1524,7 +1531,7 @@ export async function getStats(options = {}) {
                 addUsage(aggregatedHistory[date].summary, history.summary);
                 
                 // 汇总提供商
-                if (history.providers) {
+                if (!compactHistory && history.providers) {
                     Object.entries(history.providers).forEach(([p, usage]) => {
                         aggregatedHistory[date].providers[p] = normalizeUsageBucket(aggregatedHistory[date].providers[p]);
                         addUsage(aggregatedHistory[date].providers[p], usage);
@@ -1532,7 +1539,7 @@ export async function getStats(options = {}) {
                 }
                 
                 // 汇总模型
-                if (history.models) {
+                if (!compactHistory && history.models) {
                     Object.entries(history.models).forEach(([m, usage]) => {
                         aggregatedHistory[date].models[m] = normalizeUsageBucket(aggregatedHistory[date].models[m]);
                         addUsage(aggregatedHistory[date].models[m], usage);
@@ -1540,7 +1547,7 @@ export async function getStats(options = {}) {
                 }
 
                 // 汇总账号维度，供管理页展示 Codex OAuth 账号 Token 占比。
-                if (!options.compactAccounts && history.accounts) {
+                if (!compactHistory && !options.compactAccounts && history.accounts) {
                     Object.values(history.accounts).forEach((account) => {
                         addAccountUsage(aggregatedHistory[date].accounts, account);
                     });
@@ -1552,7 +1559,9 @@ export async function getStats(options = {}) {
     const globalRates = rateManager.getGlobalStats();
     trimUsageHistory(aggregatedHistory, USAGE_HISTORY_RETENTION_DAYS);
     addUsageHistoryRatios(aggregatedHistory);
-    addCostToUsageHistory(aggregatedHistory, conversionModel);
+    if (!compactHistory) {
+        addCostToUsageHistory(aggregatedHistory, conversionModel);
+    }
     const aggregateUsage = {
         promptTokens: totalPromptTokens,
         completionTokens: totalCompletionTokens,
@@ -1584,7 +1593,7 @@ export async function getStats(options = {}) {
         maxQps: globalRates.maxQps,
         maxTps: globalRates.maxTps,
         maxRpm: globalRates.maxRpm,
-        cost: buildCost(aggregateUsage, aggregateModels, conversionModel),
+        cost: buildCost(aggregateUsage, compactHistory ? {} : aggregateModels, conversionModel),
         pricing: {
             conversionModels: getConversionModels()
         },

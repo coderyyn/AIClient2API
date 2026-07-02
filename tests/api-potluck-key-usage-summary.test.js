@@ -878,7 +878,7 @@ describe('api potluck key usage summary', () => {
         });
 
         const [fullKey] = await listKeys({ conversionModel: 'gemini-2.5-flash' });
-        const [summaryKey] = await listKeys({ conversionModel: 'gemini-2.5-flash', summaryOnly: true });
+        const [summaryKey] = await listKeys({ conversionModel: 'gemini-2.5-flash', summaryOnly: true, compactCosts: true });
         const fullDay = fullKey.usageHistory['2026-06-22'];
         const compactDay = summaryKey.usageHistory['2026-06-22'];
 
@@ -891,8 +891,8 @@ describe('api potluck key usage summary', () => {
             totalTokens: 1100000,
             cacheHitRatio: 0.25
         });
-        expect(compactDay.summary.cost.actualUsd).toBeCloseTo(fullDay.summary.cost.actualUsd, 6);
-        expect(compactDay.summary.cost.convertedUsd).toBeCloseTo(fullDay.summary.cost.convertedUsd, 6);
+        expect(fullDay.summary.cost.actualUsd).toBeGreaterThan(0);
+        expect(compactDay.summary).not.toHaveProperty('cost');
         expect(compactDay).not.toHaveProperty('providers');
         expect(compactDay).not.toHaveProperty('models');
         expect(compactDay).not.toHaveProperty('accounts');
@@ -917,14 +917,14 @@ describe('api potluck key usage summary', () => {
         });
 
         const fullStats = await getStats();
-        const compactStats = await getStats({ compactAccounts: true });
+        const compactStats = await getStats({ compactHistory: true, compactAccounts: true });
         const fullDay = fullStats.usageHistory['2026-06-22'];
         const compactDay = compactStats.usageHistory['2026-06-22'];
 
         expect(fullDay.accounts['openai-codex-oauth:user@example.com'].summary.totalTokens).toBe(1100);
         expect(compactDay.summary.totalTokens).toBe(1100);
-        expect(compactDay.providers['openai-codex-oauth'].totalTokens).toBe(1100);
-        expect(compactDay.models['gpt-5.4-mini'].totalTokens).toBe(1100);
+        expect(compactDay.providers).toEqual({});
+        expect(compactDay.models).toEqual({});
         expect(compactDay.accounts).toEqual({});
     });
 

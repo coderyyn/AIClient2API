@@ -51,7 +51,11 @@ function getRequestCostOptions(req) {
 }
 
 function getStatsCacheKey(costOptions = {}) {
-    return `${costOptions.conversionModel || ''}:${costOptions.compactAccounts ? 'compact-accounts' : 'full'}`;
+    return [
+        costOptions.conversionModel || '',
+        costOptions.compactHistory ? 'compact-history' : 'full-history',
+        costOptions.compactAccounts ? 'compact-accounts' : 'full-accounts'
+    ].join(':');
 }
 
 function clearStatsCache() {
@@ -296,8 +300,8 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // GET /api/potluck/keys - 获取所有 Key 列表
         if (method === 'GET' && path === '/api/potluck/keys') {
             const costOptions = getRequestCostOptions(req);
-            const keys = await listKeys({ ...costOptions, summaryOnly: true });
-            const stats = enrichPotluckStatsAccountEmails(await getCachedStats({ ...costOptions, compactAccounts: true }));
+            const keys = await listKeys({ ...costOptions, summaryOnly: true, compactCosts: true });
+            const stats = await getCachedStats({ ...costOptions, compactHistory: true, compactAccounts: true });
             sendJson(res, 200, { 
                 success: true, 
                 data: { keys: keys.map(compactKeyForList), stats }
