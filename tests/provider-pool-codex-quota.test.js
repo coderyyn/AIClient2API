@@ -401,4 +401,105 @@ describe('provider pool Codex token quota', () => {
         });
         expect(['aaa-codex-over', 'zzz-codex-ok']).toContain(selected.config.uuid);
     });
+
+    test('uses 100 percent as the default Codex 5.3 bucket limit when no override is configured', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        { id: 'primary_window', percent: 0, unit: 'percent' },
+                        { id: 'secondary_window', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 100, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    summary: { plan: 'Plus' },
+                    items: [
+                        { id: 'primary_window', percent: 0, unit: 'percent' },
+                        { id: 'secondary_window', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 100, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({
+            over: {
+                supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+                codex53Max5hPercent: undefined,
+                codex53MaxWeeklyPercent: undefined
+            },
+            ok: {
+                supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+                codex53Max5hPercent: undefined,
+                codex53MaxWeeklyPercent: undefined
+            }
+        });
+
+        const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.3-codex-spark');
+
+        expect(selected).toMatchObject({
+            actualProviderType: 'openai-codex-oauth',
+            isFallback: true,
+            actualModel: 'gpt-5.4-mini'
+        });
+    });
+
+    test('uses 100 percent as the default Codex general bucket limit when no override is configured', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        { id: 'primary_window', percent: 100, unit: 'percent' },
+                        { id: 'secondary_window', percent: 20, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 0, unit: 'percent' }
+                    ]
+                }
+            },
+            {
+                uuid: 'zzz-codex-ok',
+                success: true,
+                usage: {
+                    summary: { plan: 'Plus' },
+                    items: [
+                        { id: 'primary_window', percent: 100, unit: 'percent' },
+                        { id: 'secondary_window', percent: 20, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_primary_window', label: 'GPT-5.3-Codex-Spark (5h)', percent: 0, unit: 'percent' },
+                        { id: 'additional_gpt_5_3_codex_spark_secondary_window', label: 'GPT-5.3-Codex-Spark (Weekly)', percent: 0, unit: 'percent' }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({
+            over: {
+                codexGeneralMax5hPercent: undefined,
+                codexGeneralMaxWeeklyPercent: undefined
+            },
+            ok: {
+                codexGeneralMax5hPercent: undefined,
+                codexGeneralMaxWeeklyPercent: undefined
+            }
+        });
+
+        await expect(manager.selectProvider('openai-codex-oauth', 'gpt-5.5')).rejects.toMatchObject({
+            status: 429,
+            filterReasons: {
+                general_quota_exceeded: 2
+            }
+        });
+    });
 });

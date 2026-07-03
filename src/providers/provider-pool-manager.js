@@ -142,6 +142,10 @@ function getPositivePercentLimit(value) {
     return Math.min(parsed, 100);
 }
 
+function getPercentLimit(value, fallback = null) {
+    return getPositivePercentLimit(value) ?? fallback;
+}
+
 function getPositiveIntegerConfig(value, fallback) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -245,14 +249,14 @@ function getCodexCachedQuotaPressure(providerType, uuid, usageCache, bucket = CO
 function getCodexQuotaLimits(config = {}, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
     if (bucket === CODEX_QUOTA_BUCKET.CODEX_53) {
         return {
-            max5hPercent: getPositivePercentLimit(config.codex53Max5hPercent),
-            maxWeeklyPercent: getPositivePercentLimit(config.codex53MaxWeeklyPercent)
+            max5hPercent: getPercentLimit(config.codex53Max5hPercent, 100),
+            maxWeeklyPercent: getPercentLimit(config.codex53MaxWeeklyPercent, 100)
         };
     }
 
     return {
-        max5hPercent: getPositivePercentLimit(config.codexGeneralMax5hPercent),
-        maxWeeklyPercent: getPositivePercentLimit(config.codexGeneralMaxWeeklyPercent)
+        max5hPercent: getPercentLimit(config.codexGeneralMax5hPercent, 100),
+        maxWeeklyPercent: getPercentLimit(config.codexGeneralMaxWeeklyPercent, 100)
     };
 }
 
