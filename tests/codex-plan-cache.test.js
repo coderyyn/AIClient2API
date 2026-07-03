@@ -7,11 +7,11 @@ import { readFreshUsageCacheSync } from '../src/utils/codex-plan.js';
 const originalCwd = process.cwd();
 const tempDirs = [];
 
-function writeUsageCache(root, marker) {
+function writeUsageCache(root, marker, timestamp = new Date().toISOString()) {
     const configsDir = path.join(root, 'configs');
     fs.mkdirSync(configsDir, { recursive: true });
     fs.writeFileSync(path.join(configsDir, 'usage-cache.json'), JSON.stringify({
-        timestamp: new Date().toISOString(),
+        timestamp,
         marker,
         providers: {}
     }), 'utf8');
@@ -25,6 +25,18 @@ afterEach(() => {
 });
 
 describe('Codex usage cache reader', () => {
+    test('uses a 1 hour default TTL for routing decisions', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-usage-cache-'));
+        tempDirs.push(root);
+        process.chdir(root);
+
+        writeUsageCache(root, 'within-default-ttl', new Date(Date.now() - 11 * 60 * 1000).toISOString());
+
+        const cache = readFreshUsageCacheSync();
+
+        expect(cache.marker).toBe('within-default-ttl');
+    });
+
     test('reuses an unchanged fresh in-memory snapshot instead of reparsing the file on every routing decision', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-usage-cache-'));
         tempDirs.push(root);

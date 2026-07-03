@@ -6,7 +6,7 @@ import path from 'path';
 
 // 用量缓存文件路径
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
-export const DEFAULT_USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+export const DEFAULT_USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
 
 function getCachedInstancesByUuid(providerCache = {}) {
     const instances = Array.isArray(providerCache.instances) ? providerCache.instances : [];

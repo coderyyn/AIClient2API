@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { MODEL_PROVIDER } from './constants.js';
 
-const DEFAULT_USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_USAGE_CACHE_SNAPSHOT_TTL_MS = 5 * 1000;
 const ALLOWED_CODEX_PLANS = new Set(['pro', 'plus']);
 let usageCacheSnapshot = null;
