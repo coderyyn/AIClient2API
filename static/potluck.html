@@ -2122,6 +2122,7 @@
             
             container.innerHTML = topData.map(([name, item]) => {
                 const count = getCount(item);
+                const tokens = usageTokens(item);
                 const percent = Math.round((count / total) * 100);
                 const costHtml = item?.cost ? ` · ${formatDisplayCost(item.cost)}` : '';
                 const missingCostHtml = Number(item?.cost?.missingPriceTokens || 0) > 0
@@ -2131,7 +2132,7 @@
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name">${escapeHtml(name)}</span>
-                            <span class="dist-count">${formatNumber(count)} 次 (${percent}%)${costHtml}${missingCostHtml}</span>
+                            <span class="dist-count">${formatNumber(count)} 次 / ${formatTokenCompact(tokens)} Tokens (${percent}%)${costHtml}${missingCostHtml}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${percent}%"></div>
@@ -2143,10 +2144,12 @@
             if (sorted.length > maxItems) {
                 const other = sorted.slice(maxItems).reduce((sum, item) => {
                     sum.count += getCount(item[1]);
+                    sum.tokens += usageTokens(item[1]);
                     addCostBucket(sum.cost, item[1]?.cost);
                     return sum;
-                }, { count: 0, cost: { actualUsd: 0, convertedUsd: 0, missingPriceTokens: 0 } });
+                }, { count: 0, tokens: 0, cost: { actualUsd: 0, convertedUsd: 0, missingPriceTokens: 0 } });
                 const otherCount = other.count;
+                const otherTokens = other.tokens;
                 const otherPercent = Math.round((otherCount / total) * 100);
                 const otherCostHtml = other.cost.actualUsd > 0 || other.cost.convertedUsd > 0 || other.cost.missingPriceTokens > 0
                     ? ` · ${formatDisplayCost(other.cost)}`
@@ -2158,7 +2161,7 @@
                     <div class="distribution-item">
                         <div class="dist-info">
                             <span class="dist-name" style="font-style: italic;">其他 (${sorted.length - maxItems} 个)</span>
-                            <span class="dist-count">${formatNumber(otherCount)} 次 (${otherPercent}%)${otherCostHtml}${otherMissingCostHtml}</span>
+                            <span class="dist-count">${formatNumber(otherCount)} 次 / ${formatTokenCompact(otherTokens)} Tokens (${otherPercent}%)${otherCostHtml}${otherMissingCostHtml}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${otherPercent}%; background: #94a3b8;"></div>

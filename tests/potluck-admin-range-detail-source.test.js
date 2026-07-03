@@ -155,7 +155,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).not.toContain('节点与 Token 使用统计 (最近 3 个月)');
     });
 
-    test('admin overview model distribution shows row cost while keeping totals out of the dashboard chrome', () => {
+    test('admin overview model distribution shows row tokens and cost while keeping totals out of the dashboard chrome', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain("document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`");
@@ -168,8 +168,12 @@ describe('API Potluck admin range and key detail UI source', () => {
         const renderDistributionEnd = source.indexOf('function setUsageRange(range)', renderDistributionStart);
         expect(renderDistributionEnd).toBeGreaterThan(renderDistributionStart);
         const renderDistributionBlock = source.slice(renderDistributionStart, renderDistributionEnd);
+        expect(renderDistributionBlock).toContain('const tokens = usageTokens(item)');
         expect(renderDistributionBlock).toContain('const costHtml = item?.cost ? ` · ${formatDisplayCost(item.cost)}` :');
         expect(renderDistributionBlock).toContain('const missingCostHtml = Number(item?.cost?.missingPriceTokens || 0) > 0');
+        expect(renderDistributionBlock).toContain('${formatNumber(count)} 次 / ${formatTokenCompact(tokens)} Tokens (${percent}%)');
+        expect(renderDistributionBlock).toContain('sum.tokens += usageTokens(item[1])');
+        expect(renderDistributionBlock).toContain('${formatNumber(otherCount)} 次 / ${formatTokenCompact(otherTokens)} Tokens (${otherPercent}%)');
         expect(renderDistributionBlock).toContain('${costHtml}${missingCostHtml}');
     });
 
