@@ -1918,7 +1918,7 @@
                     filter: usage => usageTokens(usage) > 0
                 });
                 document.getElementById('providerAccountTotalCount').textContent = `0 次 / 0 Tokens`;
-                document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
+                document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
                 return;
             }
 
@@ -1932,7 +1932,7 @@
                 emptyText: '当前范围暂无模型数据',
                 filter: usage => usageTokens(usage) > 0
             });
-            document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`;
+            document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`;
         }
 
         function isCodexOauthAccount(account) {

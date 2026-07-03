@@ -16,6 +16,8 @@ describe('Codex rate limit reset source contracts', () => {
         const source = readFileSync('static/app/usage-manager.js', 'utf8');
 
         expect(source).toContain('rateLimitResetCredits');
+        expect(source).toContain('formatCodexResetCreditsTooltip');
+        expect(source).toContain('codex-reset-count" title="${escapeHtml(resetCreditsTooltip)}"');
         expect(source).not.toContain('class="btn-reset-codex-usage"');
         expect(source).toContain('btn-reset-codex-usage-inline');
         expect(source).toContain('confirmCodexRateLimitReset');

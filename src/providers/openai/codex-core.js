@@ -1045,6 +1045,7 @@ export class CodexApiService {
         try {
             const url = 'https://chatgpt.com/backend-api/wham/usage';
             const profileUrl = 'https://chatgpt.com/backend-api/wham/profiles/me';
+            const resetCreditsUrl = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits';
             const headers = this.buildUsageHeaders();
             const usageData = await this.requestCodexUsageJson(url, headers);
 
@@ -1058,9 +1059,20 @@ export class CodexApiService {
                 logger.warn('[Codex] Failed to get token usage profile:', profileError.message);
             }
 
+            let rateLimitResetCredits = usageData.rate_limit_reset_credits || usageData.rateLimitResetCredits || null;
+            try {
+                rateLimitResetCredits = await this.requestCodexUsageJson(resetCreditsUrl, headers);
+            } catch (resetCreditsError) {
+                if (resetCreditsError.response?.status === 401) {
+                    throw resetCreditsError;
+                }
+                logger.warn('[Codex] Failed to get rate limit reset credit details:', resetCreditsError.message);
+            }
+
             return {
                 ...usageData,
                 token_usage_profile: tokenUsageProfile,
+                rate_limit_reset_credits: rateLimitResetCredits,
                 account: this.email
             };
         } catch (error) {

@@ -955,10 +955,26 @@ function extractCodexRateLimitResetCredits(usageData) {
     const availableCount = numberOrNull(credits?.available_count ?? credits?.availableCount);
     if (availableCount === null) return null;
 
-    return {
+    const creditItems = Array.isArray(credits?.credits)
+        ? credits.credits
+        : (Array.isArray(credits?.items) ? credits.items : []);
+    const safeCredits = creditItems
+        .filter(item => item && typeof item === 'object')
+        .map(item => ({
+            status: item.status || null,
+            title: item.title || item.name || null,
+            grantedAt: formatTimestamp(item.granted_at ?? item.grantedAt),
+            expiresAt: formatTimestamp(item.expires_at ?? item.expiresAt)
+        }));
+
+    const result = {
         availableCount,
         canReset: availableCount > 0
     };
+    if (safeCredits.length > 0) {
+        result.credits = safeCredits;
+    }
+    return result;
 }
 
 /**

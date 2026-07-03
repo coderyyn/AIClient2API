@@ -9,4 +9,12 @@ describe('Codex usage source regressions', () => {
         expect(source).toContain('https://chatgpt.com/backend-api/wham/profiles/me');
         expect(source).toContain('token_usage_profile');
     });
+
+    test('Codex usage limits fetch rate limit reset credit details without consuming a credit', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src/providers/openai/codex-core.js'), 'utf8');
+
+        expect(source).toContain('https://chatgpt.com/backend-api/wham/rate-limit-reset-credits');
+        expect(source).toContain('rate_limit_reset_credits');
+        expect(source).not.toContain('rate_limit_reset_credits: await this.postCodexUsageJson');
+    });
 });

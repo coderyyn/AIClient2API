@@ -224,4 +224,49 @@ describe('Codex usage formatting', () => {
             })
         ]));
     });
+
+    test('extracts Codex rate limit reset credit expiration details for hover display', () => {
+        const formatted = formatCodexUsage({
+            account: 'codex@example.com',
+            plan_type: 'PRO',
+            rate_limit_reset_credits: {
+                available_count: 2,
+                credits: [
+                    {
+                        id: 'credit-full-id-should-not-be-required',
+                        status: 'available',
+                        title: 'Codex reset credit',
+                        granted_at: '2026-07-02T02:12:48.211Z',
+                        expires_at: '2026-07-09T02:12:48.211Z'
+                    },
+                    {
+                        status: 'used',
+                        title: 'Consumed reset credit',
+                        granted_at: '2026-07-01T01:00:00.000Z',
+                        expires_at: '2026-07-08T01:00:00.000Z'
+                    }
+                ]
+            }
+        });
+
+        expect(formatted.summary.rateLimitResetCredits).toEqual({
+            availableCount: 2,
+            canReset: true,
+            credits: [
+                {
+                    status: 'available',
+                    title: 'Codex reset credit',
+                    grantedAt: '2026-07-02T02:12:48.211Z',
+                    expiresAt: '2026-07-09T02:12:48.211Z'
+                },
+                {
+                    status: 'used',
+                    title: 'Consumed reset credit',
+                    grantedAt: '2026-07-01T01:00:00.000Z',
+                    expiresAt: '2026-07-08T01:00:00.000Z'
+                }
+            ]
+        });
+        expect(JSON.stringify(formatted.summary.rateLimitResetCredits)).not.toContain('credit-full-id-should-not-be-required');
+    });
 });

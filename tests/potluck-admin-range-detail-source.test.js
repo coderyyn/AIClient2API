@@ -157,7 +157,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain("document.getElementById('providerAccountTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`");
-        expect(source).toContain("document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次`");
+        expect(source).toContain("document.getElementById('modelTotalCount').textContent = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens`");
         expect(source).not.toContain("document.getElementById('providerAccountTotalCount').innerHTML = `${formatNumber(totalCalls)} 次 / ${formatTokenCompact(totalTokens)} Tokens${rangeSummary.summary.cost");
         expect(source).not.toContain("document.getElementById('modelTotalCount').innerHTML = `${formatNumber(totalCalls)} 次${rangeSummary.summary.cost");
 

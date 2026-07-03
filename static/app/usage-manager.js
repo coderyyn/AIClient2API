@@ -299,6 +299,31 @@ function getCodexResetAvailableCount(rateLimitResetCredits) {
     return Number.isFinite(availableCount) ? availableCount : 0;
 }
 
+function formatCodexResetCreditsTooltip(rateLimitResetCredits) {
+    const availableCount = getCodexResetAvailableCount(rateLimitResetCredits);
+    const credits = Array.isArray(rateLimitResetCredits?.credits)
+        ? rateLimitResetCredits.credits
+        : [];
+
+    if (credits.length === 0) {
+        return `${availableCount} available\nNo expiration details`;
+    }
+
+    return credits.map((credit, index) => {
+        const status = credit?.status || '--';
+        const title = credit?.title || '--';
+        const grantedAt = credit?.grantedAt ? formatDate(credit.grantedAt) : '--';
+        const expiresAt = credit?.expiresAt ? formatDate(credit.expiresAt) : '--';
+        return [
+            `Credit ${index + 1}`,
+            `Status: ${status}`,
+            `Title: ${title}`,
+            `Granted: ${grantedAt}`,
+            `Expires: ${expiresAt}`
+        ].join('\n');
+    }).join('\n\n');
+}
+
 function showUsageRefreshErrors(refreshErrors = []) {
     if (!Array.isArray(refreshErrors) || refreshErrors.length === 0) return;
 
@@ -785,6 +810,7 @@ function renderUsageDetails(usage, accountSummary = null) {
         const credits = summary.rateLimitResetCredits;
         const availableCount = getCodexResetAvailableCount(credits);
         const canReset = canUseCodexRateLimitReset(credits);
+        const resetCreditsTooltip = formatCodexResetCreditsTooltip(credits);
         const buttonTitle = canReset
             ? `Use Codex rate-limit reset (${availableCount} available)`
             : 'No Codex rate-limit resets available';
@@ -796,7 +822,7 @@ function renderUsageDetails(usage, accountSummary = null) {
                     <span class="codex-reset-icon"><i class="fas fa-rotate-left"></i></span>
                     <div class="codex-reset-copy">
                         <span class="codex-reset-label">Rate-limit resets</span>
-                        <span class="codex-reset-count">${availableCount} available</span>
+                        <span class="codex-reset-count" title="${escapeHtml(resetCreditsTooltip)}">${availableCount} available</span>
                     </div>
                 </div>
                 <button type="button" class="btn-reset-codex-usage-inline" title="${buttonTitle}" aria-label="${buttonTitle}" ${canReset ? '' : 'disabled'}>
