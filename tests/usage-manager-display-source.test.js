@@ -56,6 +56,16 @@ describe('usage manager display source regressions', () => {
         expect(source).not.toContain("renderAccountUsagePeriod('本月', accountSummary.month)");
     });
 
+    test('account usage summary renders partial history coverage notice from backend metadata', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('coverage: summary.coverage || null');
+        expect(source).toContain('function renderAccountUsageCoverageNotice(accountUsageSummaryMeta)');
+        expect(source).toContain('account-usage-coverage-notice');
+        expect(source).toContain('部分历史未归属到账号');
+        expect(source).toContain('${renderAccountUsageCoverageNotice(accountUsageSummaryMeta)}');
+    });
+
     test('Codex usage cards render separate general and Codex 5.3 quota health badges', () => {
         const usageApiSource = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
         const usageManagerSource = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');

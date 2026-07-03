@@ -509,6 +509,62 @@ describe('api potluck key usage summary', () => {
         expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('Failed to read model usage account timestamps'));
     });
 
+    test('getAccountUsageSummary reports partial account history coverage for mixed legacy potluck days', async () => {
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-07-01T02:00:00.000Z'));
+        const key = await createKey('Legacy Mixed Client', 1000);
+        const legacyDate = '2026-06-30';
+        key.usageHistory[legacyDate] = {
+            summary: {
+                requestCount: 10,
+                promptTokens: 10000,
+                completionTokens: 1000,
+                totalTokens: 11000
+            },
+            providers: {},
+            models: {},
+            accounts: {},
+            hours: {}
+        };
+
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-live-account-coverage', {
+            providerUuid: 'live-account',
+            providerName: 'live@example.com',
+            accountEmail: 'live@example.com'
+        });
+
+        const summary = await getAccountUsageSummary(new Date('2026-07-01T03:00:00.000Z'));
+
+        expect(summary.coverage).toMatchObject({
+            today: {
+                status: 'complete',
+                accountTokens: 1100,
+                totalTokens: 1100,
+                coverageRatio: 1
+            },
+            week: {
+                status: 'partial',
+                accountTokens: 1100,
+                totalTokens: 12100,
+                missingTokens: 11000,
+                coverageRatio: expect.closeTo(1100 / 12100, 6)
+            },
+            month: {
+                status: 'partial',
+                accountTokens: 1100,
+                totalTokens: 12100,
+                missingTokens: 11000,
+                coverageRatio: expect.closeTo(1100 / 12100, 6)
+            }
+        });
+    });
+
     test('getAccountUsageSummary uses a rolling 30 day month window from model usage daily history', async () => {
         fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
             updatedAt: '2026-07-02T09:00:00.000Z',

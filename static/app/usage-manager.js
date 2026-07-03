@@ -373,7 +373,8 @@ function updateAccountUsageSummaryCache(summary) {
     accountUsageSummaryMeta = {
         source: summary.source || 'potluck/model-usage-stats',
         timezone: summary.timezone || 'Asia/Shanghai',
-        updatedAt: summary.updatedAt || null
+        updatedAt: summary.updatedAt || null,
+        coverage: summary.coverage || null
     };
 }
 
@@ -880,6 +881,7 @@ function renderAccountUsageSummary(accountSummary) {
     const lastUsedAt = accountSummary.lastUsedAt || accountSummary.today?.lastUsedAt || accountSummary.week?.lastUsedAt || accountSummary.month?.lastUsedAt || null;
     section.innerHTML = `
         ${lastUsedAt ? `<div class="account-usage-last-used"><i class="fas fa-clock"></i> 最近请求 ${formatDate(lastUsedAt)}</div>` : ''}
+        ${renderAccountUsageCoverageNotice(accountUsageSummaryMeta)}
             <div class="account-usage-period-grid">
                 ${renderAccountUsagePeriod('今日', accountSummary.today)}
                 ${renderAccountUsagePeriod('近1周', accountSummary.week)}
@@ -887,6 +889,26 @@ function renderAccountUsageSummary(accountSummary) {
             </div>
         `;
     return section;
+}
+
+function renderAccountUsageCoverageNotice(accountUsageSummaryMeta) {
+    const coverage = accountUsageSummaryMeta?.coverage;
+    if (!coverage) return '';
+    const partialPeriods = ['today', 'week', 'month']
+        .map(key => coverage[key])
+        .filter(period => period?.status === 'partial' || period?.complete === false);
+    if (partialPeriods.length === 0) return '';
+    const earliest = partialPeriods
+        .map(period => period.firstTrackedDay)
+        .filter(Boolean)
+        .sort()[0];
+    const detail = earliest ? `，最早可归属日期 ${escapeHtml(earliest)}` : '';
+    return `
+        <div class="account-usage-coverage-notice">
+            <i class="fas fa-info-circle"></i>
+            <span>部分历史未归属到账号${detail}，近1周/近1月可能低于实际总量</span>
+        </div>
+    `;
 }
 
 function renderAccountUsagePeriod(label, usage = {}) {

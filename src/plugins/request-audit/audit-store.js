@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { promises as fsp } from 'fs';
 import path from 'path';
+import readline from 'readline';
 
 function toDate(value) {
     const date = value instanceof Date ? value : new Date(value);
@@ -16,13 +17,19 @@ function isAuditFile(name) {
     return /^audit-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name);
 }
 
+function archiveTimestamp(value = new Date()) {
+    return value.toISOString().replace(/[-:]/g, '').replace('.', '');
+}
+
 export class RequestAuditStore {
     constructor({
         dir = path.join(process.cwd(), 'configs', 'request-audit'),
+        archiveDir,
         retentionHours = 24,
         maxFileBytes = 100 * 1024 * 1024
     } = {}) {
         this.dir = dir;
+        this.archiveDir = archiveDir || path.join(this.dir, 'archived-large');
         this.retentionHours = Number(retentionHours) || 24;
         this.maxFileBytes = Number(maxFileBytes) || 100 * 1024 * 1024;
     }
@@ -34,7 +41,9 @@ export class RequestAuditStore {
     async append(event) {
         await fsp.mkdir(this.dir, { recursive: true });
         const filePath = this.getFilePath(event?.timestamp);
-        await fsp.appendFile(filePath, `${JSON.stringify(event)}\n`, { encoding: 'utf8', mode: 0o600 });
+        const line = `${JSON.stringify(event)}\n`;
+        await this.rotateIfNeeded(filePath, Buffer.byteLength(line, 'utf8'));
+        await fsp.appendFile(filePath, line, { encoding: 'utf8', mode: 0o600 });
     }
 
     async query(filters = {}) {
@@ -42,25 +51,68 @@ export class RequestAuditStore {
         const until = toDate(filters.until);
         const files = await this.listFiles();
         const rows = [];
+        const limit = Math.min(Math.max(Number(filters.limit) || 2000, 0), 2000);
 
         for (const filePath of files) {
-            const content = await fsp.readFile(filePath, 'utf8').catch(() => '');
-            for (const line of content.split(/\r?\n/)) {
-                if (!line.trim()) continue;
-                let event;
-                try {
-                    event = JSON.parse(line);
-                } catch (_error) {
-                    continue;
+            try {
+                for await (const event of this.readEvents(filePath)) {
+                    if (!this.matches(event, { ...filters, since, until })) continue;
+                    rows.push(event);
+                    if (limit && rows.length >= limit) break;
                 }
-                if (!this.matches(event, { ...filters, since, until })) continue;
-                rows.push(event);
+            } catch (_error) {
+                continue;
             }
+            if (limit && rows.length >= limit) break;
         }
 
         rows.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
-        const limit = Math.min(Math.max(Number(filters.limit) || rows.length, 0), 2000);
         return limit ? rows.slice(0, limit) : rows;
+    }
+
+    async rotateIfNeeded(filePath, incomingBytes = 0) {
+        const maxFileBytes = Number(this.maxFileBytes);
+        if (!Number.isFinite(maxFileBytes) || maxFileBytes <= 0) return;
+
+        const stat = await fsp.stat(filePath).catch(error => {
+            if (error?.code === 'ENOENT') return null;
+            throw error;
+        });
+        if (!stat?.isFile() || stat.size + incomingBytes <= maxFileBytes) return;
+
+        await fsp.mkdir(this.archiveDir, { recursive: true, mode: 0o700 });
+        const destination = await this.getArchivePath(filePath);
+        await fsp.rename(filePath, destination).catch(error => {
+            if (error?.code !== 'ENOENT') throw error;
+        });
+    }
+
+    async getArchivePath(filePath) {
+        const baseName = `${path.basename(filePath)}.${archiveTimestamp()}`;
+        let destination = path.join(this.archiveDir, baseName);
+        for (let index = 1; index < 1000; index += 1) {
+            if (!fs.existsSync(destination)) return destination;
+            destination = path.join(this.archiveDir, `${baseName}.${index}`);
+        }
+        return destination;
+    }
+
+    async *readEvents(filePath) {
+        const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+        const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        try {
+            for await (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    yield JSON.parse(line);
+                } catch (_error) {
+                    // Ignore corrupted partial lines instead of failing the whole query.
+                }
+            }
+        } finally {
+            lines.close();
+            stream.destroy();
+        }
     }
 
     matches(event, filters) {

@@ -46,4 +46,56 @@ describe('request audit store', () => {
     expect(fs.existsSync(keepPath)).toBe(true);
     expect(fs.existsSync(otherPath)).toBe(true);
   });
+
+  test('rotates oversized active audit file before appending new events', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'request-audit-rotate-'));
+    const store = new RequestAuditStore({ dir, retentionHours: 24, maxFileBytes: 32 });
+    const activePath = path.join(dir, 'audit-2026-07-02.jsonl');
+    fs.writeFileSync(activePath, `${JSON.stringify({ requestId: 'old-event' })}\n`);
+
+    await store.append({
+      schemaVersion: 1,
+      timestamp: '2026-07-02T09:10:00.000Z',
+      requestId: 'new-event'
+    });
+
+    const activeContent = fs.readFileSync(activePath, 'utf8');
+    expect(activeContent).toContain('new-event');
+    expect(activeContent).not.toContain('old-event');
+
+    const archiveDir = path.join(dir, 'archived-large');
+    const archives = fs.readdirSync(archiveDir);
+    expect(archives).toHaveLength(1);
+    expect(archives[0]).toMatch(/^audit-2026-07-02\.jsonl\.\d{8}T\d{6}\d{3}Z$/);
+    expect(fs.readFileSync(path.join(archiveDir, archives[0]), 'utf8')).toContain('old-event');
+  });
+
+  test('queries audit jsonl without loading the whole file into memory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'request-audit-stream-'));
+    const store = new RequestAuditStore({ dir, retentionHours: 24 });
+    const activePath = path.join(dir, 'audit-2026-07-02.jsonl');
+    fs.writeFileSync(activePath, [
+      JSON.stringify({ timestamp: '2026-07-02T09:00:00.000Z', requestId: 'old' }),
+      JSON.stringify({ timestamp: '2026-07-02T09:10:00.000Z', requestId: 'match', potluckKey: { hash: 'sha256:abc123' } }),
+      ''
+    ].join('\n'));
+
+    const originalReadFile = fs.promises.readFile;
+    fs.promises.readFile = jest.fn(async () => {
+      throw new Error('whole-file read is not allowed for request-audit query');
+    });
+
+    try {
+      const rows = await store.query({
+        keyHash: 'sha256:abc123',
+        since: '2026-07-02T17:05:00+08:00',
+        until: '2026-07-02T17:20:00+08:00'
+      });
+
+      expect(rows.map(row => row.requestId)).toEqual(['match']);
+      expect(fs.promises.readFile).not.toHaveBeenCalled();
+    } finally {
+      fs.promises.readFile = originalReadFile;
+    }
+  });
 });

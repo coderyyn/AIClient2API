@@ -706,6 +706,69 @@ function hasAccountUsageInSummaryWindow(usageHistory = {}, starts = {}) {
     return false;
 }
 
+function createAccountCoverageBucket() {
+    return {
+        totalTokens: 0,
+        accountTokens: 0,
+        missingTokens: 0,
+        totalRequests: 0,
+        accountRequests: 0,
+        missingRequests: 0,
+        coverageRatio: 1,
+        status: 'complete',
+        firstTrackedDay: null,
+        lastTrackedDay: null
+    };
+}
+
+function addAccountCoverageDay(bucket, day = {}, dateKey = null) {
+    const totalTokens = toNumber(day?.summary?.totalTokens);
+    const totalRequests = toNumber(day?.summary?.requestCount);
+    const accountTotals = createUsageBucket();
+    for (const account of Object.values(day?.accounts || {})) {
+        addUsage(accountTotals, account.summary || {});
+    }
+
+    bucket.totalTokens += totalTokens;
+    bucket.accountTokens += accountTotals.totalTokens;
+    bucket.totalRequests += totalRequests;
+    bucket.accountRequests += accountTotals.requestCount;
+    if (dateKey) {
+        bucket.firstTrackedDay = bucket.firstTrackedDay ? Math.min(bucket.firstTrackedDay, dateKey) : dateKey;
+        bucket.lastTrackedDay = bucket.lastTrackedDay ? Math.max(bucket.lastTrackedDay, dateKey) : dateKey;
+    }
+}
+
+function finalizeAccountCoverageBucket(bucket) {
+    bucket.missingTokens = Math.max(0, bucket.totalTokens - bucket.accountTokens);
+    bucket.missingRequests = Math.max(0, bucket.totalRequests - bucket.accountRequests);
+    bucket.coverageRatio = bucket.totalTokens > 0
+        ? Math.min(1, bucket.accountTokens / bucket.totalTokens)
+        : 1;
+    bucket.status = bucket.missingTokens > 0 || bucket.missingRequests > 0 ? 'partial' : 'complete';
+    return bucket;
+}
+
+function buildAccountHistoryCoverage(usageHistory = {}, starts = {}) {
+    const coverage = {
+        today: createAccountCoverageBucket(),
+        week: createAccountCoverageBucket(),
+        month: createAccountCoverageBucket()
+    };
+
+    for (const [dateKey, day] of Object.entries(usageHistory || {})) {
+        if (dateKey === starts.today) addAccountCoverageDay(coverage.today, day, dateKey);
+        if (dateKey >= starts.week) addAccountCoverageDay(coverage.week, day, dateKey);
+        if (dateKey >= starts.month) addAccountCoverageDay(coverage.month, day, dateKey);
+    }
+
+    return {
+        today: finalizeAccountCoverageBucket(coverage.today),
+        week: finalizeAccountCoverageBucket(coverage.week),
+        month: finalizeAccountCoverageBucket(coverage.month)
+    };
+}
+
 function getIndexedAccountLastUsedAt(account, lastUsedIndex) {
     let latest = null;
     for (const alias of getAccountSummaryAliases(account.accountKey, account)) {
@@ -1698,6 +1761,7 @@ export async function getAccountUsageSummary(now = new Date()) {
         source,
         timezone: 'Asia/Shanghai',
         periods: starts,
+        coverage: buildAccountHistoryCoverage(usageHistory, starts),
         updatedAt: new Date().toISOString(),
         accounts: accountList
     };
