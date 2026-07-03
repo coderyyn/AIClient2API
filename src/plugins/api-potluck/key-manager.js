@@ -470,6 +470,12 @@ function cloneCostBucket(cost = {}) {
     };
 }
 
+function cloneCompactCostBucket(cost = {}) {
+    const cloned = cloneCostBucket(cost);
+    delete cloned.byModel;
+    return cloned;
+}
+
 function addCost(targetUsage, sourceCost = null) {
     if (!sourceCost) return;
     if (!targetUsage.cost) targetUsage.cost = createCostBucket(sourceCost);
@@ -873,7 +879,7 @@ function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAU
         if (!options.compactCosts) {
             summary.cost = buildCost(summary, day?.models || {}, conversionModel);
         } else {
-            delete summary.cost;
+            summary.cost = cloneCompactCostBucket(buildCost(summary, day?.models || {}, conversionModel));
         }
         compact[date] = { summary };
     }

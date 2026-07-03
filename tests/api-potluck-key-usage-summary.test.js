@@ -892,7 +892,9 @@ describe('api potluck key usage summary', () => {
             cacheHitRatio: 0.25
         });
         expect(fullDay.summary.cost.actualUsd).toBeGreaterThan(0);
-        expect(compactDay.summary).not.toHaveProperty('cost');
+        expect(compactDay.summary.cost.actualUsd).toBeGreaterThan(0);
+        expect(compactDay.summary.cost.convertedUsd).toBeGreaterThan(0);
+        expect(compactDay.summary.cost).not.toHaveProperty('byModel');
         expect(compactDay).not.toHaveProperty('providers');
         expect(compactDay).not.toHaveProperty('models');
         expect(compactDay).not.toHaveProperty('accounts');
