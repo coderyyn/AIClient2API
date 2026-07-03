@@ -902,7 +902,7 @@ async function showCodexAuthMethodSelector(providerType) {
             const name = proxy.name || proxy.id;
             const expectedIp = proxy.expectedIp ? ` / ${proxy.expectedIp}` : '';
             const label = `${name} (${proxy.id}${expectedIp})${proxy.enabled === false ? ' - 已禁用' : ''}`;
-            return `<option value="${escapeHtml(proxy.id || '')}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled}>${escapeHtml(label)}</option>`;
+            return `<option value="${escapeHtml(proxy.id || '')}" data-proxy-name="${escapeHtml(name)}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled}>${escapeHtml(label)}</option>`;
         }).join('');
     } catch (error) {
         console.warn('Failed to load proxy pools for Codex auth:', error);
@@ -1037,8 +1037,10 @@ async function testCodexAuthProxy(modal, proxies = []) {
     const resultEl = modal.querySelector('#codexAuthProxyTestResult');
     const button = modal.querySelector('#codexAuthProxyTestButton');
     const proxyId = select?.value || '';
+    const selectedOption = select?.selectedOptions?.[0] || null;
     const selectedProxy = proxies.find(proxy => proxy.id === proxyId) || {};
-    const expectedIp = select?.selectedOptions?.[0]?.dataset?.expectedIp || selectedProxy.expectedIp || '';
+    const proxyName = selectedOption?.dataset?.proxyName || selectedProxy.name || proxyId;
+    const expectedIp = selectedOption?.dataset?.expectedIp || selectedProxy.expectedIp || '';
 
     if (!resultEl || !button) return;
     resultEl.style.display = 'block';
@@ -1069,7 +1071,7 @@ async function testCodexAuthProxy(modal, proxies = []) {
     try {
         const serverResult = await window.apiClient.post('/proxy-pools/test', { proxyId });
         serverIp = String(serverResult?.ip || '').trim();
-        serverError = serverResult?.ok === false ? (serverResult?.error?.message || '94 后端代理检测失败') : '';
+        serverError = serverResult?.ok === false ? (serverResult?.error?.message || '服务器代理检测失败') : '';
     } catch (error) {
         serverError = error.message;
     }
@@ -1082,10 +1084,10 @@ async function testCodexAuthProxy(modal, proxies = []) {
     resultEl.style.border = allMatched ? '1px solid #a7f3d0' : '1px solid #fed7aa';
     resultEl.style.color = allMatched ? '#064e3b' : '#9a3412';
     resultEl.innerHTML = `
-        <div style="font-weight: 600; margin-bottom: 4px;">代理检测：${escapeHtml(selectedProxy.name || proxyId)}</div>
+        <div style="font-weight: 600; margin-bottom: 4px;">代理检测：${escapeHtml(proxyName)}</div>
         <div>预期出口：${escapeHtml(expectedIp || '未配置')}</div>
         ${renderProxyTestLine('浏览器出口', browserIp || browserError, expectedIp)}
-        ${renderProxyTestLine('94 后端出口', serverIp || serverError, expectedIp)}
+        ${renderProxyTestLine('服务器出口', serverIp || serverError, expectedIp)}
     `;
 
     button.disabled = false;

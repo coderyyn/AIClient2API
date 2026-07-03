@@ -22,6 +22,9 @@ describe('Codex auth proxy UI source', () => {
         expect(source).toContain('/proxy-pools/test');
         expect(source).toContain('browserIp');
         expect(source).toContain('serverIp');
+        expect(source).toContain('data-proxy-name');
+        expect(source).toContain('服务器出口');
+        expect(source).not.toContain('94 后端出口');
         expect(uiManagerSource).toContain('/api/proxy-pools/test');
     });
 });
