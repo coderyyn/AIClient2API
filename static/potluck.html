@@ -119,6 +119,33 @@
         .stat-card.pink .value { color: #ec4899; }
         .stat-card.cyan .value { color: var(--info-color); }
 
+        .stats-meta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 1rem;
+            padding: 10px 14px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .stats-meta-time { color: var(--text-secondary); }
+        .stats-meta-time time { color: var(--text-primary); font-weight: 500; }
+        .stats-meta-badge {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: var(--radius-full);
+        }
+        .stats-meta-badge-bad {
+            color: var(--danger-color);
+            background: rgba(239, 68, 68, 0.08);
+        }
+
         /* 分布统计样式 */
         .distribution-list {
             display: flex;
@@ -1105,6 +1132,11 @@
 
     <!-- 主内容区 -->
     <div class="main-container">
+        <div id="statsMetaBar" class="stats-meta-bar" style="display: none;">
+            <span class="stats-meta-time">统计数据最后更新：<time id="statsLastUpdatedAt">--</time></span>
+            <span id="statsHealthBadge" class="stats-meta-badge stats-meta-badge-bad">统计异常</span>
+        </div>
+
         <!-- 统计卡片 -->
         <div class="stats-grid">
             <div class="stat-card purple">
@@ -1784,8 +1816,58 @@
             return data;
         }
 
+        function formatStatsUpdatedAt(isoString) {
+            if (!isoString) return '--';
+            const date = new Date(isoString);
+            if (Number.isNaN(date.getTime())) return '--';
+            return date.toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
+        }
+
+        const STATS_META_HIDE_FRESH_MS = 30 * 60 * 1000;
+
+        function shouldShowStatsMetaBar(result) {
+            if (!result) return false;
+            if (result.status === 'ok') return false;
+            const generatedAt = new Date(result.generatedAt);
+            if (!Number.isNaN(generatedAt.getTime())) {
+                const ageMs = Date.now() - generatedAt.getTime();
+                if (ageMs >= 0 && ageMs < STATS_META_HIDE_FRESH_MS) return false;
+            }
+            return true;
+        }
+
+        async function loadReconciliationStatus() {
+            const bar = document.getElementById('statsMetaBar');
+            const updatedAt = document.getElementById('statsLastUpdatedAt');
+            const badge = document.getElementById('statsHealthBadge');
+            if (!bar || !updatedAt || !badge) return;
+            try {
+                const response = await apiRequest(`${API_BASE}/reconciliation`);
+                const result = response?.success && response.data?.available ? response.data.result : null;
+                if (!shouldShowStatsMetaBar(result)) { bar.style.display = 'none'; return; }
+
+                updatedAt.textContent = formatStatsUpdatedAt(result.generatedAt);
+                badge.textContent = '统计异常';
+                badge.className = 'stats-meta-badge stats-meta-badge-bad';
+                badge.title = `对账日期 ${result.date || ''}，请核对 ledger / audit / potluck 口径`;
+                bar.style.display = 'flex';
+            } catch {
+                bar.style.display = 'none';
+            }
+        }
+
         async function loadData() {
             try {
+                loadReconciliationStatus();
+                refreshLedgerRangeStats(currentUsageRange, { force: true });
                 const keysResult = await apiRequest(`${API_BASE}/keys?${getCostQuery()}`);
                 if (!keysResult || !keysResult.success) { showToast('加载失败', 'error'); return false; }
                 const statsResult = await apiRequest(`${API_BASE}/stats?${getCostQuery()}`);
@@ -1897,19 +1979,81 @@
             return rangeSummary;
         }
 
+        // ledger 预聚合区间统计缓存：命中时分布面板读账本数据，实时数据仅补足账本缺失的日期（通常是今天）
+        let ledgerRangeStats = { key: null, data: null };
+
+        function ledgerRangeKey(range) { return `${range}:${currentConversionModel}`; }
+
+        function getLedgerRangeStatsFor(range) {
+            return ledgerRangeStats.key === ledgerRangeKey(range) ? ledgerRangeStats.data : null;
+        }
+
+        async function refreshLedgerRangeStats(range = currentUsageRange, { force = false } = {}) {
+            const key = ledgerRangeKey(range);
+            if (!force && ledgerRangeStats.key === key) return;
+            try {
+                const result = await apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}&${getCostQuery()}`);
+                const data = result?.success && (result.data?.availableDates || []).length > 0 ? result.data : null;
+                ledgerRangeStats = { key, data };
+            } catch {
+                ledgerRangeStats = { key, data: null };
+            }
+            if (currentStats && ledgerRangeKey(currentUsageRange) === key) {
+                renderUsageHistory(currentStats.usageHistory || {}, currentUsageRange);
+            }
+        }
+
+        function buildRangeSummaryFromLedger(ledgerStats, usageHistory = {}, range = currentUsageRange) {
+            const summary = createUsageSummaryBucket();
+            const providers = {};
+            const models = {};
+            const accounts = {};
+
+            addUsageBucket(summary, ledgerStats.summary || {});
+            Object.entries(ledgerStats.providers || {}).forEach(([name, usage]) => addUsageMap(providers, name, usage));
+            Object.entries(ledgerStats.models || {}).forEach(([name, usage]) => addUsageMap(models, name, usage));
+            Object.entries(ledgerStats.accounts || {}).forEach(([name, account]) => addAccountUsageMap(accounts, name, account));
+
+            const liveDates = (ledgerStats.missingDates || []).filter(date => usageHistory?.[date]);
+            liveDates.forEach(date => {
+                const day = usageHistory[date] || {};
+                addUsageBucket(summary, day.summary || {});
+                Object.entries(day.providers || {}).forEach(([name, usage]) => addUsageMap(providers, name, usage));
+                Object.entries(day.models || {}).forEach(([name, usage]) => addUsageMap(models, name, usage));
+                Object.entries(day.accounts || {}).forEach(([name, account]) => addAccountUsageMap(accounts, name, account));
+            });
+
+            return {
+                dates: [...(ledgerStats.availableDates || []), ...liveDates],
+                summary: withCacheHitRatio(summary),
+                providers,
+                models,
+                accounts,
+                dataSource: {
+                    ledgerDates: ledgerStats.availableDates || [],
+                    liveDates,
+                    pricingVersion: ledgerStats.pricingVersion || ''
+                }
+            };
+        }
+
         /**
          * 渲染当前时间范围内的使用历史分布
          */
         function renderUsageHistory(usageHistory, range = currentUsageRange) {
-            if (!usageHistory || Object.keys(usageHistory).length === 0) {
+            const ledgerStats = getLedgerRangeStatsFor(range);
+            if ((!usageHistory || Object.keys(usageHistory).length === 0) && !ledgerStats) {
                 document.getElementById('usageStatsSection').style.display = 'none';
                 return;
             }
 
             document.getElementById('usageStatsSection').style.display = 'block';
-            document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
 
-            const rangeSummary = summarizeUsageHistoryForRange(usageHistory, range);
+            const rangeSummary = ledgerStats
+                ? buildRangeSummaryFromLedger(ledgerStats, usageHistory, range)
+                : summarizeUsageHistoryForRange(usageHistory, range);
+
+            document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
             const totalCalls = rangeSummary.summary.requestCount;
             const totalTokens = rangeSummary.summary.totalTokens;
             const displayModels = aggregateModelDistributionForDisplay(rangeSummary.models);
@@ -2183,6 +2327,7 @@
                 renderUsageHistory(currentStats.usageHistory || {}, currentUsageRange);
                 renderCalendar(currentStats.usageHistory || {});
             }
+            refreshLedgerRangeStats(currentUsageRange);
             applyFilterAndSort();
 
             if (currentDetailKeyId) {

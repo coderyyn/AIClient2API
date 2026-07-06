@@ -24,6 +24,7 @@ import {
 } from './key-manager.js';
 import { getRequestBody } from '../../utils/common.js';
 import { extractCodexCredentialIdentity } from '../../utils/codex-utils.js';
+import { readLedgerRangeStats, resolveRangeDates } from './ledger-range-stats.js';
 import logger from '../../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
@@ -191,6 +192,24 @@ function enrichPotluckStatsAccountEmails(stats) {
     return stats;
 }
 
+async function loadLedgerRangeStatsForRange(range, conversionModel) {
+    const ledgerDailyDir = path.join(process.cwd(), 'configs', 'permanent-usage-ledger', 'daily');
+    const dates = resolveRangeDates(range, { ledgerDailyDir });
+    const stats = await readLedgerRangeStats({ ledgerDailyDir, dates, conversionModel });
+    return { range, dates, source: 'ledger', ...stats };
+}
+
+function readReconciliationLatest() {
+    try {
+        const filePath = path.join(process.cwd(), 'configs', 'permanent-usage-ledger', 'reconciliation', 'latest.json');
+        if (!fs.existsSync(filePath)) return null;
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+        logger.warn('[API Potluck] Failed to read reconciliation latest:', error.message);
+        return null;
+    }
+}
+
 function enrichAccountUsageSummaryEmails(summary) {
     const providerEmailIndex = loadProviderEmailIndex();
     if (providerEmailIndex.size === 0) return summary;
@@ -274,6 +293,28 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         if (method === 'GET' && path === '/api/potluck/stats') {
             const stats = enrichPotluckStatsAccountEmails(await getCachedStats(getRequestCostOptions(req)));
             sendJson(res, 200, { success: true, data: stats });
+            return true;
+        }
+
+        // GET /api/potluck/range-stats - 从 ledger 预聚合读取区间统计（管理页分布数据源）
+        if (method === 'GET' && path === '/api/potluck/range-stats') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const range = ['total', '30d', '7d', 'today'].includes(url.searchParams.get('range'))
+                ? url.searchParams.get('range')
+                : '7d';
+            const conversionModel = url.searchParams.get('conversionModel') || undefined;
+            const data = await loadLedgerRangeStatsForRange(range, conversionModel);
+            sendJson(res, 200, { success: true, data });
+            return true;
+        }
+
+        // GET /api/potluck/reconciliation - 获取最近一次每日用量对账结果
+        if (method === 'GET' && path === '/api/potluck/reconciliation') {
+            const latest = readReconciliationLatest();
+            sendJson(res, 200, {
+                success: true,
+                data: { available: latest !== null, result: latest }
+            });
             return true;
         }
 
