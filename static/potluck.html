@@ -1867,7 +1867,6 @@
         async function loadData() {
             try {
                 loadReconciliationStatus();
-                refreshLedgerRangeStats(currentUsageRange, { force: true });
                 const keysResult = await apiRequest(`${API_BASE}/keys?${getCostQuery()}`);
                 if (!keysResult || !keysResult.success) { showToast('加载失败', 'error'); return false; }
                 const statsResult = await apiRequest(`${API_BASE}/stats?${getCostQuery()}`);
@@ -1892,7 +1891,8 @@
                 document.getElementById('maxRpm').textContent = (stats.maxRpm || 0).toFixed(2);
                 document.getElementById('currentTps').textContent = (stats.tps || 0).toFixed(2);
                 document.getElementById('maxTps').textContent = (stats.maxTps || 0).toFixed(2);
-                // 渲染使用历史分布
+                // 先等 ledger 区间统计就绪再渲染分布，避免 live 兜底与 ledger 两套数据闪烁
+                await refreshLedgerRangeStats(currentUsageRange, { force: true });
                 renderUsageHistory(stats.usageHistory, currentUsageRange);
                 renderCalendar(stats.usageHistory || {});
                 
@@ -2035,6 +2035,19 @@
                     pricingVersion: ledgerStats.pricingVersion || ''
                 }
             };
+        }
+
+        /**
+         * 渲染区间统计加载占位：在 ledger 预聚合未就绪时避免用 live 兜底数据闪烁。
+         */
+        function renderUsageLoading(range = currentUsageRange) {
+            document.getElementById('usageStatsSection').style.display = 'block';
+            document.querySelector('#usageStatsSection .section-title').innerHTML = `<i class="fas fa-chart-pie"></i> 节点与 Token 使用统计 (${getUsageRangeLabel(range)})`;
+            const loadingHtml = '<div class="detail-empty">统计加载中…</div>';
+            document.getElementById('providerAccountDistribution').innerHTML = loadingHtml;
+            document.getElementById('modelDistribution').innerHTML = loadingHtml;
+            document.getElementById('providerAccountTotalCount').textContent = '加载中…';
+            document.getElementById('modelTotalCount').textContent = '加载中…';
         }
 
         /**
@@ -2324,7 +2337,11 @@
             });
 
             if (currentStats) {
-                renderUsageHistory(currentStats.usageHistory || {}, currentUsageRange);
+                if (getLedgerRangeStatsFor(currentUsageRange)) {
+                    renderUsageHistory(currentStats.usageHistory || {}, currentUsageRange);
+                } else {
+                    renderUsageLoading(currentUsageRange);
+                }
                 renderCalendar(currentStats.usageHistory || {});
             }
             refreshLedgerRangeStats(currentUsageRange);
