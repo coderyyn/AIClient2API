@@ -275,7 +275,12 @@ function mergeRows(rows) {
   for (const row of rows) {
     const key = rowGroupKey(row);
     if (!grouped.has(key)) {
-      grouped.set(key, { ...row, usage: emptyUsage(), providerUuids: [...row.providerUuids] });
+      grouped.set(key, {
+        ...row,
+        usage: emptyUsage(),
+        cost: { actualUsd: 0, missingPriceTokens: 0, pricingModel: row.cost?.pricingModel },
+        providerUuids: [...row.providerUuids],
+      });
     }
     const target = grouped.get(key);
     addUsage(target.usage, row.usage);
