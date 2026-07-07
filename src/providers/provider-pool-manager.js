@@ -62,6 +62,13 @@ function getProviderWeight(config = {}) {
     return Number.isFinite(weight) && weight > 0 ? weight : 1;
 }
 
+function medianNumber(values = []) {
+    const nums = values.filter(value => Number.isFinite(value)).sort((a, b) => a - b);
+    if (nums.length === 0) return 0;
+    const mid = Math.floor(nums.length / 2);
+    return nums.length % 2 === 0 ? (nums[mid - 1] + nums[mid]) / 2 : nums[mid];
+}
+
 function hasCustomProviderWeights(providers) {
     return providers.some(provider => getProviderWeight(provider.config) !== 1);
 }
@@ -522,6 +529,76 @@ export class ProviderPoolManager {
             }
         }
         return count;
+    }
+
+    _getEligibleBalanceSiblings(providerType, excludeUuid) {
+        return (this.providerStatus[providerType] || []).filter(provider =>
+            provider.uuid !== excludeUuid &&
+            provider.config.isHealthy &&
+            !provider.config.isDisabled &&
+            !provider.config.needsRefresh
+        );
+    }
+
+    _getProviderBalanceUnits(providerType, providerStatus, now = Date.now()) {
+        const recentLoad = this._getProviderSelectionLoad(
+            providerType,
+            providerStatus,
+            PROVIDER_SELECTION_LOAD_MAX_WINDOW_MS,
+            now
+        );
+        return recentLoad > 0 ? recentLoad : (providerStatus.config.usageCount || 0);
+    }
+
+    _getProviderWeightedBalanceScore(providerType, providerStatus, now = Date.now()) {
+        const weight = getProviderWeight(providerStatus.config);
+        return this._getProviderBalanceUnits(providerType, providerStatus, now) / weight;
+    }
+
+    _seedProviderSelectionLoad(providerType, provider, targetCount, now = Date.now()) {
+        const key = this._getProviderSelectionLoadKey(providerType, provider);
+        if (!key) return;
+
+        const normalizedCount = Math.max(0, Math.round(Number(targetCount) || 0));
+        if (normalizedCount <= 0) {
+            this._providerSelectionLoadStats.delete(key);
+            return;
+        }
+
+        const bucket = Math.floor(now / PROVIDER_SELECTION_LOAD_BUCKET_MS) * PROVIDER_SELECTION_LOAD_BUCKET_MS;
+        this._providerSelectionLoadStats.set(key, { buckets: new Map([[bucket, normalizedCount]]) });
+    }
+
+    _syncProviderBalanceOnEnable(providerType, provider, now = Date.now()) {
+        const siblings = this._getEligibleBalanceSiblings(providerType, provider.uuid);
+        if (siblings.length === 0) return;
+
+        const siblingScores = siblings.map(sibling =>
+            this._getProviderWeightedBalanceScore(providerType, sibling, now)
+        );
+        const medianScore = medianNumber(siblingScores);
+        const weight = getProviderWeight(provider.config);
+        const previousUsageCount = provider.config.usageCount || 0;
+        provider.config.usageCount = Math.max(0, Math.round(medianScore * weight));
+
+        const medianRecentLoad = medianNumber(siblings.map(sibling =>
+            this._getProviderSelectionLoad(
+                providerType,
+                sibling,
+                PROVIDER_SELECTION_LOAD_MAX_WINDOW_MS,
+                now
+            )
+        ));
+        this._seedProviderSelectionLoad(providerType, provider, medianRecentLoad, now);
+        provider.config.lastUsed = new Date(now).toISOString();
+        provider.config._lastSelectionSeq = this._selectionSequence;
+
+        this._log(
+            'info',
+            `Synced provider balance on enable: ${this._getDisplayName(provider.config)} ` +
+            `(usageCount ${previousUsageCount} -> ${provider.config.usageCount}, ` +
+            `recent60m -> ${Math.round(medianRecentLoad)})`
+        );
     }
 
     _rankCodexShardProviders(providers, providerType, requestedModel, usageCache, now = Date.now()) {
@@ -1072,9 +1149,16 @@ export class ProviderPoolManager {
         const lastUsedTime = config.lastUsed ? new Date(config.lastUsed).getTime() : (now - 86400000);
         const baseScore = isFresh ? -1e14 : lastUsedTime;
 
-        // 惩罚项 A: 使用次数 (每多用一次增加 10 秒权重)
+        // 惩罚项 A: 近 60 分钟选路负载优先，无近期信号时回退到累计 usageCount
         const usageCount = config.usageCount || 0;
-        const usageScore = usageCount * 10000;
+        const recentLoad = this._getProviderSelectionLoad(
+            providerStatus.type,
+            providerStatus,
+            PROVIDER_SELECTION_LOAD_MAX_WINDOW_MS,
+            now
+        );
+        const balanceUnits = recentLoad > 0 ? recentLoad : usageCount;
+        const usageScore = balanceUnits * 10000;
 
         // 惩罚项 B: 相对序列号 (用于打破平局，确保轮询)
         const lastSelectionSeq = config._lastSelectionSeq || 0;
@@ -1203,10 +1287,8 @@ export class ProviderPoolManager {
             );
         } else if (hasCustomProviderWeights(candidates)) {
             selected = [...candidates].sort((a, b) => {
-                const weightA = getProviderWeight(a.config);
-                const weightB = getProviderWeight(b.config);
-                const weightedUsageA = (a.config.usageCount || 0) / weightA;
-                const weightedUsageB = (b.config.usageCount || 0) / weightB;
+                const weightedUsageA = this._getProviderWeightedBalanceScore(a.type, a, now);
+                const weightedUsageB = this._getProviderWeightedBalanceScore(b.type, b, now);
                 if (weightedUsageA !== weightedUsageB) return weightedUsageA - weightedUsageB;
 
                 const loadA = a.state?.activeCount || 0;
@@ -1241,6 +1323,7 @@ export class ProviderPoolManager {
             selected.config.usageCount++;
         }
 
+        this._recordProviderSelectionLoad(selected.type, selected, now);
         this._debouncedSave(selected.type);
         return selected;
     }
@@ -1846,10 +1929,8 @@ export class ProviderPoolManager {
             this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         } else if (hasCustomProviderWeights(availableAndHealthyProviders)) {
             selected = [...availableAndHealthyProviders].sort((a, b) => {
-                const weightA = getProviderWeight(a.config);
-                const weightB = getProviderWeight(b.config);
-                const weightedUsageA = (a.config.usageCount || 0) / weightA;
-                const weightedUsageB = (b.config.usageCount || 0) / weightB;
+                const weightedUsageA = this._getProviderWeightedBalanceScore(providerType, a, now);
+                const weightedUsageB = this._getProviderWeightedBalanceScore(providerType, b, now);
                 if (weightedUsageA !== weightedUsageB) return weightedUsageA - weightedUsageB;
 
                 const loadA = a.state?.activeCount || 0;
@@ -2856,6 +2937,7 @@ export class ProviderPoolManager {
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
             provider.config.isDisabled = false;
+            this._syncProviderBalanceOnEnable(providerType, provider);
             this._log('info', `Enabled provider: ${this._getDisplayName(providerConfig)} for type ${providerType}`);
             this._debouncedSave(providerType);
         }
