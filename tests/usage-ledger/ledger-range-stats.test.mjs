@@ -92,6 +92,31 @@ test('readLedgerRangeStats reads existing files and reports missing dates', asyn
   }
 });
 
+test('readLedgerRangeStats skips today ledger file so UI can use live stats', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-range-'));
+  try {
+    const dailyDir = path.join(tmpDir, 'daily');
+    fs.mkdirSync(dailyDir, { recursive: true });
+    const now = new Date('2026-07-05T20:00:00.000Z'); // 北京时间 2026-07-06
+    fs.writeFileSync(
+      path.join(dailyDir, 'usage-2026-07-06.jsonl'),
+      JSON.stringify(row({ date: '2026-07-06', totalTokens: 50, requestCount: 1 })) + '\n'
+    );
+
+    const result = await readLedgerRangeStats({
+      ledgerDailyDir: dailyDir,
+      dates: ['2026-07-06'],
+      now,
+    });
+
+    assert.deepEqual(result.availableDates, []);
+    assert.deepEqual(result.missingDates, ['2026-07-06']);
+    assert.equal(result.summary.totalTokens, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('resolveRangeDates maps ranges to beijing date lists', () => {
   const now = new Date('2026-07-05T20:00:00.000Z'); // 2026-07-06 04:00 北京时间
   assert.equal(getBeijingDateKey(now), '2026-07-06');

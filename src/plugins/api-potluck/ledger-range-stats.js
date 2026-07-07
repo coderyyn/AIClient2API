@@ -155,12 +155,18 @@ export function listLedgerDates(ledgerDailyDir) {
  * 读取并聚合指定日期集合的 ledger 日文件。
  * @returns {{availableDates: string[], missingDates: string[], summary, providers, models, accounts, conversionModel, pricingVersion}}
  */
-export async function readLedgerRangeStats({ ledgerDailyDir, dates = [], conversionModel } = {}) {
+export async function readLedgerRangeStats({ ledgerDailyDir, dates = [], conversionModel, now = new Date() } = {}) {
     const aggregator = createLedgerRangeAggregator({ conversionModel });
     const availableDates = [];
     const missingDates = [];
+    const todayKey = getBeijingDateKey(now);
 
     for (const date of dates) {
+        // 当天账本可能是凌晨 write 的静态快照，分布面板始终以实时 usageHistory 为准。
+        if (date === todayKey) {
+            missingDates.push(date);
+            continue;
+        }
         const filePath = path.join(ledgerDailyDir, `usage-${date}.jsonl`);
         if (!fs.existsSync(filePath)) {
             missingDates.push(date);
