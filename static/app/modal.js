@@ -14,6 +14,7 @@ let currentProviderType = '';
 let nodeSearchTerm = '';
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 let cachedProxyPools = [];
+let proxyPoolAssignments = new Map();
 
 const CODEX_QUOTA_PERCENT_FIELDS = new Set([
     'codexGeneralMax5hPercent',
@@ -99,6 +100,109 @@ function renderProxySelectField(fieldKey, fieldLabel, value = '', disabled = tru
                 ${renderProxySelectOptions(selectedValue)}
             </select>
             <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
+        </div>
+    `;
+}
+
+function buildProxyPoolIndex() {
+    return new Map(cachedProxyPools.map(proxy => [proxy.id, proxy]));
+}
+
+function getProviderDisplayName(provider = {}) {
+    return provider.customName || provider.codexEmail || provider.email || provider.uuid || 'unknown';
+}
+
+function buildProxyPoolAssignments(providerGroups = {}) {
+    const assignments = new Map();
+
+    Object.entries(providerGroups || {}).forEach(([providerType, providers]) => {
+        if (!Array.isArray(providers)) return;
+
+        providers.forEach(provider => {
+            const proxyId = String(provider?.PROXY_ID || '').trim();
+            if (!proxyId) return;
+
+            if (!assignments.has(proxyId)) {
+                assignments.set(proxyId, []);
+            }
+
+            assignments.get(proxyId).push({
+                providerType,
+                uuid: provider.uuid || '',
+                name: getProviderDisplayName(provider)
+            });
+        });
+    });
+
+    return assignments;
+}
+
+async function loadProxyPoolAssignments() {
+    try {
+        const response = await window.apiClient.get('/providers');
+        proxyPoolAssignments = buildProxyPoolAssignments(response?.providers || {});
+    } catch (error) {
+        console.warn('Failed to load proxy pool assignments:', error);
+        proxyPoolAssignments = buildProxyPoolAssignments({
+            [currentProviderType || 'current']: currentProviders
+        });
+    }
+    return proxyPoolAssignments;
+}
+
+function getProviderProxyBadgeHtml(provider = {}) {
+    const proxyId = String(provider.PROXY_ID || '').trim();
+    if (!proxyId) {
+        return `
+            <span class="provider-proxy-badge empty" title="未配置代理节点">
+                <i class="fas fa-network-wired"></i>
+                <span>未配置代理</span>
+            </span>
+        `;
+    }
+
+    const proxy = buildProxyPoolIndex().get(proxyId);
+    const proxyName = proxy?.name || proxyId;
+    const expectedIp = proxy?.expectedIp ? ` / ${proxy.expectedIp}` : '';
+    const disabledClass = proxy?.enabled === false ? ' disabled' : '';
+    const missingClass = proxy ? '' : ' missing';
+    const statusText = proxy?.enabled === false ? '已禁用' : (proxy ? '代理节点' : '代理未找到');
+
+    return `
+        <span class="provider-proxy-badge${disabledClass}${missingClass}" title="${escapeHtml(statusText)}: ${escapeHtml(proxyName)} (${escapeHtml(proxyId)}${escapeHtml(expectedIp)})">
+            <i class="fas fa-network-wired"></i>
+            <span>${escapeHtml(proxyName)}</span>
+            <code>${escapeHtml(proxyId)}</code>
+        </span>
+    `;
+}
+
+function renderProxyPoolAssignments(proxyId = '') {
+    const accounts = proxyPoolAssignments.get(proxyId) || [];
+    const visibleAccounts = accounts.slice(0, 6);
+    const overflowCount = Math.max(0, accounts.length - visibleAccounts.length);
+
+    if (accounts.length === 0) {
+        return `
+            <div class="proxy-pool-assignments empty">
+                <span class="proxy-pool-assignments-label">绑定账号</span>
+                <span class="proxy-pool-assignment-empty">暂无账号使用</span>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="proxy-pool-assignments">
+            <span class="proxy-pool-assignments-label">绑定账号</span>
+            <div class="proxy-pool-account-list">
+                ${visibleAccounts.map(account => `
+                    <span class="proxy-pool-account-chip" data-proxy-account="${escapeHtml(account.uuid)}" title="${escapeHtml(account.providerType)} / ${escapeHtml(account.uuid)}">
+                        <i class="fas fa-user-circle"></i>
+                        <span>${escapeHtml(account.name)}</span>
+                    </span>
+                `).join('')}
+                ${overflowCount > 0 ? `<span class="proxy-pool-account-more">+${overflowCount}</span>` : ''}
+            </div>
         </div>
     `;
 }
@@ -552,6 +656,7 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
 
 async function showProxyPoolManager() {
     await loadProxyPools(true);
+    await loadProxyPoolAssignments();
 
     const existingModal = document.querySelector('.proxy-pool-modal');
     if (existingModal) existingModal.remove();
@@ -588,11 +693,12 @@ async function showProxyPoolManager() {
 
 function renderProxyPoolRow(proxy = {}) {
     const enabled = proxy.enabled !== false;
+    const proxyId = proxy.id || '';
     return `
         <div class="form-grid proxy-pool-row">
             <div class="config-item">
                 <label>ID</label>
-                <input data-proxy-field="id" value="${escapeHtml(proxy.id || '')}" placeholder="res-ip-1">
+                <input data-proxy-field="id" value="${escapeHtml(proxyId)}" placeholder="res-ip-1">
             </div>
             <div class="config-item">
                 <label>${escapeHtml(t('modal.proxyPool.name'))}</label>
@@ -623,6 +729,7 @@ function renderProxyPoolRow(proxy = {}) {
                     <i class="fas fa-trash"></i> ${escapeHtml(t('modal.provider.delete'))}
                 </button>
             </div>
+            ${renderProxyPoolAssignments(proxy.id)}
         </div>
     `;
 }
@@ -751,6 +858,7 @@ function getFilteredProviders() {
             p.GROK_CLI_OAUTH_CREDS_FILE_PATH,
             p.GROK_COOKIE_TOKEN,
             p.FORWARD_API_KEY,
+            p.PROXY_ID,
             p.checkModelName
         ];
         
@@ -1034,6 +1142,7 @@ function renderProviderDetailList(providers) {
         const toggleButtonText = isDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
+        const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
         const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
                         <button class="btn-small btn-info btn-reauthorize-provider" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
                             <i class="fas fa-key"></i> <span data-i18n="modal.provider.reauthorize">${t('modal.provider.reauthorize')}</span>
@@ -1084,6 +1193,7 @@ function renderProviderDetailList(providers) {
                                 <i class="fas fa-cube"></i>
                                 <span data-i18n="modal.provider.checkModel">检测模型</span>: ${lastHealthCheckModel}
                             </span>
+                            ${proxyBadgeHtml}
                         </div>
                         ${errorInfoHtml}
                     </div>
@@ -1133,6 +1243,7 @@ function renderProviderCardList(providers) {
         const toggleButtonText = isDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
+        const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
         const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
                     <button class="card-action-btn btn-info" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
                         <i class="fas fa-key"></i>
@@ -1155,6 +1266,7 @@ function renderProviderCardList(providers) {
                         <i class="fas fa-exclamation-circle"></i>
                         <span>${provider.errorCount || 0}</span>
                     </div>
+                    ${proxyBadgeHtml}
                 </div>
                 <div class="card-actions" onclick="event.stopPropagation()">
                     <button class="card-action-btn ${toggleButtonClass}" onclick="window.toggleProviderStatus('${provider.uuid}', event)" title="${toggleButtonText}">

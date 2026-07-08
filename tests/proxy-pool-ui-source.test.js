@@ -28,4 +28,16 @@ describe('provider proxy pool UI source', () => {
         expect(modalSource).toContain('expectedIp');
         expect(modalSource).toContain('data-proxy-field="expectedIp"');
     });
+
+    test('provider cards surface assigned proxy node and proxy pool rows list bound accounts', () => {
+        const modalSource = readFileSync('static/app/modal.js', 'utf8');
+        const cssSource = readFileSync('static/components/section-providers.css', 'utf8');
+
+        expect(modalSource).toContain('function buildProxyPoolIndex');
+        expect(modalSource).toContain('function getProviderProxyBadgeHtml');
+        expect(modalSource).toContain('renderProxyPoolAssignments(proxy.id)');
+        expect(modalSource).toContain('data-proxy-account');
+        expect(cssSource).toContain('.provider-proxy-badge');
+        expect(cssSource).toContain('.proxy-pool-assignments');
+    });
 });
