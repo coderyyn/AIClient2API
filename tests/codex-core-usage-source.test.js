@@ -17,4 +17,16 @@ describe('Codex usage source regressions', () => {
         expect(source).toContain('rate_limit_reset_credits');
         expect(source).not.toContain('rate_limit_reset_credits: await this.postCodexUsageJson');
     });
+
+    test('Codex priority service tier is tracked as a fast model in usage hooks', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src/utils/common.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(source).toContain('function getUsageTrackingModel(model, requestBody, toProvider)');
+        expect(source).toContain("requestBody?.service_tier === 'priority'");
+        expect(source).toContain("return `${normalizedModel}-fast`;");
+        expect(source).toContain('const usageTrackingModel = getUsageTrackingModel(model, requestBody, toProvider);');
+        expect(source).toContain('const finalUsageModel = getUsageTrackingModel(model, processedRequestBody, toProvider);');
+        expect(source).toContain('model: usageTrackingModel');
+        expect(source).toContain('model: finalUsageModel');
+    });
 });

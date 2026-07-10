@@ -16,6 +16,7 @@ import {getProvidedPromptCacheKey, resolveCodexSessionId} from './codex-session-
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
 const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
+const DEFAULT_CODEX_FALLBACK_MODEL = 'gpt-5.4-mini';
 const CODEX_VERSION = '0.144.1';
 export const IMAGE_MODELS = new Set(['gpt-image-2']);
 const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'input_fidelity', 'moderation'];
@@ -214,9 +215,8 @@ export class CodexApiService {
             if (this.config.MODEL_FALLBACK_ENABLED === false) {
                 throw new Error(`[Codex] 模型不存在: ${model}`);
             }
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
-            logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
-            selectedModel = defaultModel;
+            logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${DEFAULT_CODEX_FALLBACK_MODEL}'`);
+            selectedModel = DEFAULT_CODEX_FALLBACK_MODEL;
         }
 
         // 临时存储 monitorRequestId
@@ -291,9 +291,8 @@ export class CodexApiService {
             if (this.config.MODEL_FALLBACK_ENABLED === false) {
                 throw new Error(`[Codex] 模型不存在: ${model}`);
             }
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
-            logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
-            selectedModel = defaultModel;
+            logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${DEFAULT_CODEX_FALLBACK_MODEL}'`);
+            selectedModel = DEFAULT_CODEX_FALLBACK_MODEL;
         }
 
         // 临时存储 monitorRequestId

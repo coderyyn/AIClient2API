@@ -62,7 +62,7 @@ test('potluck daily rows canonicalize account email and preserve original key', 
   assert.equal(rows[0].usage.requestCount, 2);
   assert.equal(rows[0].usage.totalTokens, 1050);
   assert.ok(rows[0].cost.actualUsd > 0);
-  assert.equal(rows[0].pricingVersion, 'official-2026-07-09');
+  assert.equal(rows[0].pricingVersion, 'official-2026-07-10');
 });
 
 test('potluck hourly rows preserve hour while using the same key reference', () => {

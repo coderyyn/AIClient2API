@@ -1494,25 +1494,16 @@
         function usageTokens(entry) { return typeof entry === 'number' ? 0 : Number(entry?.totalTokens || 0); }
         const MODEL_DISPLAY_ALIASES = {
             'gpt5.6sol': 'gpt-5.6-sol',
-            'gpt-5.6-sol-fast': 'gpt-5.6-sol',
             'gpt5.6terra': 'gpt-5.6-terra',
-            'gpt-5.6-terra-fast': 'gpt-5.6-terra',
             'gpt5.6luna': 'gpt-5.6-luna',
-            'gpt-5.6-luna-fast': 'gpt-5.6-luna',
             'codex-auto-review': 'gpt-5.5',
             'gpt5.5': 'gpt-5.5',
-            'gpt-5.4-fast': 'gpt-5.4',
-            'gpt-5.4-mini-fast': 'gpt-5.4-mini',
-            'gpt-5.3-codex-fast': 'gpt-5.3-codex',
-            'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark',
             'gpt-5.3codexspark': 'gpt-5.3-codex-spark',
-            'gpt-5.2-fast': 'gpt-5.2',
             'gtp-5.1': 'gpt-5.3-codex-spark',
             'gpt-5.1': 'gpt-5.3-codex-spark',
             'gpt-5': 'gpt-5.3-codex-spark',
             '5.4': 'gpt-5.3-codex-spark',
             '5.5': 'gpt-5.3-codex-spark',
-            'gpt-image-2-fast': 'gpt-image-2',
             'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite'
         };
         function normalizeDisplayModelName(model) {

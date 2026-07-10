@@ -20,7 +20,7 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBeCloseTo(1.065, 6);
         expect(cost.convertedUsd).toBeCloseTo(0.496, 6);
         expect(cost.conversionModel).toBe('gemini-2.5-flash');
-        expect(cost.pricingVersion).toBe('official-2026-07-09');
+        expect(cost.pricingVersion).toBe('official-2026-07-10');
         expect(cost.missingPriceTokens).toBe(0);
     });
 
@@ -77,7 +77,6 @@ describe('api potluck cost estimator', () => {
             totalTokens: 1100
         };
 
-        const sparkFast = estimateUsageCost(usage, 'gpt-5.3-codex-spark-fast');
         const spark = estimateUsageCost(usage, 'gpt-5.3-codex-spark');
         const compactGpt55 = estimateUsageCost(usage, 'gpt5.5');
         const gpt55 = estimateUsageCost(usage, 'gpt-5.5');
@@ -86,13 +85,8 @@ describe('api potluck cost estimator', () => {
         const nonexistentGpt5 = estimateUsageCost(usage, 'gpt-5');
         const bareGpt54 = estimateUsageCost(usage, '5.4');
         const bareGpt55 = estimateUsageCost(usage, '5.5');
-        const solFast = estimateUsageCost(usage, 'gpt-5.6-sol-fast');
+        const bareGpt56 = estimateUsageCost(usage, 'gpt-5.6');
 
-        expect(sparkFast).toMatchObject({
-            model: 'gpt-5.3-codex-spark',
-            missingPriceTokens: 0
-        });
-        expect(sparkFast.usd).toBeCloseTo(spark.usd, 8);
         expect(compactGpt55).toMatchObject({
             model: 'gpt-5.5',
             missingPriceTokens: 0
@@ -110,25 +104,47 @@ describe('api potluck cost estimator', () => {
             });
             expect(estimate.usd).toBeCloseTo(spark.usd, 8);
         }
-        expect(solFast).toMatchObject({
-            model: 'gpt-5.6-sol',
-            missingPriceTokens: 0
+        expect(bareGpt56).toMatchObject({
+            model: 'gpt-5.6',
+            usd: 0,
+            missingPriceTokens: 1100
         });
     });
 
-    test('keeps gpt 5.5 fast separate because it has different pricing', () => {
-        const cost = estimateUsageCost({
+    test('prices official Codex fast modes with their fast credit multipliers', () => {
+        const usage = {
             promptTokens: 1000,
             cachedTokens: 100,
             completionTokens: 100,
             totalTokens: 1100
-        }, 'gpt-5.5-fast');
+        };
 
-        expect(cost).toMatchObject({
-            model: 'gpt-5.5-fast',
-            usd: 0,
-            missingPriceTokens: 1100
+        const gpt55 = estimateUsageCost(usage, 'gpt-5.5');
+        const gpt55Fast = estimateUsageCost(usage, 'gpt-5.5-fast');
+        const gpt56Sol = estimateUsageCost(usage, 'gpt-5.6-sol');
+        const gpt56SolFast = estimateUsageCost(usage, 'gpt-5.6-sol-fast');
+        const gpt54 = estimateUsageCost(usage, 'gpt-5.4');
+        const gpt54Fast = estimateUsageCost(usage, 'gpt-5.4-fast');
+
+        expect(gpt56SolFast).toMatchObject({
+            model: 'gpt-5.6-sol-fast',
+            missingPriceTokens: 0,
+            priceMultiplier: 2.5,
+            pricingSource: 'temporary:codex-fast-assumed'
         });
+        expect(gpt56SolFast.usd).toBeCloseTo(gpt56Sol.usd * 2.5, 8);
+        expect(gpt55Fast).toMatchObject({
+            model: 'gpt-5.5-fast',
+            missingPriceTokens: 0,
+            priceMultiplier: 2.5
+        });
+        expect(gpt55Fast.usd).toBeCloseTo(gpt55.usd * 2.5, 8);
+        expect(gpt54Fast).toMatchObject({
+            model: 'gpt-5.4-fast',
+            missingPriceTokens: 0,
+            priceMultiplier: 2
+        });
+        expect(gpt54Fast.usd).toBeCloseTo(gpt54.usd * 2, 8);
     });
 
     test('only allows gemini conversion models from 2.5 flash-lite through 3.5 flash', () => {

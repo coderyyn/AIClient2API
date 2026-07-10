@@ -46,7 +46,7 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('次');
     });
 
-    test('admin model activity follows selected range while normalizing aliases and merging low call models', () => {
+    test('admin model activity follows selected range while preserving fast model visibility', () => {
         const source = loadPotluckSource();
 
         expect(source).toContain('模型活跃度 (Models)');
@@ -56,16 +56,20 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain("emptyText: '当前范围暂无模型数据'");
         expect(source).toContain('filter: usage => usageTokens(usage) > 0');
         expect(source).toContain('const MODEL_DISPLAY_ALIASES = {');
-        expect(source).toContain("'gpt-5.6-sol-fast': 'gpt-5.6-sol'");
-        expect(source).toContain("'gpt-5.6-terra-fast': 'gpt-5.6-terra'");
-        expect(source).toContain("'gpt-5.6-luna-fast': 'gpt-5.6-luna'");
         expect(source).toContain("'gtp-5.1': 'gpt-5.3-codex-spark'");
         expect(source).toContain("'gpt-5.1': 'gpt-5.3-codex-spark'");
         expect(source).toContain("'gpt-5': 'gpt-5.3-codex-spark'");
         expect(source).toContain("'5.4': 'gpt-5.3-codex-spark'");
         expect(source).toContain("'5.5': 'gpt-5.3-codex-spark'");
+        expect(source).not.toContain("'gpt-5.6-sol-fast': 'gpt-5.6-sol'");
+        expect(source).not.toContain("'gpt-5.6-terra-fast': 'gpt-5.6-terra'");
+        expect(source).not.toContain("'gpt-5.6-luna-fast': 'gpt-5.6-luna'");
         expect(source).not.toContain("'gpt-5.5-fast': 'gpt-5.5'");
-        expect(source).toContain("'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark'");
+        expect(source).not.toContain("'gpt-5.4-fast': 'gpt-5.4'");
+        expect(source).not.toContain("'gpt-5.4-mini-fast': 'gpt-5.4-mini'");
+        expect(source).not.toContain("'gpt-5.3-codex-spark-fast': 'gpt-5.3-codex-spark'");
+        expect(source).not.toContain("'gpt-5.2-fast': 'gpt-5.2'");
+        expect(source).not.toContain("'gpt-image-2-fast': 'gpt-image-2'");
         expect(source).toContain('function aggregateModelDistributionForDisplay(models = {}, minCalls = 100)');
         expect(source).toContain("const lowCallLabel = `其他模型（<${minCalls}次）`");
         expect(source).not.toContain('const allModelSummary = summarizeUsageHistoryForRange(usageHistory, \'total\')');

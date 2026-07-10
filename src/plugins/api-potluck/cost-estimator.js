@@ -13,6 +13,7 @@ export const PRICING_VERSION = PRICING.pricingVersion;
 const PRICE_PER_MILLION = PRICING.pricePerMillion;
 
 const MODEL_PRICE_ALIASES = PRICING.modelPriceAliases;
+const MODEL_PRICE_MULTIPLIERS = PRICING.modelPriceMultipliers || {};
 
 const GEMINI_CONVERSION_MODELS = [
     'gemini-2.5-flash-lite',
@@ -36,6 +37,27 @@ function normalizePricedModelName(model) {
     return MODEL_PRICE_ALIASES[normalized] || normalized;
 }
 
+function resolvePricedModel(model) {
+    const normalized = normalizeModelName(model);
+    const multiplierConfig = MODEL_PRICE_MULTIPLIERS[normalized];
+    if (multiplierConfig?.baseModel) {
+        return {
+            displayModel: normalized,
+            pricedModel: normalizePricedModelName(multiplierConfig.baseModel),
+            multiplier: toNumber(multiplierConfig.multiplier) || 1,
+            multiplierSource: multiplierConfig.source || ''
+        };
+    }
+
+    const pricedModel = normalizePricedModelName(normalized);
+    return {
+        displayModel: pricedModel,
+        pricedModel,
+        multiplier: 1,
+        multiplierSource: ''
+    };
+}
+
 export function getConversionModels() {
     return GEMINI_CONVERSION_MODELS.map(model => ({
         model,
@@ -49,12 +71,12 @@ export function normalizeConversionModel(model) {
 }
 
 export function getModelPricing(model) {
-    return PRICE_PER_MILLION[normalizePricedModelName(model)] || null;
+    return PRICE_PER_MILLION[resolvePricedModel(model).pricedModel] || null;
 }
 
 export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) {
-    const normalizedModel = normalizePricedModelName(model);
-    const pricing = getModelPricing(normalizedModel);
+    const resolvedModel = resolvePricedModel(model);
+    const pricing = getModelPricing(resolvedModel.pricedModel);
     const promptTokens = toNumber(usage.promptTokens);
     const cachedTokens = Math.min(promptTokens, toNumber(usage.cachedTokens));
     const billableInputTokens = Math.max(0, promptTokens - cachedTokens);
@@ -64,24 +86,26 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL) 
         return {
             usd: 0,
             missingPriceTokens: toNumber(usage.totalTokens) || (promptTokens + outputTokens),
-            model: normalizedModel || null,
+            model: resolvedModel.displayModel || null,
             pricingVersion: PRICING_VERSION,
             pricingSource: 'missing'
         };
     }
 
-    const usd = (
+    const standardUsd = (
         (billableInputTokens * pricing.input) +
         (cachedTokens * pricing.cachedInput) +
         (outputTokens * pricing.output)
     ) / 1_000_000;
+    const usd = standardUsd * resolvedModel.multiplier;
 
     return {
         usd,
         missingPriceTokens: 0,
-        model: normalizedModel,
+        model: resolvedModel.displayModel,
         pricingVersion: PRICING_VERSION,
-        pricingSource: pricing.source
+        pricingSource: resolvedModel.multiplierSource || pricing.source,
+        priceMultiplier: resolvedModel.multiplier
     };
 }
 

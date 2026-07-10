@@ -17,9 +17,11 @@ import {
 import { readCodexCredentialDisplayName, readCodexCredentialIdentity } from '../utils/codex-utils.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
+import { getProviderModels } from '../providers/provider-models.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
+const DEFAULT_CODEX_FALLBACK_MODEL = 'gpt-5.4-mini';
 
 function isTruthyConfigFlag(value) {
     return value === true || value === 1 || value === '1' || value === 'true';
@@ -27,6 +29,12 @@ function isTruthyConfigFlag(value) {
 
 function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function isSupportedCodexModel(providerType, model) {
+    const models = getProviderModels(providerType);
+    if (models.includes(model)) return true;
+    return model?.endsWith('-fast') && models.includes(model.slice(0, -5));
 }
 
 function hashAffinityScope(value) {
@@ -620,6 +628,11 @@ async function _resolveEffectiveRouting(config, requestedModel) {
             actualModelName = modelSuffix;
             logger.info(`[Routing] Prefix resolved: ${prefix}:${modelSuffix}`);
         }
+    }
+
+    if (isCodexProviderType(effectiveProvider) && actualModelName && !isSupportedCodexModel(effectiveProvider, actualModelName)) {
+        logger.warn(`[Routing] Unsupported Codex model '${actualModelName}'. Falling back to '${DEFAULT_CODEX_FALLBACK_MODEL}'`);
+        actualModelName = DEFAULT_CODEX_FALLBACK_MODEL;
     }
 
     // 2. 严格性检查：在 AUTO 模式下，如果到这里还没解析出具体提供商，则报错 (除非是列出模型场景)

@@ -1037,6 +1037,25 @@ function getPluginHookRequestId(config) {
     return config?._monitorRequestId || null;
 }
 
+function isCodexProvider(provider) {
+    return provider === MODEL_PROVIDER.CODEX_API || provider?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function getUsageTrackingModel(model, requestBody, toProvider) {
+    const normalizedModel = String(model || requestBody?.model || '').trim();
+    if (!normalizedModel) return model;
+
+    if (
+        isCodexProvider(toProvider) &&
+        requestBody?.service_tier === 'priority' &&
+        !/-fast$/i.test(normalizedModel)
+    ) {
+        return `${normalizedModel}-fast`;
+    }
+
+    return normalizedModel;
+}
+
 export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null, accountIdentity = null, accountEmail = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
@@ -1094,6 +1113,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         if (requestBody.model && requestBody.model !== model) {
             model = requestBody.model;
         }
+        const usageTrackingModel = getUsageTrackingModel(model, requestBody, toProvider);
         const addEvent = getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.CLAUDE || getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES;
         // 为每个请求生成唯一 ID，用于在单例 converter 中隔离并发流状态
         const streamRequestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1130,7 +1150,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         providerName: customName,
                         accountIdentity,
                         accountEmail,
-                        model,
+                        model: usageTrackingModel,
                         requestId: hookRequestId
                     });
                 } catch (e) {}
@@ -1462,6 +1482,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         if (requestBody.model && requestBody.model !== model) {
             model = requestBody.model;
         }
+        const usageTrackingModel = getUsageTrackingModel(model, requestBody, toProvider);
         
         const responseText = extractResponseText(nativeResponse, toProvider);
 
@@ -1486,7 +1507,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     providerName: customName,
                     accountIdentity,
                     accountEmail,
-                    model,
+                    model: usageTrackingModel,
                     requestId: hookRequestId
                 });
             } catch (e) {}
@@ -1946,6 +1967,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     if (processedRequestBody.model && processedRequestBody.model !== model) {
         model = processedRequestBody.model;
     }
+    const finalUsageModel = getUsageTrackingModel(model, processedRequestBody, toProvider);
 
     // 执行插件钩子：内容生成后
     try {
@@ -1960,7 +1982,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             providerName: actualCustomName,
             accountIdentity: actualAccountIdentity,
             accountEmail: actualAccountEmail,
-            model,
+            model: finalUsageModel,
             isStream
         });
     } catch (e) { /* 静默失败，不影响主流程 */ }

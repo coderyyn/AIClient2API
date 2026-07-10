@@ -1,5 +1,5 @@
 {
-    "pricingVersion": "official-2026-07-09",
+    "pricingVersion": "official-2026-07-10",
     "pricePerMillion": {
         "gpt-5.6-sol": { "input": 5.00, "cachedInput": 0.50, "output": 30.00, "provider": "openai", "source": "official" },
         "gpt-5.6-terra": { "input": 2.50, "cachedInput": 0.25, "output": 15.00, "provider": "openai", "source": "official" },
@@ -23,21 +23,22 @@
     },
     "modelPriceAliases": {
         "gpt5.6sol": "gpt-5.6-sol",
-        "gpt-5.6-sol-fast": "gpt-5.6-sol",
         "gpt5.6terra": "gpt-5.6-terra",
-        "gpt-5.6-terra-fast": "gpt-5.6-terra",
         "gpt5.6luna": "gpt-5.6-luna",
-        "gpt-5.6-luna-fast": "gpt-5.6-luna",
         "codex-auto-review": "gpt-5.5",
         "gpt5.5": "gpt-5.5",
-        "gpt-5.4-fast": "gpt-5.4",
-        "gpt-5.4-mini-fast": "gpt-5.4-mini",
-        "gpt-5.3-codex-spark-fast": "gpt-5.3-codex-spark",
         "gpt-5.3codexspark": "gpt-5.3-codex-spark",
         "gtp-5.1": "gpt-5.3-codex-spark",
         "gpt-5.1": "gpt-5.3-codex-spark",
         "gpt-5": "gpt-5.3-codex-spark",
         "5.4": "gpt-5.3-codex-spark",
         "5.5": "gpt-5.3-codex-spark"
+    },
+    "modelPriceMultipliers": {
+        "gpt-5.6-sol-fast": { "baseModel": "gpt-5.6-sol", "multiplier": 2.5, "source": "temporary:codex-fast-assumed" },
+        "gpt-5.6-terra-fast": { "baseModel": "gpt-5.6-terra", "multiplier": 2.5, "source": "temporary:codex-fast-assumed" },
+        "gpt-5.6-luna-fast": { "baseModel": "gpt-5.6-luna", "multiplier": 2.5, "source": "temporary:codex-fast-assumed" },
+        "gpt-5.5-fast": { "baseModel": "gpt-5.5", "multiplier": 2.5, "source": "official:codex-fast" },
+        "gpt-5.4-fast": { "baseModel": "gpt-5.4", "multiplier": 2.0, "source": "official:codex-fast" }
     }
 }
