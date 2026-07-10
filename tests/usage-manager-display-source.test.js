@@ -75,6 +75,8 @@ describe('usage manager display source regressions', () => {
         expect(usageManagerSource).toContain('function renderCodexQuotaHealthBadges(instance, providerType)');
         expect(usageManagerSource).toContain("renderBadge('通用', quotaHealth.general)");
         expect(usageManagerSource).toContain("renderBadge('5.3', quotaHealth.codex53)");
+        expect(usageApiSource).toContain('quotaHealth.codex53');
+        expect(usageApiSource).toContain('codex53UsedPercent');
         expect(usageManagerSource).not.toContain("renderBadge('通用额度'");
         expect(usageManagerSource).not.toContain("renderBadge('5.3额度'");
         expect(usageManagerSource).toContain('renderCodexQuotaHealthBadges(instance, providerType)');

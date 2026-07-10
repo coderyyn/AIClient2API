@@ -43,7 +43,7 @@ Daily ledger rows are keyed by date, provider/account, API key, and model.
 - If old history has model/provider summary but no account detail, emit `source=api-potluck-keys-summary` with `accountKey=<provider>:unknown`.
 - If account detail is partial, emit account rows plus `source=api-potluck-keys-summary-delta` rows for the positive model-level difference only. This preserves totals without double-counting account rows.
 - Normalize historical model aliases before pricing and before computing summary deltas.
-- Store `pricingVersion` on every row. The current version is `official-2026-07-01`.
+- Store `pricingVersion` on every row. The current version is `official-2026-07-09`.
 - Pricing and model aliases live in the shared single source `src/plugins/api-potluck/pricing.json`, loaded by both `cost-estimator.js` and the ledger script. When running the ledger script standalone from the config volume (e.g. `/app/configs/tools/`), copy `pricing.json` next to the script or set `USAGE_LEDGER_PRICING_FILE`; inside the app container it falls back to `/app/src/plugins/api-potluck/pricing.json` automatically.
 
 Key fields:
@@ -91,7 +91,7 @@ The `reconcile` command writes `permanent-usage-ledger/reconciliation/reconcile-
 
 ## Admin Range Stats From Ledger
 
-`GET /api/potluck/range-stats?range=<total|30d|7d|today>&conversionModel=<model>` streams the daily ledger files for the requested Beijing-time date range and returns pre-aggregated `summary/providers/models/accounts` buckets (no key material). The potluck admin dashboard prefers this ledger source for the distribution panels and only adds live in-memory stats for dates missing from the ledger (normally today); the section title shows the data source, e.g. `数据源: 账本 6 天 + 实时 1 天 · official-2026-07-01`. When no ledger files exist the UI falls back to the previous full client-side aggregation.
+`GET /api/potluck/range-stats?range=<total|30d|7d|today>&conversionModel=<model>` streams the daily ledger files for the requested Beijing-time date range and returns pre-aggregated `summary/providers/models/accounts` buckets (no key material). The potluck admin dashboard prefers this ledger source for the distribution panels and only adds live in-memory stats for dates missing from the ledger (normally today); the section title shows the data source, e.g. `数据源: 账本 6 天 + 实时 1 天 · official-2026-07-09`. When no ledger files exist the UI falls back to the previous full client-side aggregation.
 
 Example production cron wrapper:
 

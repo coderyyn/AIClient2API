@@ -27,6 +27,19 @@ afterEach(() => {
 });
 
 describe('Codex session cache key handling', () => {
+    test('uses a Codex client version new enough for GPT-5.6 models', () => {
+        const service = new CodexApiService({ MODEL_PROVIDER: 'openai-codex-oauth' });
+
+        try {
+            const headers = service.buildHeaders(null, false);
+
+            expect(headers.version).toBe('0.144.1');
+            expect(headers['user-agent']).toContain('codex-tui/0.144.1');
+        } finally {
+            service.stopCacheCleanup();
+        }
+    });
+
     test('uses Codex CLI client metadata session id when metadata is absent', async () => {
         const service = new CodexApiService({ MODEL_PROVIDER: 'openai-codex-oauth' });
 

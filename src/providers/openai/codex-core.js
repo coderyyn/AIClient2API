@@ -16,7 +16,7 @@ import {getProvidedPromptCacheKey, resolveCodexSessionId} from './codex-session-
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
 const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
-const CODEX_VERSION = '0.130.0';
+const CODEX_VERSION = '0.144.1';
 export const IMAGE_MODELS = new Set(['gpt-image-2']);
 const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'input_fidelity', 'moderation'];
 const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];

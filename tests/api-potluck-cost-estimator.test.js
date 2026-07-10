@@ -20,7 +20,7 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBeCloseTo(1.065, 6);
         expect(cost.convertedUsd).toBeCloseTo(0.496, 6);
         expect(cost.conversionModel).toBe('gemini-2.5-flash');
-        expect(cost.pricingVersion).toBe('official-2026-07-01');
+        expect(cost.pricingVersion).toBe('official-2026-07-09');
         expect(cost.missingPriceTokens).toBe(0);
     });
 
@@ -86,6 +86,7 @@ describe('api potluck cost estimator', () => {
         const nonexistentGpt5 = estimateUsageCost(usage, 'gpt-5');
         const bareGpt54 = estimateUsageCost(usage, '5.4');
         const bareGpt55 = estimateUsageCost(usage, '5.5');
+        const solFast = estimateUsageCost(usage, 'gpt-5.6-sol-fast');
 
         expect(sparkFast).toMatchObject({
             model: 'gpt-5.3-codex-spark',
@@ -109,6 +110,10 @@ describe('api potluck cost estimator', () => {
             });
             expect(estimate.usd).toBeCloseTo(spark.usd, 8);
         }
+        expect(solFast).toMatchObject({
+            model: 'gpt-5.6-sol',
+            missingPriceTokens: 0
+        });
     });
 
     test('keeps gpt 5.5 fast separate because it has different pricing', () => {

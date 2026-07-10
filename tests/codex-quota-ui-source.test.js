@@ -6,7 +6,7 @@ function readSource(relativePath) {
 }
 
 describe('Codex split quota UI source', () => {
-    test('Codex provider fields expose only general and Codex 5.3 percentage quota limits', () => {
+    test('Codex provider fields expose general and Codex 5.3 percentage quota limits', () => {
         const source = readSource('static/app/utils.js');
         const codexStart = source.indexOf("'openai-codex-oauth': [");
         expect(codexStart).toBeGreaterThanOrEqual(0);
@@ -18,6 +18,7 @@ describe('Codex split quota UI source', () => {
         expect(codexFields).toContain("id: 'codexGeneralMaxWeeklyPercent'");
         expect(codexFields).toContain("id: 'codex53Max5hPercent'");
         expect(codexFields).toContain("id: 'codex53MaxWeeklyPercent'");
+        expect(codexFields).toContain('Codex 5.3');
         expect(codexFields).not.toContain('codexMax5hTokens');
         expect(codexFields).not.toContain('codexMaxWeeklyTokens');
         expect(codexFields).not.toContain("id: 'codexMax5hPercent'");

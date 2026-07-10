@@ -41,9 +41,9 @@ afterEach(() => {
 describe('provider pool balance on enable', () => {
     test('syncs usageCount and recent load to sibling median instead of keeping stale low counters', () => {
         const manager = createPoolManager([
-            { uuid: 'paused', customName: 'Paused', providerWeight: 1, usageCount: 50, supportedModels: ['gpt-5.5'] },
-            { uuid: 'active-a', customName: 'ActiveA', providerWeight: 1, usageCount: 800, supportedModels: ['gpt-5.5'] },
-            { uuid: 'active-b', customName: 'ActiveB', providerWeight: 1, usageCount: 1000, supportedModels: ['gpt-5.5'] }
+            { uuid: 'paused', customName: 'Paused', providerWeight: 1, usageCount: 50, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'active-a', customName: 'ActiveA', providerWeight: 1, usageCount: 800, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'active-b', customName: 'ActiveB', providerWeight: 1, usageCount: 1000, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] }
         ]);
         clearTimeout(manager.saveTimer);
 
@@ -60,8 +60,8 @@ describe('provider pool balance on enable', () => {
 
     test('prefers recent 60m load over stale lifetime usageCount when balancing equal weights', async () => {
         const manager = createPoolManager([
-            { uuid: 'stale-high', customName: 'StaleHigh', providerWeight: 1, usageCount: 5000, supportedModels: ['gpt-5.5'] },
-            { uuid: 'recent-low', customName: 'RecentLow', providerWeight: 1, usageCount: 100, supportedModels: ['gpt-5.5'] }
+            { uuid: 'stale-high', customName: 'StaleHigh', providerWeight: 1, usageCount: 5000, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] },
+            { uuid: 'recent-low', customName: 'RecentLow', providerWeight: 1, usageCount: 100, lastKnownCodexPlan: 'pro', supportedModels: ['gpt-5.5'] }
         ]);
         clearTimeout(manager.saveTimer);
 
