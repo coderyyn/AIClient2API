@@ -428,6 +428,31 @@ describe('api potluck key usage summary', () => {
         });
     });
 
+    test('getAccountUsageSummary prices historical Codex fast model names', async () => {
+        const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+
+        jest.setSystemTime(new Date('2026-07-12T02:00:00.000Z'));
+        const key = await createKey('Historical Fast Client', 1000);
+        for (const [index, model] of ['gpt-5.4-mini-fast', 'gpt-5.3-codex-spark-fast'].entries()) {
+            await incrementUsage(key.id, 'openai-codex-oauth', model, {
+                requestCount: 1,
+                promptTokens: 1000,
+                completionTokens: 100,
+                totalTokens: 1100
+            }, `req-historical-fast-${index}`, {
+                providerUuid: 'historical-fast-account',
+                providerName: 'historical-fast@example.com',
+                accountEmail: 'historical-fast@example.com'
+            });
+        }
+
+        const summary = await getAccountUsageSummary(new Date('2026-07-12T03:00:00.000Z'));
+        const account = summary.accounts.find(item => item.accountKey === 'openai-codex-oauth:historical-fast@example.com');
+
+        expect(account.month.cost.actualUsd).toBeGreaterThan(0);
+        expect(account.month.cost.missingPriceTokens).toBe(0);
+    });
+
     test('getAccountUsageSummary prefers live potluck history over stale model usage daily history', async () => {
         fs.writeFileSync(path.join(tempDir, 'configs', 'model-usage-stats.json'), JSON.stringify({
             updatedAt: '2026-07-01T13:43:00.000Z',
@@ -849,7 +874,7 @@ describe('api potluck key usage summary', () => {
             actualUsd: expect.closeTo(1.065, 6),
             convertedUsd: expect.closeTo(0.496, 6),
             conversionModel: 'gemini-2.5-flash',
-            pricingVersion: 'official-2026-07-12',
+            pricingVersion: 'official-2026-07-12-r1',
             missingPriceTokens: 0
         });
         expect(listedKey.usageHistory['2026-06-22'].summary.cost).toMatchObject({

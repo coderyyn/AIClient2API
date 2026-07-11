@@ -20,7 +20,7 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBeCloseTo(1.065, 6);
         expect(cost.convertedUsd).toBeCloseTo(0.496, 6);
         expect(cost.conversionModel).toBe('gemini-2.5-flash');
-        expect(cost.pricingVersion).toBe('official-2026-07-12');
+        expect(cost.pricingVersion).toBe('official-2026-07-12-r1');
         expect(cost.missingPriceTokens).toBe(0);
     });
 
@@ -145,6 +145,33 @@ describe('api potluck cost estimator', () => {
             priceMultiplier: 2
         });
         expect(gpt54Fast.usd).toBeCloseTo(gpt54.usd * 2, 8);
+    });
+
+    test('prices historical Codex fast model names without leaving missing tokens', () => {
+        const usage = {
+            promptTokens: 1000,
+            cachedTokens: 100,
+            completionTokens: 100,
+            totalTokens: 1100
+        };
+        const cases = [
+            ['gpt-5.4-mini-fast', 'gpt-5.4-mini', 2],
+            ['gpt-5.3-codex-spark-fast', 'gpt-5.3-codex-spark', 1],
+            ['gpt-5.3-codex-fast', 'gpt-5.3-codex', 1],
+            ['gpt-5.2-fast', 'gpt-5.2', 1],
+            ['gpt-image-2-fast', 'gpt-image-2', 1]
+        ];
+
+        for (const [fastModel, baseModel, multiplier] of cases) {
+            const base = estimateUsageCost(usage, baseModel);
+            const fast = estimateUsageCost(usage, fastModel);
+            expect(fast).toMatchObject({
+                model: fastModel,
+                missingPriceTokens: 0,
+                priceMultiplier: multiplier
+            });
+            expect(fast.usd).toBeCloseTo(base.usd * multiplier, 8);
+        }
     });
 
     test('only allows gemini conversion models from 2.5 flash-lite through 3.5 flash', () => {

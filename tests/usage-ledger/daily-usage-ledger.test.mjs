@@ -62,7 +62,7 @@ test('potluck daily rows canonicalize account email and preserve original key', 
   assert.equal(rows[0].usage.requestCount, 2);
   assert.equal(rows[0].usage.totalTokens, 1050);
   assert.ok(rows[0].cost.actualUsd > 0);
-  assert.equal(rows[0].pricingVersion, 'official-2026-07-12');
+  assert.equal(rows[0].pricingVersion, 'official-2026-07-12-r1');
 });
 
 test('potluck daily rows price GPT-5.6 fast models with the configured multiplier', () => {
@@ -97,7 +97,7 @@ test('potluck daily rows price GPT-5.6 fast models with the configured multiplie
 
   assert.equal(row.cost.missingPriceTokens, 0);
   assert.ok(Math.abs(row.cost.actualUsd - normalCost * 2.5) < 1e-12);
-  assert.equal(row.pricingVersion, 'official-2026-07-12');
+  assert.equal(row.pricingVersion, 'official-2026-07-12-r1');
 });
 
 test('potluck hourly rows preserve hour while using the same key reference', () => {
