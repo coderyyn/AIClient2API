@@ -11,7 +11,7 @@ import {
   resolveRangeDates,
 } from '../../src/plugins/api-potluck/ledger-range-stats.js';
 
-function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey, accountEmail = 'user@example.com', model = 'gpt-5.5', requestCount = 1, totalTokens = 100, promptTokens = 80, completionTokens = 20, cachedTokens = 10, actualUsd = 0.01 }) {
+function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey, accountEmail = 'user@example.com', model = 'gpt-5.5', requestCount = 1, totalTokens = 100, promptTokens = 80, completionTokens = 20, cachedTokens = 10, actualUsd = 0.01, missingPriceTokens = 0 }) {
   return {
     date,
     provider,
@@ -25,7 +25,7 @@ function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey,
     keyPrefix: 'maki_secret...',
     model,
     usage: { requestCount, promptTokens, cachedTokens, completionTokens, reasoningTokens: 0, totalTokens },
-    cost: { actualUsd, missingPriceTokens: 0, pricingModel: model },
+    cost: { actualUsd, missingPriceTokens, pricingModel: model },
   };
 }
 
@@ -39,7 +39,7 @@ test('aggregator groups rows by provider, model, and account with cost totals', 
 
   assert.equal(result.summary.requestCount, 4);
   assert.equal(result.summary.totalTokens, 180);
-  assert.ok(Math.abs(result.summary.cost.actualUsd - 0.033) < 1e-9);
+  assert.ok(Math.abs(result.summary.cost.actualUsd - 0.00205325) < 1e-12);
   assert.ok(result.summary.cost.convertedUsd > 0);
   assert.equal(result.summary.cost.conversionModel, 'gemini-2.5-flash');
 
@@ -56,6 +56,36 @@ test('aggregator groups rows by provider, model, and account with cost totals', 
   ]);
   assert.equal(result.accounts['openai-codex-oauth:user@example.com'].summary.totalTokens, 150);
   assert.equal(result.accounts['openai-codex-oauth:user@example.com'].models['gpt-5.5'].totalTokens, 100);
+});
+
+test('aggregator reprices stale GPT-5.6 ledger rows with current prices', () => {
+  const aggregator = createLedgerRangeAggregator({ conversionModel: 'gemini-2.5-flash' });
+  const usage = {
+    promptTokens: 1_000_000,
+    cachedTokens: 250_000,
+    completionTokens: 100_000,
+    totalTokens: 1_100_000,
+  };
+  aggregator.addRow(row({
+    model: 'gpt-5.6-sol',
+    ...usage,
+    actualUsd: 0,
+    missingPriceTokens: usage.totalTokens,
+  }));
+  aggregator.addRow(row({
+    model: 'gpt-5.6-sol-fast',
+    ...usage,
+    actualUsd: 0,
+    missingPriceTokens: usage.totalTokens,
+  }));
+
+  const result = aggregator.result();
+  const normalCost = ((750_000 * 5) + (250_000 * 0.5) + (100_000 * 30)) / 1_000_000;
+
+  assert.equal(result.models['gpt-5.6-sol'].cost.missingPriceTokens, 0);
+  assert.equal(result.models['gpt-5.6-sol-fast'].cost.missingPriceTokens, 0);
+  assert.ok(Math.abs(result.models['gpt-5.6-sol'].cost.actualUsd - normalCost) < 1e-12);
+  assert.ok(Math.abs(result.models['gpt-5.6-sol-fast'].cost.actualUsd - normalCost * 2.5) < 1e-12);
 });
 
 test('aggregated output never contains key material', () => {

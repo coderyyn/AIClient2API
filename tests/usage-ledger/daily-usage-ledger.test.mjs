@@ -62,7 +62,42 @@ test('potluck daily rows canonicalize account email and preserve original key', 
   assert.equal(rows[0].usage.requestCount, 2);
   assert.equal(rows[0].usage.totalTokens, 1050);
   assert.ok(rows[0].cost.actualUsd > 0);
-  assert.equal(rows[0].pricingVersion, 'official-2026-07-10');
+  assert.equal(rows[0].pricingVersion, 'official-2026-07-12');
+});
+
+test('potluck daily rows price GPT-5.6 fast models with the configured multiplier', () => {
+  const usage = {
+    requestCount: 1,
+    promptTokens: 1_000_000,
+    cachedTokens: 250_000,
+    completionTokens: 100_000,
+    reasoningTokens: 0,
+    totalTokens: 1_100_000,
+  };
+  const store = {
+    keys: {
+      example_fast_value: {
+        usageHistory: {
+          '2026-07-12': {
+            accounts: {
+              'openai-codex-oauth:user@example.com': {
+                provider: 'openai-codex-oauth',
+                accountEmail: 'user@example.com',
+                models: { 'gpt-5.6-sol-fast': usage },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const [row] = buildDailyRowsFromPotluck(store, { from: '2026-07-12', to: '2026-07-12' });
+  const normalCost = ((750_000 * 5) + (250_000 * 0.5) + (100_000 * 30)) / 1_000_000;
+
+  assert.equal(row.cost.missingPriceTokens, 0);
+  assert.ok(Math.abs(row.cost.actualUsd - normalCost * 2.5) < 1e-12);
+  assert.equal(row.pricingVersion, 'official-2026-07-12');
 });
 
 test('potluck hourly rows preserve hour while using the same key reference', () => {

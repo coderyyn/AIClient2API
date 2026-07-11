@@ -36,13 +36,14 @@ function createBucket() {
 
 function addRowToBucket(bucket, row) {
     const usage = row.usage || {};
+    const currentCost = estimateUsageCost(usage, row.model || 'unknown');
     bucket.requestCount += toNumber(usage.requestCount);
     bucket.promptTokens += toNumber(usage.promptTokens);
     bucket.completionTokens += toNumber(usage.completionTokens);
     bucket.totalTokens += toNumber(usage.totalTokens);
     bucket.cachedTokens += toNumber(usage.cachedTokens);
-    bucket.cost.actualUsd += toNumber(row.cost?.actualUsd);
-    bucket.cost.missingPriceTokens += toNumber(row.cost?.missingPriceTokens);
+    bucket.cost.actualUsd += currentCost.usd;
+    bucket.cost.missingPriceTokens += currentCost.missingPriceTokens;
 }
 
 function finalizeBucket(bucket, conversionModel) {

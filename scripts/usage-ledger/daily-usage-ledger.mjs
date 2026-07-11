@@ -36,6 +36,8 @@ const PRICE_PER_MILLION = PRICING.pricePerMillion;
 
 const MODEL_PRICE_ALIASES = PRICING.modelPriceAliases;
 
+const MODEL_PRICE_MULTIPLIERS = PRICING.modelPriceMultipliers || {};
+
 function toNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
@@ -44,6 +46,16 @@ function toNumber(value) {
 function normalizeModelName(model) {
   const normalized = String(model || 'unknown').trim().toLowerCase();
   return MODEL_PRICE_ALIASES[normalized] || normalized || 'unknown';
+}
+
+function resolvePricedModel(model) {
+  const normalized = String(model || 'unknown').trim().toLowerCase();
+  const multiplierConfig = MODEL_PRICE_MULTIPLIERS[normalized];
+  return {
+    displayModel: normalizeModelName(normalized),
+    pricedModel: normalizeModelName(multiplierConfig?.baseModel || normalized),
+    multiplier: toNumber(multiplierConfig?.multiplier) || 1,
+  };
 }
 
 function normalizeEmail(value) {
@@ -196,29 +208,29 @@ function canonicalAccount(account = {}, fallbackProvider = 'unknown') {
 }
 
 function estimateUsageCost(usage, model) {
-  const pricedModel = normalizeModelName(model);
-  const pricing = PRICE_PER_MILLION[pricedModel];
+  const resolvedModel = resolvePricedModel(model);
+  const pricing = PRICE_PER_MILLION[resolvedModel.pricedModel];
   if (!pricing) {
     return {
       actualUsd: 0,
       missingPriceTokens: normalizeUsage(usage).totalTokens,
-      pricingModel: pricedModel,
+      pricingModel: resolvedModel.displayModel,
     };
   }
 
   const normalized = normalizeUsage(usage);
   const cachedTokens = Math.min(normalized.promptTokens, normalized.cachedTokens);
   const billableInputTokens = Math.max(0, normalized.promptTokens - cachedTokens);
-  const actualUsd = (
+  const actualUsd = ((
     billableInputTokens * pricing.input +
     cachedTokens * pricing.cachedInput +
     normalized.completionTokens * pricing.output
-  ) / 1_000_000;
+  ) / 1_000_000) * resolvedModel.multiplier;
 
   return {
     actualUsd,
     missingPriceTokens: 0,
-    pricingModel: pricedModel,
+    pricingModel: resolvedModel.displayModel,
   };
 }
 
