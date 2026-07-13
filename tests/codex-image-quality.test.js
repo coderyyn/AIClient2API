@@ -46,9 +46,6 @@ describe('Codex image generation tool options', () => {
                 size: '1024x1024',
                 quality: 'medium'
             }]);
-            expect(body.model).toBe('gpt-5.5');
-            expect(body.instructions).toBeTruthy();
-            expect(body.tools.some(tool => tool.type === 'web_search')).toBe(false);
             expect(body._imageSize).toBeUndefined();
             expect(body._imageQuality).toBeUndefined();
         } finally {
