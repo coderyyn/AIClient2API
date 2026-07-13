@@ -183,6 +183,9 @@ export class CodexConverter extends BaseConverter {
         
         // 构建工具名称映射
         this.buildToolNameMap(responsesRequest.tools || [], requestId);
+        if (Array.isArray(responsesRequest.tools)) {
+            codexRequest.tools = this.convertTools(responsesRequest.tools, requestId);
+        }
     
         // 保留监控相关字段
         if (responsesRequest._monitorRequestId) {

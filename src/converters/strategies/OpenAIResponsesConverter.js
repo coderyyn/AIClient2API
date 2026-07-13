@@ -45,7 +45,7 @@ export class OpenAIResponsesConverter extends BaseConverter {
     /**
      * 转换请求到目标协议
      */
-    convertRequest(data, toProtocol) {
+    convertRequest(data, toProtocol, requestId) {
         switch (toProtocol) {
             case MODEL_PROTOCOL_PREFIX.OPENAI:
                 return this.toOpenAIRequest(data);
@@ -54,7 +54,7 @@ export class OpenAIResponsesConverter extends BaseConverter {
             case MODEL_PROTOCOL_PREFIX.GEMINI:
                 return this.toGeminiRequest(data);
             case MODEL_PROTOCOL_PREFIX.CODEX:
-                return this.toCodexRequest(data);
+                return this.toCodexRequest(data, requestId);
             case MODEL_PROTOCOL_PREFIX.GROK:
                 return this.toGrokRequest(data);
             default:
@@ -1253,8 +1253,8 @@ export class OpenAIResponsesConverter extends BaseConverter {
     /**
      * OpenAI Responses → Codex 请求转换
      */
-    toCodexRequest(responsesRequest) {
-        return this.codexConverter.toOpenAIResponsesToCodexRequest(responsesRequest);
+    toCodexRequest(responsesRequest, requestId) {
+        return this.codexConverter.toOpenAIResponsesToCodexRequest(responsesRequest, requestId);
     }
 
     /**
