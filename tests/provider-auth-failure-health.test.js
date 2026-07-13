@@ -85,6 +85,57 @@ function createProviderPoolManager() {
 }
 
 describe('provider auth failure health marking', () => {
+    test('emits a terminal Responses API error event for an upstream 400 before the first stream chunk', async () => {
+        const error = new Error("400 Bad Request (stream): Invalid Value: 'tools'. Function 'image_gen.imagegen' conflicts with a hosted tool in the same request.");
+        error.response = {
+            status: 400,
+            data: {
+                error: {
+                    type: 'invalid_request_error',
+                    message: "Invalid Value: 'tools'. Function 'image_gen.imagegen' conflicts with a hosted tool in the same request."
+                }
+            }
+        };
+        const service = {
+            async *generateContentStream() {
+                throw error;
+            }
+        };
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+
+        await handleStreamRequest(
+            res,
+            service,
+            'gpt-5.4',
+            { input: [{ role: 'user', content: [{ type: 'input_text', text: 'ping' }] }] },
+            'openaiResponses',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-provider-1',
+            'Codex Provider'
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(res.body).toContain('event: error\n');
+        const dataLine = res.body.split('\n').find(line => line.startsWith('data: '));
+        const event = JSON.parse(dataLine.slice(6));
+        expect(event).toEqual({
+            type: 'error',
+            sequence_number: 0,
+            code: 'invalid_request_error',
+            message: expect.stringContaining("Function 'image_gen.imagegen' conflicts with a hosted tool"),
+            param: null
+        });
+        expect(res.body).not.toContain('response.completed');
+        expect(res.body).not.toContain('[DONE]');
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
+        expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-1');
+    });
+
     test('marks a unary Codex token_invalidated error immediately unhealthy in the provider pool', async () => {
         const error = createInvalidatedCodexTokenError();
         const service = {
