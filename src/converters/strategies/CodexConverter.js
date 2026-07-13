@@ -4,6 +4,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { BaseConverter } from '../BaseConverter.js';
 import { MODEL_PROTOCOL_PREFIX } from '../../utils/common.js';
 import {
@@ -173,6 +174,20 @@ export class CodexConverter extends BaseConverter {
             usage.cached_tokens ??
             usage.cachedContentTokenCount ??
             0;
+    }
+
+    safeParseToolArguments(argumentsValue) {
+        if (argumentsValue === null || argumentsValue === undefined || argumentsValue === '') {
+            return {};
+        }
+        if (typeof argumentsValue !== 'string') {
+            return argumentsValue;
+        }
+        try {
+            return JSON.parse(argumentsValue);
+        } catch {
+            return { _raw_arguments: argumentsValue };
+        }
     }
 
     /**
@@ -661,10 +676,11 @@ export class CodexConverter extends BaseConverter {
             const idx = name.lastIndexOf('__');
             if (idx > 0) {
                 let cand = 'mcp__' + name.slice(idx + 2);
-                return cand.length > limit ? cand.slice(0, limit) : cand;
+                if (cand.length <= limit) return cand;
             }
         }
-        return name.slice(0, limit);
+        const suffix = '_' + crypto.createHash('sha256').update(name).digest('hex').slice(0, 16);
+        return name.slice(0, limit - suffix.length) + suffix;
     }
 
     /**
@@ -933,7 +949,7 @@ export class CodexConverter extends BaseConverter {
                     parts.push({
                         functionCall: {
                             name: this.getOriginalToolName(item.name),
-                            args: typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments
+                            args: this.safeParseToolArguments(item.arguments)
                         }
                     });
                 } else if (item.type === 'image_generation_call') {
@@ -1003,7 +1019,7 @@ export class CodexConverter extends BaseConverter {
                         type: "tool_use",
                         id: item.call_id || `call_${uuidv4().replace(/-/g, '')}`,
                         name: this.getOriginalToolName(item.name),
-                        input: typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments
+                        input: this.safeParseToolArguments(item.arguments)
                     });
                 } else if (item.type === 'image_generation_call') {
                     const imageMarkdown = this.codexImageGenerationToMarkdown(item, content.length);
@@ -1387,7 +1403,7 @@ export class CodexConverter extends BaseConverter {
             template.candidates[0].content.parts.push({
                 functionCall: {
                     name: this.getOriginalToolName(chunk.item.name, requestId),
-                    args: typeof chunk.item.arguments === 'string' ? JSON.parse(chunk.item.arguments) : chunk.item.arguments
+                    args: this.safeParseToolArguments(chunk.item.arguments)
                 }
             });
             return template;
