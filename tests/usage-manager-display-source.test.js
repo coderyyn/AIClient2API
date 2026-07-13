@@ -26,7 +26,7 @@ describe('usage manager display source regressions', () => {
         expect(renderBlock).toContain("t('usage.card.dataDelayed')");
     });
 
-    test('Token telemetry consolidates matching Beijing update times and flags outliers per item', () => {
+    test('Token telemetry consolidates matching local update hours and shows outlier differences', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
         const css = fs.readFileSync(path.join(process.cwd(), 'static/components/section-usage.css'), 'utf8').replace(/\r\n/g, '\n');
         const renderStart = source.indexOf('function renderUsageDetails(usage, accountSummary = null) {');
@@ -34,11 +34,16 @@ describe('usage manager display source regressions', () => {
         const renderBlock = source.slice(renderStart, renderEnd);
 
         expect(source).toContain("timeZone: 'Asia/Shanghai'");
+        expect(source).toContain('function formatUsageUpdatedHour(value)');
+        expect(source).toContain('function formatTelemetryUpdateDifference(updatedAt, commonUpdatedAt)');
         expect(source).toContain('function getTelemetryCommonUpdatedAt(items, toleranceMs = 5 * 60 * 1000)');
         expect(renderBlock).toContain('const telemetryCommonUpdatedAt = getTelemetryCommonUpdatedAt(telemetryItems);');
         expect(renderBlock).toContain('usage-breakdown-title-meta');
         expect(renderBlock).toContain('isTelemetryUpdateOutlier(item.updatedAt, commonUpdatedAt)');
         expect(renderBlock).toContain("t('usage.card.updatedAtMismatch'");
+        expect(renderBlock).toContain("difference: formatTelemetryUpdateDifference(item.updatedAt, commonUpdatedAt)");
+        expect(source).not.toContain('(Beijing time)');
+        expect(source).not.toContain('（北京时间）');
         expect(css).toContain('.usage-breakdown-title-meta');
         expect(css).toContain('.telemetry-update-outlier');
     });

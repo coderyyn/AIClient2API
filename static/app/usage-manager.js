@@ -784,19 +784,32 @@ function parseTelemetryUpdatedAt(value) {
     return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function formatBeijingUpdatedAt(value) {
+function formatUsageUpdatedHour(value) {
     const timestamp = parseTelemetryUpdatedAt(value);
     if (timestamp === null) return '--';
-    return new Intl.DateTimeFormat('zh-CN', {
+    const parts = new Intl.DateTimeFormat('zh-CN', {
         timeZone: 'Asia/Shanghai',
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
-        minute: '2-digit',
         hour12: false,
         hourCycle: 'h23'
-    }).format(new Date(timestamp)).replace(/\//g, '-');
+    }).formatToParts(new Date(timestamp));
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day} ${values.hour}时`;
+}
+
+function formatTelemetryUpdateDifference(updatedAt, commonUpdatedAt) {
+    const timestamp = parseTelemetryUpdatedAt(updatedAt);
+    const commonTimestamp = parseTelemetryUpdatedAt(commonUpdatedAt);
+    if (timestamp === null || commonTimestamp === null) return '--';
+    const totalMinutes = Math.max(1, Math.round(Math.abs(timestamp - commonTimestamp) / (60 * 1000)));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0) return `${minutes}分钟`;
+    if (minutes === 0) return `${hours}小时`;
+    return `${hours}小时 ${minutes}分钟`;
 }
 
 function getTelemetryCommonUpdatedAt(items, toleranceMs = 5 * 60 * 1000) {
@@ -891,7 +904,7 @@ function renderUsageDetails(usage, accountSummary = null) {
             const breakdown = document.createElement('div');
             breakdown.className = `usage-section usage-breakdown-compact ${className}`;
             const titleMeta = commonUpdatedAt
-                ? `<span class="usage-breakdown-title-meta"><i class="fas fa-clock"></i> ${t('usage.card.updatedAt', { time: formatBeijingUpdatedAt(commonUpdatedAt) })}</span>`
+                ? `<span class="usage-breakdown-title-meta"><i class="fas fa-clock"></i> ${t('usage.card.updatedAt', { time: formatUsageUpdatedHour(commonUpdatedAt) })}</span>`
                 : '';
             breakdown.innerHTML = `<div class="usage-breakdown-title"><span>${escapeHtml(title)}</span>${titleMeta}</div>`;
             groupItems.forEach(item => {
@@ -900,11 +913,14 @@ function renderUsageDetails(usage, accountSummary = null) {
                 const updateIsOutlier = isTelemetryUpdateOutlier(item.updatedAt, commonUpdatedAt);
                 const updateIsMissing = isTelemetry && Boolean(commonUpdatedAt) && !item.updatedAt;
                 const individualUpdateText = updateIsOutlier
-                    ? t('usage.card.updatedAtMismatch', { time: formatBeijingUpdatedAt(item.updatedAt) })
+                    ? t('usage.card.updatedAtMismatch', {
+                        time: formatUsageUpdatedHour(item.updatedAt),
+                        difference: formatTelemetryUpdateDifference(item.updatedAt, commonUpdatedAt)
+                    })
                     : updateIsMissing
                     ? t('usage.card.updatedAtMissing')
                     : (isTelemetry && !commonUpdatedAt && item.updatedAt
-                        ? t('usage.card.updatedAt', { time: formatBeijingUpdatedAt(item.updatedAt) })
+                        ? t('usage.card.updatedAt', { time: formatUsageUpdatedHour(item.updatedAt) })
                         : '');
                 const val = isUnavailable
                     ? '—'
