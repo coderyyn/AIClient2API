@@ -778,6 +778,49 @@ function createInstanceUsageCard(instance, providerType) {
     return card;
 }
 
+function parseTelemetryUpdatedAt(value) {
+    if (!value) return null;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function formatBeijingUpdatedAt(value) {
+    const timestamp = parseTelemetryUpdatedAt(value);
+    if (timestamp === null) return '--';
+    return new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        hourCycle: 'h23'
+    }).format(new Date(timestamp)).replace(/\//g, '-');
+}
+
+function getTelemetryCommonUpdatedAt(items, toleranceMs = 5 * 60 * 1000) {
+    const timestamps = (Array.isArray(items) ? items : [])
+        .map(item => ({ value: item?.updatedAt, timestamp: parseTelemetryUpdatedAt(item?.updatedAt) }))
+        .filter(item => item.timestamp !== null);
+    if (timestamps.length < 2) return null;
+
+    let bestCluster = [];
+    for (const candidate of timestamps) {
+        const cluster = timestamps.filter(item => Math.abs(item.timestamp - candidate.timestamp) <= toleranceMs);
+        if (cluster.length > bestCluster.length) bestCluster = cluster;
+    }
+    if (bestCluster.length < 2) return null;
+    return bestCluster.reduce((latest, item) => item.timestamp > latest.timestamp ? item : latest).value;
+}
+
+function isTelemetryUpdateOutlier(updatedAt, commonUpdatedAt, toleranceMs = 5 * 60 * 1000) {
+    const timestamp = parseTelemetryUpdatedAt(updatedAt);
+    const commonTimestamp = parseTelemetryUpdatedAt(commonUpdatedAt);
+    if (timestamp === null || commonTimestamp === null) return false;
+    return Math.abs(timestamp - commonTimestamp) > toleranceMs;
+}
+
 /**
  * 渲染用量详情 (全面适配新结构)
  */
@@ -841,14 +884,28 @@ function renderUsageDetails(usage, accountSummary = null) {
         : items;
 
     if (visibleItems?.length > 0) {
-        const renderBreakdownGroup = (groupItems, title, className) => {
+        const telemetryItems = visibleItems.filter(item => item.category === 'telemetry');
+        const telemetryCommonUpdatedAt = getTelemetryCommonUpdatedAt(telemetryItems);
+        const renderBreakdownGroup = (groupItems, title, className, commonUpdatedAt = null) => {
             if (groupItems.length === 0) return;
             const breakdown = document.createElement('div');
             breakdown.className = `usage-section usage-breakdown-compact ${className}`;
-            breakdown.innerHTML = `<div class="usage-breakdown-title">${escapeHtml(title)}</div>`;
+            const titleMeta = commonUpdatedAt
+                ? `<span class="usage-breakdown-title-meta"><i class="fas fa-clock"></i> ${t('usage.card.updatedAt', { time: formatBeijingUpdatedAt(commonUpdatedAt) })}</span>`
+                : '';
+            breakdown.innerHTML = `<div class="usage-breakdown-title"><span>${escapeHtml(title)}</span>${titleMeta}</div>`;
             groupItems.forEach(item => {
                 const isTelemetry = item.category === 'telemetry';
                 const isUnavailable = item.available === false;
+                const updateIsOutlier = isTelemetryUpdateOutlier(item.updatedAt, commonUpdatedAt);
+                const updateIsMissing = isTelemetry && Boolean(commonUpdatedAt) && !item.updatedAt;
+                const individualUpdateText = updateIsOutlier
+                    ? t('usage.card.updatedAtMismatch', { time: formatBeijingUpdatedAt(item.updatedAt) })
+                    : updateIsMissing
+                    ? t('usage.card.updatedAtMissing')
+                    : (isTelemetry && !commonUpdatedAt && item.updatedAt
+                        ? t('usage.card.updatedAt', { time: formatBeijingUpdatedAt(item.updatedAt) })
+                        : '');
                 const val = isUnavailable
                     ? '—'
                     : item.displayValue !== undefined && item.displayValue !== null
@@ -862,7 +919,8 @@ function renderUsageDetails(usage, accountSummary = null) {
                     <div class="breakdown-header-compact"><span class="breakdown-name">${escapeHtml(item.label)}</span><span class="breakdown-usage">${escapeHtml(String(val))}</span></div>
                     ${isTelemetry ? '' : `<div class="progress-bar-small ${item.status}"><div class="progress-fill" style="width: ${item.percent}%"></div></div>`}
                     ${item.resetAt ? `<div class="extra-usage-info reset-time"><i class="fas fa-history"></i> ${formatDate(item.resetAt)}</div>` : ''}
-                    ${item.asOf ? `<div class="extra-usage-info telemetry-as-of"><i class="fas fa-clock"></i> ${t('usage.card.dataAsOf', { date: item.asOf })}${isUnavailable ? ` · ${t('usage.card.dataDelayed')}` : ''}</div>` : ''}
+                    ${isUnavailable ? `<div class="extra-usage-info telemetry-as-of"><i class="fas fa-circle-exclamation"></i> ${t('usage.card.dataDelayed')}</div>` : ''}
+                    ${individualUpdateText ? `<div class="extra-usage-info telemetry-as-of${updateIsOutlier || updateIsMissing ? ' telemetry-update-outlier' : ''}"><i class="fas fa-clock"></i> ${individualUpdateText}</div>` : ''}
                 `;
                 breakdown.appendChild(itemEl);
             });
@@ -875,9 +933,10 @@ function renderUsageDetails(usage, accountSummary = null) {
             'quota-breakdown'
         );
         renderBreakdownGroup(
-            visibleItems.filter(item => item.category === 'telemetry'),
+            telemetryItems,
             t('usage.card.tokenTelemetry'),
-            'telemetry-breakdown'
+            'telemetry-breakdown',
+            telemetryCommonUpdatedAt
         );
     }
 

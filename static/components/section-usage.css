@@ -580,6 +580,9 @@
 }
 
 .usage-breakdown-compact { background: var(--bg-secondary); padding: 0.5rem; border-radius: 0.375rem; border: 1px solid var(--border-color); }
+.usage-breakdown-title { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; }
+.usage-breakdown-title-meta { color: var(--text-secondary); font-size: 0.75rem; font-weight: 400; white-space: nowrap; }
+.telemetry-update-outlier { color: var(--warning-color, #d97706); font-weight: 600; }
 .breakdown-item-compact { padding: 0.5rem; background: var(--bg-primary); border-radius: 0.25rem; margin-bottom: 0.5rem; border: 1px solid var(--border-color); }
 
 .breakdown-header-compact { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.375rem; font-size: 0.7rem; }

@@ -318,4 +318,16 @@ describe('Codex usage formatting', () => {
             category: 'telemetry'
         });
     });
+
+    test('propagates the OpenAI profile generation timestamp to all token telemetry items', () => {
+        const formatted = formatCodexUsage(weeklyOnlyFixture);
+        const telemetry = formatted.items.filter(item => item.category === 'telemetry');
+
+        expect(telemetry).toHaveLength(3);
+        expect(telemetry.map(item => item.updatedAt)).toEqual([
+            '2026-07-13T02:09:15.016Z',
+            '2026-07-13T02:09:15.016Z',
+            '2026-07-13T02:09:15.016Z'
+        ]);
+    });
 });

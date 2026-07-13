@@ -842,6 +842,7 @@ function extractCodexProfileTokenUsage(usageData) {
         : (Array.isArray(stats.weeklyUsageBuckets) ? stats.weeklyUsageBuckets : []);
     const profileMetadata = profile?.metadata || {};
     const statsAsOf = profileMetadata.stats_as_of || profileMetadata.statsAsOf || null;
+    const generatedAt = formatTimestamp(profileMetadata.generated_at || profileMetadata.generatedAt);
     const todayKey = dateKeyFromOffset(0);
     const weekKeys = new Set(Array.from({ length: 7 }, (_, index) => dateKeyFromOffset(-index)));
 
@@ -878,13 +879,13 @@ function extractCodexProfileTokenUsage(usageData) {
 
     const totalTokens = numberOrNull(stats.lifetime_tokens ?? stats.lifetimeTokens);
     const daily = hasTodayBucket
-        ? makeCodexTokenBlock(dailyTokens, { asOf: todayKey, source: 'daily_bucket' })
-        : (buckets.length > 0 ? makeUnavailableCodexTokenBlock({ asOf: statsAsOf, source: 'daily_bucket_delayed' }) : null);
+        ? makeCodexTokenBlock(dailyTokens, { asOf: todayKey, updatedAt: generatedAt, source: 'daily_bucket' })
+        : (buckets.length > 0 ? makeUnavailableCodexTokenBlock({ asOf: statsAsOf, updatedAt: generatedAt, source: 'daily_bucket_delayed' }) : null);
     const weekly = weeklyTokens !== null
-        ? makeCodexTokenBlock(weeklyTokens, { asOf: statsAsOf, source: weeklySource })
+        ? makeCodexTokenBlock(weeklyTokens, { asOf: statsAsOf, updatedAt: generatedAt, source: weeklySource })
         : null;
     const total = totalTokens !== null
-        ? makeCodexTokenBlock(totalTokens, { asOf: statsAsOf, source: 'lifetime' })
+        ? makeCodexTokenBlock(totalTokens, { asOf: statsAsOf, updatedAt: generatedAt, source: 'lifetime' })
         : null;
 
     if (!daily && !weekly && !total) return null;
@@ -927,6 +928,7 @@ function buildCodexTokenUsageItem(id, label, block) {
             resetAt: null,
             available: false,
             asOf: block.asOf || null,
+            updatedAt: block.updatedAt || null,
             source: block.source || null,
             category: 'telemetry'
         };
@@ -948,6 +950,7 @@ function buildCodexTokenUsageItem(id, label, block) {
         outputTokens: block.outputTokens,
         available: true,
         asOf: block.asOf || null,
+        updatedAt: block.updatedAt || null,
         source: block.source || null,
         category: 'telemetry'
     };
