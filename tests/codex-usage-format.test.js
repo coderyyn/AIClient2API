@@ -309,6 +309,7 @@ describe('Codex usage formatting', () => {
             displayValue: '—',
             available: false,
             asOf: '2026-07-12',
+            delayDays: 1,
             category: 'telemetry'
         });
         expect(weekly).toMatchObject({

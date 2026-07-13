@@ -848,6 +848,7 @@ function extractCodexProfileTokenUsage(usageData) {
 
     let dailyTokens = null;
     let hasTodayBucket = false;
+    let latestDailyBucketDate = null;
     let weeklyTokens = null;
     if (buckets.length > 0) {
         weeklyTokens = 0;
@@ -855,6 +856,10 @@ function extractCodexProfileTokenUsage(usageData) {
             const startDate = bucket?.start_date || bucket?.startDate || bucket?.date;
             const tokens = numberOrNull(bucket?.tokens);
             if (!startDate || tokens === null) continue;
+
+            if (!latestDailyBucketDate || startDate > latestDailyBucketDate) {
+                latestDailyBucketDate = startDate;
+            }
 
             if (startDate === todayKey) {
                 dailyTokens = (dailyTokens ?? 0) + tokens;
@@ -878,9 +883,12 @@ function extractCodexProfileTokenUsage(usageData) {
     }
 
     const totalTokens = numberOrNull(stats.lifetime_tokens ?? stats.lifetimeTokens);
+    const dailyDelayDays = latestDailyBucketDate
+        ? Math.max(0, Math.round((Date.parse(`${todayKey}T00:00:00Z`) - Date.parse(`${latestDailyBucketDate}T00:00:00Z`)) / (24 * 60 * 60 * 1000)))
+        : null;
     const daily = hasTodayBucket
         ? makeCodexTokenBlock(dailyTokens, { asOf: todayKey, updatedAt: generatedAt, source: 'daily_bucket' })
-        : (buckets.length > 0 ? makeUnavailableCodexTokenBlock({ asOf: statsAsOf, updatedAt: generatedAt, source: 'daily_bucket_delayed' }) : null);
+        : (buckets.length > 0 ? makeUnavailableCodexTokenBlock({ asOf: statsAsOf, updatedAt: generatedAt, source: 'daily_bucket_delayed', delayDays: dailyDelayDays }) : null);
     const weekly = weeklyTokens !== null
         ? makeCodexTokenBlock(weeklyTokens, { asOf: statsAsOf, updatedAt: generatedAt, source: weeklySource })
         : null;
@@ -930,6 +938,7 @@ function buildCodexTokenUsageItem(id, label, block) {
             asOf: block.asOf || null,
             updatedAt: block.updatedAt || null,
             source: block.source || null,
+            delayDays: Number.isFinite(block.delayDays) ? block.delayDays : null,
             category: 'telemetry'
         };
     }

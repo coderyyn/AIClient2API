@@ -28,6 +28,7 @@ describe('usage manager display source regressions', () => {
 
     test('Token telemetry consolidates matching local update hours and shows outlier differences', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+        const i18n = fs.readFileSync(path.join(process.cwd(), 'static/app/i18n.js'), 'utf8').replace(/\r\n/g, '\n');
         const css = fs.readFileSync(path.join(process.cwd(), 'static/components/section-usage.css'), 'utf8').replace(/\r\n/g, '\n');
         const renderStart = source.indexOf('function renderUsageDetails(usage, accountSummary = null) {');
         const renderEnd = source.indexOf('function getProviderDisplayName', renderStart);
@@ -42,6 +43,9 @@ describe('usage manager display source regressions', () => {
         expect(renderBlock).toContain('isTelemetryUpdateOutlier(item.updatedAt, commonUpdatedAt)');
         expect(renderBlock).toContain("t('usage.card.updatedAtMismatch'");
         expect(renderBlock).toContain("difference: formatTelemetryUpdateDifference(item.updatedAt, commonUpdatedAt)");
+        expect(renderBlock).toContain("t('usage.card.dataDelayedBy', { difference: formatTelemetryDataDelay(item.delayDays) })");
+        expect(i18n).toContain("'usage.card.tokenTelemetry': '官方统计'");
+        expect(i18n).toContain("'usage.card.dataDelayedBy': '数据延迟 {difference}'");
         expect(source).not.toContain('(Beijing time)');
         expect(source).not.toContain('（北京时间）');
         expect(css).toContain('.usage-breakdown-title-meta');

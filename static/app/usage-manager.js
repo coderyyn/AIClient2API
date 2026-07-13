@@ -812,6 +812,13 @@ function formatTelemetryUpdateDifference(updatedAt, commonUpdatedAt) {
     return `${hours}小时 ${minutes}分钟`;
 }
 
+function formatTelemetryDataDelay(delayDays) {
+    const days = Number(delayDays);
+    if (!Number.isFinite(days)) return '';
+    if (days < 1) return '不足1天';
+    return `${Math.floor(days)}天`;
+}
+
 function getTelemetryCommonUpdatedAt(items, toleranceMs = 5 * 60 * 1000) {
     const timestamps = (Array.isArray(items) ? items : [])
         .map(item => ({ value: item?.updatedAt, timestamp: parseTelemetryUpdatedAt(item?.updatedAt) }))
@@ -929,13 +936,16 @@ function renderUsageDetails(usage, accountSummary = null) {
                     : item.unit === 'percent'
                     ? `${item.percent.toFixed(1)}%`
                     : (item.limit === null || item.limit === undefined ? formatNumber(item.used) : `${formatNumber(item.used)} / ${formatNumber(item.limit)}`);
+                const delayedText = isUnavailable && Number.isFinite(Number(item.delayDays))
+                    ? t('usage.card.dataDelayedBy', { difference: formatTelemetryDataDelay(item.delayDays) })
+                    : t('usage.card.dataDelayed');
                 const itemEl = document.createElement('div');
                 itemEl.className = `breakdown-item-compact${isTelemetry ? ' telemetry-item' : ''}`;
                 itemEl.innerHTML = `
                     <div class="breakdown-header-compact"><span class="breakdown-name">${escapeHtml(item.label)}</span><span class="breakdown-usage">${escapeHtml(String(val))}</span></div>
                     ${isTelemetry ? '' : `<div class="progress-bar-small ${item.status}"><div class="progress-fill" style="width: ${item.percent}%"></div></div>`}
                     ${item.resetAt ? `<div class="extra-usage-info reset-time"><i class="fas fa-history"></i> ${formatDate(item.resetAt)}</div>` : ''}
-                    ${isUnavailable ? `<div class="extra-usage-info telemetry-as-of"><i class="fas fa-circle-exclamation"></i> ${t('usage.card.dataDelayed')}</div>` : ''}
+                    ${isUnavailable ? `<div class="extra-usage-info telemetry-as-of"><i class="fas fa-circle-exclamation"></i> ${delayedText}</div>` : ''}
                     ${individualUpdateText ? `<div class="extra-usage-info telemetry-as-of${updateIsOutlier || updateIsMissing ? ' telemetry-update-outlier' : ''}"><i class="fas fa-clock"></i> ${individualUpdateText}</div>` : ''}
                 `;
                 breakdown.appendChild(itemEl);
