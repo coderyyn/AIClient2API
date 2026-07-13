@@ -545,6 +545,7 @@ export class CodexConverter extends BaseConverter {
         const used = new Set();
 
         const baseCandidate = (n) => {
+            n = this.normalizeToolName(n);
             if (n.length <= limit) return n;
             if (n.startsWith('mcp__')) {
                 const idx = n.lastIndexOf('__');
@@ -640,9 +641,17 @@ export class CodexConverter extends BaseConverter {
     }
 
     /**
+     * 规范化上游工具名称。
+     */
+    normalizeToolName(name) {
+        return name === 'image_gen.imagegen' ? 'image_gen__imagegen' : name;
+    }
+
+    /**
      * 缩短工具名称
      */
     shortenToolName(name) {
+        name = this.normalizeToolName(name);
         const limit = 64;
         if (name.length <= limit) return name;
         if (name.startsWith('mcp__')) {
