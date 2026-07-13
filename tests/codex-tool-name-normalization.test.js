@@ -57,4 +57,58 @@ describe('Codex tool name normalization', () => {
             name: 'image_gen__imagegen'
         })]);
     });
+
+    test('keeps distinct deterministic hashes for long tool names with the same prefix', () => {
+        const converter = new CodexConverter();
+        const sharedPrefix = 'tool_' + 'x'.repeat(80);
+        const first = converter.shortenToolName(`${sharedPrefix}_first`);
+        const second = converter.shortenToolName(`${sharedPrefix}_second`);
+
+        expect(first).toHaveLength(64);
+        expect(second).toHaveLength(64);
+        expect(first).toMatch(/_[0-9a-f]{16}$/);
+        expect(second).toMatch(/_[0-9a-f]{16}$/);
+        expect(first).not.toBe(second);
+        expect(converter.shortenToolName(`${sharedPrefix}_first`)).toBe(first);
+    });
+
+    test('preserves malformed function arguments in Gemini and Claude responses', () => {
+        const converter = new CodexConverter();
+        const completed = {
+            type: 'response.completed',
+            response: {
+                id: 'resp_tool_args',
+                model: 'gpt-5.5',
+                status: 'completed',
+                usage: {},
+                output: [{
+                    type: 'function_call',
+                    call_id: 'call_bad_args',
+                    name: 'example_tool',
+                    arguments: '{not valid json'
+                }]
+            }
+        };
+
+        expect(() => converter.toGeminiResponse(completed, 'gpt-5.5')).not.toThrow();
+        expect(converter.toGeminiResponse(completed, 'gpt-5.5')
+            .candidates[0].content.parts[0].functionCall.args).toEqual({
+            _raw_arguments: '{not valid json'
+        });
+
+        expect(() => converter.toClaudeResponse(completed, 'gpt-5.5')).not.toThrow();
+        expect(converter.toClaudeResponse(completed, 'gpt-5.5').content[0].input).toEqual({
+            _raw_arguments: '{not valid json'
+        });
+    });
+
+    test.each([
+        [null, {}],
+        ['', {}],
+        [{ value: 1 }, { value: 1 }],
+        ['{"value":1}', { value: 1 }]
+    ])('safely parses tool arguments %#', (input, expected) => {
+        const converter = new CodexConverter();
+        expect(converter.safeParseToolArguments(input)).toEqual(expected);
+    });
 });
