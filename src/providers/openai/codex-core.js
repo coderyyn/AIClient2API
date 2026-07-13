@@ -514,9 +514,9 @@ export class CodexApiService {
         const defaultServiceTier = isFastModel ? 'priority' : 'default';
         const defaultReasoningEffort = isFastModel ? 'xhigh' : 'medium';
 
-        // 图像生成模型：gpt-image-2 通过 image_generation 工具 + gpt-5.4 实现
+        // 图像生成模型：gpt-image-2 通过 image_generation 工具 + gpt-5.5 实现
         const isImageModel = IMAGE_MODELS.has(upstreamModel);
-        const effectiveUpstreamModel = isImageModel ? 'gpt-5.4' : upstreamModel;
+        const effectiveUpstreamModel = isImageModel ? 'gpt-5.5' : upstreamModel;
 
         const cleanedBody = {...requestBody};
         delete cleanedBody.metadata;
