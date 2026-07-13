@@ -1,7 +1,7 @@
 import { Readable } from 'stream';
 import { jest } from '@jest/globals';
 import '../src/converters/register-converters.js';
-import { handleAPIRequests } from '../src/services/api-manager.js';
+import { handleAPIRequests, shouldRetryFastImageOverload } from '../src/services/api-manager.js';
 
 const mockGenerateContent = jest.fn();
 
@@ -84,6 +84,41 @@ function makeResponse() {
         }
     };
 }
+
+function makeImageResponse(result = 'generated-image-b64') {
+    return {
+        response: {
+            output: [{
+                type: 'image_generation_call',
+                result,
+                output_format: 'png'
+            }]
+        }
+    };
+}
+
+function makeOverloadError() {
+    return new Error('Codex API error: Our servers are currently overloaded. Please try again later.');
+}
+
+describe('fast image overload retry classification', () => {
+    test('allows one retry for an explicit overload that fails before ten seconds', () => {
+        expect(shouldRetryFastImageOverload(makeOverloadError(), 9999)).toBe(true);
+    });
+
+    test('does not retry overloads at or after ten seconds', () => {
+        expect(shouldRetryFastImageOverload(makeOverloadError(), 10000)).toBe(false);
+    });
+
+    test.each([
+        Object.assign(new Error('Internal Server Error'), { response: { status: 500 } }),
+        Object.assign(makeOverloadError(), { response: { status: 429 } }),
+        Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
+        Object.assign(new Error('connection aborted'), { code: 'ECONNABORTED' })
+    ])('does not retry unrelated, rate-limit, or network failures', (error) => {
+        expect(shouldRetryFastImageOverload(error, 1000)).toBe(false);
+    });
+});
 
 describe('/v1/images/edits multipart handling', () => {
     beforeEach(() => {
@@ -252,6 +287,42 @@ describe('/v1/images/edits multipart handling', () => {
             partial_images: 2
         });
     });
+
+    test('retries one fast overload per failed edit task without repeating successful parallel tasks', async () => {
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0);
+        mockGenerateContent
+            .mockRejectedValueOnce(makeOverloadError())
+            .mockResolvedValueOnce(makeImageResponse('second-image'))
+            .mockResolvedValueOnce(makeImageResponse('retried-first-image'));
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: 'edit this image' },
+            { name: 'n', value: '2' },
+            { name: 'quality', value: 'high' },
+            { name: 'image', file: true, filename: 'first.png', contentType: 'image/png', value: 'first-image' }
+        ]);
+        const res = makeResponse();
+
+        try {
+            const handled = await handleAPIRequests(
+                'POST',
+                '/v1/images/edits',
+                req,
+                res,
+                { MODEL_PROVIDER: 'openai-codex-oauth' },
+                null,
+                null,
+                null
+            );
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+            expect(mockGenerateContent.mock.calls.map(([, body]) => body._imageQuality)).toEqual(['high', 'high', 'high']);
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[Image Edits] internal overload retry 1/1'));
+        } finally {
+            randomSpy.mockRestore();
+        }
+    });
 });
 
 describe('/v1/images/generations request handling', () => {
@@ -369,5 +440,69 @@ describe('/v1/images/generations request handling', () => {
 
         const [, requestBody] = mockGenerateContent.mock.calls[0];
         expect(requestBody.input[0].content[0].text).toBe(largePrompt);
+    });
+
+    test('retries one fast overload and returns the recovered generation result', async () => {
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0);
+        mockGenerateContent
+            .mockRejectedValueOnce(makeOverloadError())
+            .mockResolvedValueOnce(makeImageResponse('recovered-image'));
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            n: 1,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        try {
+            const handled = await handleAPIRequests(
+                'POST',
+                '/v1/images/generations',
+                req,
+                res,
+                { MODEL_PROVIDER: 'openai-codex-oauth' },
+                null,
+                null,
+                null
+            );
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+            expect(JSON.parse(res.body).data[0].b64_json).toBe('recovered-image');
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[Image Generation] internal overload retry 1/1'));
+            expect(logger.warn.mock.calls.map(([message]) => message).join('\n')).not.toContain('Image Generation Audit');
+        } finally {
+            randomSpy.mockRestore();
+        }
+    });
+
+    test('stops after the single internal overload retry', async () => {
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0);
+        mockGenerateContent.mockRejectedValue(makeOverloadError());
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            n: 1,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        try {
+            await handleAPIRequests(
+                'POST',
+                '/v1/images/generations',
+                req,
+                res,
+                { MODEL_PROVIDER: 'openai-codex-oauth' },
+                null,
+                null,
+                null
+            );
+            expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+            expect(res.statusCode).toBe(500);
+        } finally {
+            randomSpy.mockRestore();
+        }
     });
 });

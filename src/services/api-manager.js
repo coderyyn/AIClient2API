@@ -22,6 +22,44 @@ const IMAGE_PAYLOAD_SUMMARY_MODELS = new Set(['gpt-image-2', 'gmt-image-2']);
 const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'moderation'];
 const IMAGE_TOOL_EDIT_STRING_FIELDS = [...IMAGE_TOOL_STRING_FIELDS, 'input_fidelity'];
 const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];
+const FAST_IMAGE_OVERLOAD_RETRY_WINDOW_MS = 10_000;
+const FAST_IMAGE_OVERLOAD_RETRY_DELAY_MIN_MS = 500;
+const FAST_IMAGE_OVERLOAD_RETRY_DELAY_JITTER_MS = 1_001;
+
+export function shouldRetryFastImageOverload(error, elapsedMs) {
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs >= FAST_IMAGE_OVERLOAD_RETRY_WINDOW_MS) return false;
+    if (error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED') return false;
+
+    const status = Number(error?.response?.status || error?.status || error?.statusCode || 0);
+    if (status > 0 && status < 500) return false;
+
+    const errorBody = error?.response?.data?.error || error?.response?.data || {};
+    const message = [error?.message, errorBody?.message, errorBody?.type, errorBody?.code]
+        .filter(Boolean)
+        .join(' ');
+    return /\b(?:our servers are )?currently overloaded\b|server[_ -]?overloaded/i.test(message);
+}
+
+async function generateImageWithFastOverloadRetry(service, model, requestBody, scope) {
+    let internalRetryCount = 0;
+
+    while (true) {
+        const startedAt = Date.now();
+        try {
+            return await service.generateContent(model, { ...requestBody });
+        } catch (error) {
+            const elapsedMs = Date.now() - startedAt;
+            if (internalRetryCount === 0 && shouldRetryFastImageOverload(error, elapsedMs)) {
+                internalRetryCount = 1;
+                const delayMs = FAST_IMAGE_OVERLOAD_RETRY_DELAY_MIN_MS + Math.floor(Math.random() * FAST_IMAGE_OVERLOAD_RETRY_DELAY_JITTER_MS);
+                logger.warn(`[${scope}] internal overload retry 1/1 after ${elapsedMs}ms; waiting ${delayMs}ms`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                continue;
+            }
+            throw error;
+        }
+    }
+}
 
 function shouldLogImagePayloadSummary(model) {
     return IMAGE_PAYLOAD_SUMMARY_MODELS.has(String(model || '').trim());
@@ -363,7 +401,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         const data = [];
         const responses = [];
         for (let i = 0; i < n; i++) {
-            const response = await service.generateContent(model, {...codexRequestBody});
+            const response = await generateImageWithFastOverloadRetry(service, model, codexRequestBody, 'Image Generation');
             responses.push(response);
             const extracted = extractImagesFromServiceResponse(response, finalProviderProtocol, response_format);
             data.push(...extracted);
@@ -761,7 +799,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         logImagePayloadSummary('Image Edits', model, codexRequestBody);
 
         const imageRequests = Array.from({ length: n }, () =>
-            service.generateContent(model, { ...codexRequestBody })
+            generateImageWithFastOverloadRetry(service, model, codexRequestBody, 'Image Edits')
         );
         const responses = await Promise.all(imageRequests);
         const data = [];
