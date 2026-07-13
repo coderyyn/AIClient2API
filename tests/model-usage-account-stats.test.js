@@ -343,6 +343,55 @@ describe('model usage account statistics', () => {
         expect(logged).toContain('Reasoning: 516');
     });
 
+    test('logs a weekly-only primary window as Weekly and leaves 5h unavailable', async () => {
+        fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
+        fs.writeFileSync(path.join(tempDir, 'configs', 'usage-cache.json'), JSON.stringify({
+            timestamp: new Date(Date.now() - 5000).toISOString(),
+            providers: {
+                'openai-codex-oauth': {
+                    providerType: 'openai-codex-oauth',
+                    instances: [{
+                        uuid: 'codex-account-a',
+                        name: 'US Account A',
+                        usage: {
+                            items: [{
+                                id: 'primary_window',
+                                label: 'Weekly Limit',
+                                windowKind: 'weekly',
+                                durationSeconds: 604800,
+                                percent: 73.5,
+                                unit: 'percent'
+                            }]
+                        }
+                    }]
+                }
+            }
+        }), 'utf8');
+        const logSpy = jest.spyOn(console, 'log');
+        const statsManager = await loadStatsManager();
+
+        statsManager.recordUnaryUsage({
+            requestId: 'req-codex-weekly-only',
+            model: 'gpt-5.5',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'US Account A',
+            nativeResponse: { usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
+        });
+        await statsManager.finalizeRequest({
+            requestId: 'req-codex-weekly-only',
+            model: 'gpt-5.5',
+            provider: 'openai-codex-oauth',
+            providerUuid: 'codex-account-a',
+            providerName: 'US Account A',
+            isStream: false
+        });
+
+        const logged = logSpy.mock.calls.map(([message]) => String(message)).join('\n');
+        expect(logged).toContain('5h: unavailable');
+        expect(logged).toContain('Weekly: 73.5% used/26.5% remaining');
+    });
+
     test('reuses usage cache snapshot for request audit logs within the short ttl window', async () => {
         const configsDir = path.join(tempDir, 'configs');
         const usageCachePath = path.join(configsDir, 'usage-cache.json');

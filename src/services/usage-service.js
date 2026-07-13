@@ -7,6 +7,10 @@ import { getProviderPoolManager } from './service-manager.js';
 import { serviceInstances } from '../providers/adapter.js';
 import { MODEL_PROVIDER } from '../utils/common.js';
 import { getProviderModels } from '../providers/provider-models.js';
+import {
+    normalizeCodexRateLimitWindows,
+    selectCodexSummaryWindow
+} from '../utils/codex-rate-limit.js';
 
 /**
  * 用量查询服务类
@@ -775,7 +779,7 @@ function extractCodexTokenUsage(usageData) {
     return { daily, weekly, total };
 }
 
-function makeCodexTokenBlock(totalTokens) {
+function makeCodexTokenBlock(totalTokens, metadata = {}) {
     const parsed = numberOrNull(totalTokens);
     if (parsed === null) return null;
     return {
@@ -785,7 +789,23 @@ function makeCodexTokenBlock(totalTokens) {
         totalTokens: parsed,
         limitTokens: null,
         remainingTokens: null,
-        resetAt: null
+        resetAt: null,
+        available: true,
+        ...metadata
+    };
+}
+
+function makeUnavailableCodexTokenBlock(metadata = {}) {
+    return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        totalTokens: null,
+        limitTokens: null,
+        remainingTokens: null,
+        resetAt: null,
+        available: false,
+        ...metadata
     };
 }
 
@@ -817,13 +837,18 @@ function extractCodexProfileTokenUsage(usageData) {
     const buckets = Array.isArray(stats.daily_usage_buckets)
         ? stats.daily_usage_buckets
         : (Array.isArray(stats.dailyUsageBuckets) ? stats.dailyUsageBuckets : []);
+    const weeklyBuckets = Array.isArray(stats.weekly_usage_buckets)
+        ? stats.weekly_usage_buckets
+        : (Array.isArray(stats.weeklyUsageBuckets) ? stats.weeklyUsageBuckets : []);
+    const profileMetadata = profile?.metadata || {};
+    const statsAsOf = profileMetadata.stats_as_of || profileMetadata.statsAsOf || null;
     const todayKey = dateKeyFromOffset(0);
     const weekKeys = new Set(Array.from({ length: 7 }, (_, index) => dateKeyFromOffset(-index)));
 
     let dailyTokens = null;
+    let hasTodayBucket = false;
     let weeklyTokens = null;
     if (buckets.length > 0) {
-        dailyTokens = 0;
         weeklyTokens = 0;
         for (const bucket of buckets) {
             const startDate = bucket?.start_date || bucket?.startDate || bucket?.date;
@@ -831,7 +856,8 @@ function extractCodexProfileTokenUsage(usageData) {
             if (!startDate || tokens === null) continue;
 
             if (startDate === todayKey) {
-                dailyTokens += tokens;
+                dailyTokens = (dailyTokens ?? 0) + tokens;
+                hasTodayBucket = true;
             }
             if (weekKeys.has(startDate)) {
                 weeklyTokens += tokens;
@@ -839,10 +865,27 @@ function extractCodexProfileTokenUsage(usageData) {
         }
     }
 
+    let weeklySource = 'rolling_7_days';
+    if (weeklyBuckets.length > 0) {
+        const latestWeeklyBucket = weeklyBuckets
+            .filter(bucket => numberOrNull(bucket?.tokens) !== null)
+            .sort((a, b) => String(b?.start_date || b?.startDate || '').localeCompare(String(a?.start_date || a?.startDate || '')))[0];
+        if (latestWeeklyBucket) {
+            weeklyTokens = numberOrNull(latestWeeklyBucket.tokens);
+            weeklySource = 'weekly_bucket';
+        }
+    }
+
     const totalTokens = numberOrNull(stats.lifetime_tokens ?? stats.lifetimeTokens);
-    const daily = dailyTokens !== null ? makeCodexTokenBlock(dailyTokens) : null;
-    const weekly = weeklyTokens !== null ? makeCodexTokenBlock(weeklyTokens) : null;
-    const total = totalTokens !== null ? makeCodexTokenBlock(totalTokens) : null;
+    const daily = hasTodayBucket
+        ? makeCodexTokenBlock(dailyTokens, { asOf: todayKey, source: 'daily_bucket' })
+        : (buckets.length > 0 ? makeUnavailableCodexTokenBlock({ asOf: statsAsOf, source: 'daily_bucket_delayed' }) : null);
+    const weekly = weeklyTokens !== null
+        ? makeCodexTokenBlock(weeklyTokens, { asOf: statsAsOf, source: weeklySource })
+        : null;
+    const total = totalTokens !== null
+        ? makeCodexTokenBlock(totalTokens, { asOf: statsAsOf, source: 'lifetime' })
+        : null;
 
     if (!daily && !weekly && !total) return null;
     return { daily, weekly, total };
@@ -871,6 +914,23 @@ function formatTokenCount(tokens) {
 
 function buildCodexTokenUsageItem(id, label, block) {
     if (!block) return null;
+    if (block.available === false) {
+        return {
+            id,
+            label,
+            used: null,
+            limit: null,
+            percent: 0,
+            unit: 'tokens',
+            displayValue: '—',
+            status: 'unknown',
+            resetAt: null,
+            available: false,
+            asOf: block.asOf || null,
+            source: block.source || null,
+            category: 'telemetry'
+        };
+    }
     const limit = block.limitTokens ?? null;
     const percent = limit && limit > 0 ? Math.min(100, (block.totalTokens / limit) * 100) : 0;
     return {
@@ -885,69 +945,33 @@ function buildCodexTokenUsageItem(id, label, block) {
         resetAt: block.resetAt,
         cachedTokens: block.cachedTokens,
         inputTokens: block.inputTokens,
-        outputTokens: block.outputTokens
+        outputTokens: block.outputTokens,
+        available: true,
+        asOf: block.asOf || null,
+        source: block.source || null,
+        category: 'telemetry'
     };
 }
 
-function slugifyCodexRateLimitName(name, fallback) {
-    return String(name || fallback || 'additional')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '') || 'additional';
-}
-
-function getCodexWindowUsedPercent(windowData) {
-    return numberOrNull(windowData?.used_percent ?? windowData?.usedPercent) ?? 0;
-}
-
-function buildCodexRateLimitWindowItem(id, label, windowData) {
+function buildCodexRateLimitWindowItem(windowData) {
     if (!windowData) return null;
-    const usedPercent = getCodexWindowUsedPercent(windowData);
+    const usedPercent = windowData.usedPercent;
     return {
-        id,
-        label,
+        id: windowData.id,
+        label: windowData.label,
         used: usedPercent,
         limit: 100,
         percent: usedPercent,
         unit: 'percent',
         status: getStatus(usedPercent),
-        resetAt: formatTimestamp(windowData.reset_at ?? windowData.resetAt)
+        resetAt: formatTimestamp(windowData.resetAt),
+        category: windowData.category,
+        scope: windowData.scope,
+        sourceWindow: windowData.sourceWindow,
+        windowKind: windowData.windowKind,
+        durationSeconds: windowData.durationSeconds,
+        limitName: windowData.limitName
     };
-}
-
-function buildAdditionalCodexRateLimitItems(usageData) {
-    const additionalRateLimits = Array.isArray(usageData?.additional_rate_limits)
-        ? usageData.additional_rate_limits
-        : (Array.isArray(usageData?.additionalRateLimits) ? usageData.additionalRateLimits : []);
-
-    const items = [];
-    additionalRateLimits.forEach((limitData, index) => {
-        if (!limitData || typeof limitData !== 'object') return;
-
-        const rateLimit = limitData.rate_limit || limitData.rateLimit || limitData;
-        const primary = rateLimit?.primary_window || rateLimit?.primaryWindow;
-        const secondary = rateLimit?.secondary_window || rateLimit?.secondaryWindow;
-        if (!primary && !secondary) return;
-
-        const label = limitData.limit_name || limitData.limitName || limitData.metered_feature || limitData.meteredFeature || `Additional Limit ${index + 1}`;
-
-        const slug = slugifyCodexRateLimitName(label, `additional_${index + 1}`);
-        const primaryItem = buildCodexRateLimitWindowItem(
-            `additional_${slug}_primary_window`,
-            `${label} (5h)`,
-            primary
-        );
-        const secondaryItem = buildCodexRateLimitWindowItem(
-            `additional_${slug}_secondary_window`,
-            `${label} (Weekly)`,
-            secondary
-        );
-
-        if (primaryItem) items.push(primaryItem);
-        if (secondaryItem) items.push(secondaryItem);
-    });
-
-    return items;
 }
 
 function extractCodexRateLimitResetCredits(usageData) {
@@ -983,64 +1007,12 @@ function extractCodexRateLimitResetCredits(usageData) {
 export function formatCodexUsage(usageData) {
     if (!usageData) return null;
 
-    // 兼容蛇形命名（原生 API）和驼峰命名
-    const rateLimit = usageData.rate_limit || usageData.rateLimit;
-    const primary = rateLimit?.primary_window || rateLimit?.primaryWindow;
-    const secondary = rateLimit?.secondary_window || rateLimit?.secondaryWindow;
     const resetCredits = usageData.rate_limit_reset_credits || usageData.rateLimitResetCredits;
     const resetAvailableCount = Number(resetCredits?.available_count ?? resetCredits?.availableCount ?? 0) || 0;
-    
-    const primaryUsedPercent = primary?.used_percent ?? primary?.usedPercent ?? 0;
-    const secondaryUsedPercent = secondary?.used_percent ?? secondary?.usedPercent ?? 0;
-
-    let maxUsedPercent = 0;
-    let worstResetAtTimestamp = null;
+    const normalizedWindows = normalizeCodexRateLimitWindows(usageData);
+    const summaryWindow = selectCodexSummaryWindow(normalizedWindows);
     const items = [];
-    const considerResetWindow = (usedPercent, resetAtTimestamp) => {
-        if (usedPercent > maxUsedPercent) {
-            maxUsedPercent = usedPercent;
-            worstResetAtTimestamp = resetAtTimestamp;
-        }
-    };
-
-    // 1. 处理主窗口（短时间配额）
-    if (primary) {
-        const primaryResetAt = primary?.reset_at ?? primary?.resetAt;
-        considerResetWindow(primaryUsedPercent, primaryResetAt);
-        
-        items.push({
-            id: 'primary_window',
-            label: 'Request Quota (5h)',
-            used: primaryUsedPercent,
-            limit: 100,
-            percent: primaryUsedPercent,
-            unit: 'percent',
-            status: getStatus(primaryUsedPercent),
-            resetAt: formatTimestamp(primaryResetAt)
-        });
-    }
-
-    // 2. 比较并添加从窗口（周配额）
-    if (secondary) {
-        const secondaryResetAt = secondary?.reset_at ?? secondary?.resetAt;
-        considerResetWindow(secondaryUsedPercent, secondaryResetAt);
-        
-        items.push({
-            id: 'secondary_window',
-            label: 'Weekly Limit',
-            used: secondaryUsedPercent,
-            limit: 100,
-            percent: secondaryUsedPercent,
-            unit: 'percent',
-            status: getStatus(secondaryUsedPercent),
-            resetAt: formatTimestamp(secondaryResetAt)
-        });
-    }
-
-    const additionalRateLimitItems = buildAdditionalCodexRateLimitItems(usageData);
-    additionalRateLimitItems.forEach(item => {
-        items.push(item);
-    });
+    normalizedWindows.map(buildCodexRateLimitWindowItem).filter(Boolean).forEach(item => items.push(item));
 
     const plan = usageData.plan_type || usageData.planType || 'FREE';
     const tokenUsageProfile = getCodexTokenUsageProfile(usageData);
@@ -1049,14 +1021,15 @@ export function formatCodexUsage(usageData) {
         extractCodexProfileTokenUsage(usageData)
     );
     const rateLimitResetCredits = extractCodexRateLimitResetCredits(usageData);
-    const summaryUsedPercent = secondary ? secondaryUsedPercent : maxUsedPercent;
-    const summaryResetAtTimestamp = secondary
-        ? (secondary?.reset_at ?? secondary?.resetAt)
-        : worstResetAtTimestamp;
+    const summaryUsedPercent = summaryWindow?.usedPercent ?? 0;
+    const summaryResetAtTimestamp = summaryWindow?.resetAt ?? null;
     if (tokenUsage) {
+        const weeklyTokenLabel = tokenUsage.weekly?.source === 'rolling_7_days'
+            ? 'Last 7 Days Tokens'
+            : 'Weekly Tokens';
         [
             buildCodexTokenUsageItem('daily_token_usage', 'Daily Tokens', tokenUsage.daily),
-            buildCodexTokenUsageItem('weekly_token_usage', 'Weekly Tokens', tokenUsage.weekly),
+            buildCodexTokenUsageItem('weekly_token_usage', weeklyTokenLabel, tokenUsage.weekly),
             buildCodexTokenUsageItem('total_token_usage', 'Total Tokens', tokenUsage.total)
         ].filter(Boolean).forEach(item => items.push(item));
     }
@@ -1078,6 +1051,9 @@ export function formatCodexUsage(usageData) {
             usedPercent: summaryUsedPercent,
             status: getStatus(summaryUsedPercent),
             resetAt: formatTimestamp(summaryResetAtTimestamp),
+            label: summaryWindow?.label || null,
+            windowKind: summaryWindow?.windowKind || null,
+            durationSeconds: summaryWindow?.durationSeconds ?? null,
             plan,
             planClass: getPlanClass(plan),
             unit: 'percent',

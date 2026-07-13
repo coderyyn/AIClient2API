@@ -148,4 +148,35 @@ describe('codex prewarm service', () => {
         expect(prewarmAccount).toHaveBeenCalledTimes(2);
         expect(prewarmAccount.mock.calls.map(([job]) => job.provider.uuid)).toEqual(['codex-a', 'codex-a']);
     });
+
+    test('skips accounts whose live usage schema has only a weekly window', async () => {
+        writeUsageCache([
+            {
+                uuid: 'codex-a',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [{
+                        id: 'primary_window',
+                        windowKind: 'weekly',
+                        durationSeconds: 604800,
+                        percent: 3,
+                        unit: 'percent'
+                    }]
+                }
+            }
+        ]);
+        const { CodexPrewarmService, normalizePrewarmConfig } = await loadPrewarmService();
+        const prewarmAccount = jest.fn().mockResolvedValue({ ok: true });
+        const service = new CodexPrewarmService({
+            config: normalizePrewarmConfig({ CODEX_PREWARM_ENABLED: true }),
+            providerPoolManager: createPoolManager(),
+            prewarmAccount
+        });
+
+        const result = await service.runDuePrewarm(new Date('2026-06-15T22:31:00.000Z'));
+
+        expect(prewarmAccount).not.toHaveBeenCalled();
+        expect(result.jobs).toBe(0);
+    });
 });

@@ -14,6 +14,18 @@ describe('usage manager display source regressions', () => {
         expect(renderBlock).toContain('item.displayValue');
     });
 
+    test('Codex usage details render semantic summary labels and no progress bar for telemetry', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+        const renderStart = source.indexOf('function renderUsageDetails(usage, accountSummary = null) {');
+        const renderEnd = source.indexOf('function getProviderDisplayName', renderStart);
+        const renderBlock = source.slice(renderStart, renderEnd);
+
+        expect(renderBlock).toContain("summary.label || t('usage.card.quotaOverview')");
+        expect(renderBlock).toContain("item.category === 'telemetry'");
+        expect(renderBlock).toContain('item.available === false');
+        expect(renderBlock).toContain("t('usage.card.dataAsOf'");
+    });
+
     test('account usage summaries are indexed by identity and provider UUIDs', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
 

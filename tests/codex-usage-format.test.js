@@ -1,4 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals';
+import fs from 'fs';
 import { formatCodexUsage } from '../src/services/usage-service.js';
 
 jest.mock('../src/services/service-manager.js', () => ({
@@ -10,6 +11,8 @@ jest.mock('../src/providers/adapter.js', () => ({
 }));
 
 describe('Codex usage formatting', () => {
+    const weeklyOnlyFixture = JSON.parse(fs.readFileSync(new URL('./fixtures/codex-usage-weekly-only.json', import.meta.url), 'utf8'));
+
     function dateKey(offsetDays = 0) {
         const date = new Date();
         date.setUTCHours(12, 0, 0, 0);
@@ -268,5 +271,51 @@ describe('Codex usage formatting', () => {
             ]
         });
         expect(JSON.stringify(formatted.summary.rateLimitResetCredits)).not.toContain('credit-full-id-should-not-be-required');
+    });
+
+    test('renders a weekly-only primary window from the live Codex schema without a fake 5h label', () => {
+        const formatted = formatCodexUsage(weeklyOnlyFixture);
+
+        expect(formatted.summary).toMatchObject({
+            usedPercent: 3,
+            label: 'Weekly Limit',
+            windowKind: 'weekly'
+        });
+        expect(formatted.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'primary_window',
+                label: 'Weekly Limit',
+                windowKind: 'weekly',
+                durationSeconds: 604800,
+                percent: 3
+            }),
+            expect.objectContaining({
+                id: 'additional_gpt_5_3_codex_spark_primary_window',
+                label: 'GPT-5.3-Codex-Spark (Weekly)',
+                windowKind: 'weekly',
+                durationSeconds: 604800,
+                percent: 48
+            })
+        ]));
+        expect(formatted.items.filter(item => item.unit === 'percent').map(item => item.label).join(' ')).not.toContain('5h');
+    });
+
+    test('shows delayed daily profile telemetry as unavailable instead of exact zero', () => {
+        const formatted = formatCodexUsage(weeklyOnlyFixture);
+        const daily = formatted.items.find(item => item.id === 'daily_token_usage');
+        const weekly = formatted.items.find(item => item.id === 'weekly_token_usage');
+
+        expect(daily).toMatchObject({
+            displayValue: '—',
+            available: false,
+            asOf: '2026-07-12',
+            category: 'telemetry'
+        });
+        expect(weekly).toMatchObject({
+            label: 'Weekly Tokens',
+            used: 3382115315,
+            displayValue: '3.38B',
+            category: 'telemetry'
+        });
     });
 });

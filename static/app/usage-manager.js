@@ -794,9 +794,10 @@ function renderUsageDetails(usage, accountSummary = null) {
     if (summary?.usedPercent !== undefined) {
         const total = document.createElement('div');
         total.className = 'usage-section total-usage';
+        const summaryLabel = summary.label || t('usage.card.quotaOverview');
         total.innerHTML = `
             <div class="total-usage-header">
-                <span class="total-label"><i class="fas fa-chart-pie"></i> <span>${t('usage.card.totalUsage')}</span></span>
+                <span class="total-label"><i class="fas fa-chart-pie"></i> <span>${escapeHtml(summaryLabel)}</span></span>
                 <span class="total-value">${summary.usedPercent.toFixed(1)}%</span>
             </div>
             <div class="progress-bar ${summary.status}"><div class="progress-fill" style="width: ${summary.usedPercent}%"></div></div>
@@ -840,24 +841,44 @@ function renderUsageDetails(usage, accountSummary = null) {
         : items;
 
     if (visibleItems?.length > 0) {
-        const breakdown = document.createElement('div');
-        breakdown.className = 'usage-section usage-breakdown-compact';
-        visibleItems.forEach(item => {
-            const val = item.displayValue !== undefined && item.displayValue !== null
-                ? item.displayValue
-                : item.unit === 'percent'
-                ? `${item.percent.toFixed(1)}%`
-                : (item.limit === null || item.limit === undefined ? formatNumber(item.used) : `${formatNumber(item.used)} / ${formatNumber(item.limit)}`);
-            const itemEl = document.createElement('div');
-            itemEl.className = 'breakdown-item-compact';
-            itemEl.innerHTML = `
-                <div class="breakdown-header-compact"><span class="breakdown-name">${item.label}</span><span class="breakdown-usage">${val}</span></div>
-                <div class="progress-bar-small ${item.status}"><div class="progress-fill" style="width: ${item.percent}%"></div></div>
-                ${item.resetAt ? `<div class="extra-usage-info reset-time"><i class="fas fa-history"></i> ${formatDate(item.resetAt)}</div>` : ''}
-            `;
-            breakdown.appendChild(itemEl);
-        });
-        container.appendChild(breakdown);
+        const renderBreakdownGroup = (groupItems, title, className) => {
+            if (groupItems.length === 0) return;
+            const breakdown = document.createElement('div');
+            breakdown.className = `usage-section usage-breakdown-compact ${className}`;
+            breakdown.innerHTML = `<div class="usage-breakdown-title">${escapeHtml(title)}</div>`;
+            groupItems.forEach(item => {
+                const isTelemetry = item.category === 'telemetry';
+                const isUnavailable = item.available === false;
+                const val = isUnavailable
+                    ? '—'
+                    : item.displayValue !== undefined && item.displayValue !== null
+                    ? item.displayValue
+                    : item.unit === 'percent'
+                    ? `${item.percent.toFixed(1)}%`
+                    : (item.limit === null || item.limit === undefined ? formatNumber(item.used) : `${formatNumber(item.used)} / ${formatNumber(item.limit)}`);
+                const itemEl = document.createElement('div');
+                itemEl.className = `breakdown-item-compact${isTelemetry ? ' telemetry-item' : ''}`;
+                itemEl.innerHTML = `
+                    <div class="breakdown-header-compact"><span class="breakdown-name">${escapeHtml(item.label)}</span><span class="breakdown-usage">${escapeHtml(String(val))}</span></div>
+                    ${isTelemetry ? '' : `<div class="progress-bar-small ${item.status}"><div class="progress-fill" style="width: ${item.percent}%"></div></div>`}
+                    ${item.resetAt ? `<div class="extra-usage-info reset-time"><i class="fas fa-history"></i> ${formatDate(item.resetAt)}</div>` : ''}
+                    ${item.asOf ? `<div class="extra-usage-info telemetry-as-of"><i class="fas fa-clock"></i> ${t('usage.card.dataAsOf', { date: item.asOf })}${isUnavailable ? ` · ${t('usage.card.dataDelayed')}` : ''}</div>` : ''}
+                `;
+                breakdown.appendChild(itemEl);
+            });
+            container.appendChild(breakdown);
+        };
+
+        renderBreakdownGroup(
+            visibleItems.filter(item => item.category !== 'telemetry'),
+            t('usage.card.quotaDetails'),
+            'quota-breakdown'
+        );
+        renderBreakdownGroup(
+            visibleItems.filter(item => item.category === 'telemetry'),
+            t('usage.card.tokenTelemetry'),
+            'telemetry-breakdown'
+        );
     }
 
     if (summary?.tokenUsageAvailable === false) {

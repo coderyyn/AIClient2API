@@ -502,4 +502,66 @@ describe('provider pool Codex token quota', () => {
             }
         });
     });
+
+    test('applies a weekly-only primary window to the weekly threshold instead of the 5h threshold', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        {
+                            id: 'primary_window',
+                            sourceWindow: 'primary_window',
+                            windowKind: 'weekly',
+                            durationSeconds: 604800,
+                            percent: 85,
+                            unit: 'percent'
+                        }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({ ok: { isDisabled: true } });
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
+
+        expect(selected.uuid).toBe('aaa-codex-over');
+    });
+
+    test('applies a Spark weekly-only primary window to the Spark weekly threshold', async () => {
+        writeCodexUsageCache([
+            {
+                uuid: 'aaa-codex-over',
+                success: true,
+                usage: {
+                    summary: { plan: 'Pro' },
+                    items: [
+                        {
+                            id: 'primary_window',
+                            windowKind: 'weekly',
+                            durationSeconds: 604800,
+                            percent: 10,
+                            unit: 'percent'
+                        },
+                        {
+                            id: 'additional_gpt_5_3_codex_spark_primary_window',
+                            label: 'GPT-5.3-Codex-Spark (Weekly)',
+                            scope: 'model',
+                            windowKind: 'weekly',
+                            durationSeconds: 604800,
+                            percent: 85,
+                            unit: 'percent'
+                        }
+                    ]
+                }
+            }
+        ]);
+
+        const manager = createQuotaPoolManager({ ok: { isDisabled: true } });
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.3-codex-spark');
+
+        expect(selected.uuid).toBe('aaa-codex-over');
+    });
 });

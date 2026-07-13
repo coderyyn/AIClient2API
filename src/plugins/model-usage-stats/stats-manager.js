@@ -5,6 +5,7 @@ import path from 'path';
 import logger from '../../utils/logger.js';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
+import { normalizeCodexRateLimitWindows } from '../../utils/codex-rate-limit.js';
 
 const STATS_STORE_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
@@ -513,6 +514,21 @@ function getPercentFromRateLimitWindow(usage, windowKey) {
     return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) : null;
 }
 
+function getPercentFromSemanticWindow(usage, windowKind) {
+    const items = Array.isArray(usage?.items) ? usage.items : [];
+    const item = items.find(entry =>
+        entry?.windowKind === windowKind &&
+        (entry?.scope === 'general' || entry?.id === 'primary_window' || entry?.id === 'secondary_window')
+    );
+    const itemPercent = Number(item?.percent ?? item?.usedPercent ?? item?.used);
+    if (Number.isFinite(itemPercent)) return Math.min(Math.max(itemPercent, 0), 100);
+
+    const rawWindows = normalizeCodexRateLimitWindows(usage?.raw || {});
+    const rawWindow = rawWindows.find(entry => entry.scope === 'general' && entry.windowKind === windowKind);
+    const rawPercent = Number(rawWindow?.usedPercent);
+    return Number.isFinite(rawPercent) ? Math.min(Math.max(rawPercent, 0), 100) : null;
+}
+
 function formatPercent(value) {
     if (!Number.isFinite(Number(value))) return 'unavailable';
     const rounded = Math.round(Number(value) * 10) / 10;
@@ -555,12 +571,20 @@ function getAccountUsageSnapshot(provider, providerUuid) {
     const cacheTimestampMs = Date.parse(cache.timestamp || '');
     const cacheAgeMs = Number.isFinite(cacheTimestampMs) ? Math.max(0, Date.now() - cacheTimestampMs) : null;
 
+    const hasSemanticWindows = (Array.isArray(usage?.items) ? usage.items : []).some(entry => entry?.windowKind)
+        || normalizeCodexRateLimitWindows(usage?.raw || {}).some(entry => entry.scope === 'general' && entry.windowKind !== 'unknown');
     return {
         cacheAgeMs,
-        fiveHourPercent: getPercentFromUsageItem(usage, 'primary_window', 'Request Quota (5h)')
-            ?? getPercentFromRateLimitWindow(usage, 'primary_window'),
-        weeklyPercent: getPercentFromUsageItem(usage, 'secondary_window', 'Weekly Limit')
-            ?? getPercentFromRateLimitWindow(usage, 'secondary_window')
+        fiveHourPercent: getPercentFromSemanticWindow(usage, 'short')
+            ?? (hasSemanticWindows ? null : (
+                getPercentFromUsageItem(usage, 'primary_window', 'Request Quota (5h)')
+                ?? getPercentFromRateLimitWindow(usage, 'primary_window')
+            )),
+        weeklyPercent: getPercentFromSemanticWindow(usage, 'weekly')
+            ?? (hasSemanticWindows ? null : (
+                getPercentFromUsageItem(usage, 'secondary_window', 'Weekly Limit')
+                ?? getPercentFromRateLimitWindow(usage, 'secondary_window')
+            ))
     };
 }
 

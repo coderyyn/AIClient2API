@@ -4,9 +4,11 @@ import path from 'path';
 import { MODEL_PROVIDER } from '../utils/common.js';
 import { atomicWriteFile } from '../utils/file-lock.js';
 import {
+    getCachedCodexUsageInstance,
     getCodexPlanStatusForProvider,
     readFreshUsageCacheSync
 } from '../utils/codex-plan.js';
+import { normalizeCodexRateLimitWindows } from '../utils/codex-rate-limit.js';
 import logger from '../utils/logger.js';
 
 const DEFAULT_PREWARM_TIMES = ['06:30', '11:30'];
@@ -183,6 +185,18 @@ export class CodexPrewarmService {
                 const planStatus = getCodexPlanStatusForProvider(providerType, provider.uuid, usageCache, provider);
                 if (!planStatus.allowed) {
                     this.log.info(`[CodexPrewarm] Skipping ${provider.customName || provider.uuid || 'unknown'}: plan ${planStatus.plan} is not eligible`);
+                    continue;
+                }
+                const cachedInstance = getCachedCodexUsageInstance(providerType, provider.uuid, usageCache);
+                const usage = cachedInstance?.usage || null;
+                const semanticItems = (Array.isArray(usage?.items) ? usage.items : []).filter(item => item?.windowKind);
+                const rawWindows = normalizeCodexRateLimitWindows(usage?.raw || {});
+                const semanticWindows = semanticItems.length > 0 ? semanticItems : rawWindows.filter(window => window.windowKind !== 'unknown');
+                if (semanticWindows.length > 0 && !semanticWindows.some(window =>
+                    window.windowKind === 'short' &&
+                    (window.scope === 'general' || window.id === 'primary_window' || window.id === 'secondary_window')
+                )) {
+                    this.log.info(`[CodexPrewarm] Skipping ${provider.customName || provider.uuid || 'unknown'}: no short quota window`);
                     continue;
                 }
                 providers.push({

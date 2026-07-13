@@ -20,6 +20,7 @@ import {
     getCodexPlanStatusForProvider,
     readFreshUsageCacheSync
 } from '../utils/codex-plan.js';
+import { normalizeCodexRateLimitWindows } from '../utils/codex-rate-limit.js';
 
 function getCustomModelAliasesForProvider(config, providerType) {
     const customModels = Array.isArray(config?.customModels) ? config.customModels : [];
@@ -188,13 +189,21 @@ function getUsageItemPercentByMatcher(usage, matcher) {
     const items = Array.isArray(usage?.items) ? usage.items : [];
     const item = items.find(entry => matcher({
         id: String(entry?.id || entry?.key || entry?.name || '').toLowerCase(),
-        label: String(entry?.label || '').toLowerCase()
+        label: String(entry?.label || '').toLowerCase(),
+        windowKind: String(entry?.windowKind || '').toLowerCase(),
+        scope: String(entry?.scope || '').toLowerCase(),
+        entry
     }));
     if (!item) return null;
     return normalizePercentValue(item.percent ?? item.usedPercent ?? item.used);
 }
 
 function getRawRateLimitWindowPercent(rawUsage, windowId) {
+    const desiredKind = windowId === 'primary_window' ? 'short' : 'weekly';
+    const normalized = normalizeCodexRateLimitWindows(rawUsage || {});
+    const semantic = normalized.find(window => window.scope === 'general' && window.windowKind === desiredKind);
+    if (semantic) return normalizePercentValue(semantic.usedPercent);
+
     const rateLimit = rawUsage?.rate_limit || rawUsage?.rateLimit;
     const windowAliases = windowId === 'primary_window'
         ? ['primary_window', 'primaryWindow']
@@ -218,8 +227,30 @@ function resolveCodexQuotaBucket(requestedModel = null, patterns = DEFAULT_CODEX
 
 function getCodex53UsagePercent(usage, windowId) {
     const isPrimary = windowId === 'primary_window';
+    const desiredKind = isPrimary ? 'short' : 'weekly';
     const windowNeedle = isPrimary ? 'primary_window' : 'secondary_window';
     const labelNeedle = isPrimary ? '5h' : 'weekly';
+    const semanticPercent = getUsageItemPercentByMatcher(usage, ({ id, label, windowKind, scope }) =>
+        windowKind === desiredKind &&
+        (scope === 'model' || id.includes('additional')) &&
+        (id.includes('gpt_5_3') || id.includes('codex_5_3') || label.includes('gpt-5.3'))
+    );
+    if (semanticPercent !== null) return semanticPercent;
+
+    const rawWindows = normalizeCodexRateLimitWindows(usage?.raw || {});
+    const rawSemantic = rawWindows.find(window =>
+        window.scope === 'model' &&
+        window.windowKind === desiredKind &&
+        String(window.limitName || '').toLowerCase().includes('gpt-5.3')
+    );
+    if (rawSemantic) return normalizePercentValue(rawSemantic.usedPercent);
+    const hasSemanticModelWindows = (Array.isArray(usage?.items) ? usage.items : []).some(entry => {
+        const id = String(entry?.id || '').toLowerCase();
+        const label = String(entry?.label || '').toLowerCase();
+        return entry?.windowKind && (id.includes('gpt_5_3') || label.includes('gpt-5.3'));
+    });
+    if (hasSemanticModelWindows) return null;
+
     return getUsageItemPercentByMatcher(usage, ({ id, label }) =>
         id.includes('additional') &&
         id.includes('gpt_5_3_codex_spark') &&
@@ -237,6 +268,18 @@ function getCodexCachedUsagePercent(providerType, uuid, usageCache, windowId, bu
     if (bucket === CODEX_QUOTA_BUCKET.CODEX_53) {
         return getCodex53UsagePercent(usage, windowId);
     }
+
+    const desiredKind = windowId === 'primary_window' ? 'short' : 'weekly';
+    const semanticPercent = getUsageItemPercentByMatcher(usage, ({ id, windowKind, scope }) =>
+        windowKind === desiredKind &&
+        (scope === 'general' || id === 'primary_window' || id === 'secondary_window')
+    );
+    if (semanticPercent !== null) return semanticPercent;
+    const hasSemanticGeneralWindows = (Array.isArray(usage?.items) ? usage.items : []).some(entry =>
+        entry?.windowKind &&
+        (entry?.scope === 'general' || entry?.id === 'primary_window' || entry?.id === 'secondary_window')
+    );
+    if (hasSemanticGeneralWindows) return null;
 
     const itemPercent = getUsageItemPercent(usage, windowId);
     if (itemPercent !== null) return itemPercent;
