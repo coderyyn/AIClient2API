@@ -19,6 +19,7 @@ const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
 const DEFAULT_CODEX_FALLBACK_MODEL = 'gpt-5.4-mini';
 const CODEX_VERSION = '0.144.1';
 export const IMAGE_MODELS = new Set(['gpt-image-2']);
+const IMAGE_GENERATION_FUNCTION_NAMES = new Set(['image_gen.imagegen', 'image_gen__imagegen']);
 const IMAGE_TOOL_STRING_FIELDS = ['size', 'quality', 'background', 'output_format', 'input_fidelity', 'moderation'];
 const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];
 
@@ -463,8 +464,13 @@ export class CodexApiService {
                     cleanedBody.tools.push({type: 'web_search'});
                 }
                 if (!upstreamModel.endsWith('spark')) {
-                    const hasImageGen = cleanedBody.tools.some(t => t.type === 'image_generation');
-                    if (!hasImageGen) {
+                    const hasHostedImageGeneration = cleanedBody.tools.some(tool => tool?.type === 'image_generation');
+                    const hasImageGenerationFunction = cleanedBody.tools.some(tool => {
+                        if (tool?.type !== 'function') return false;
+                        const name = tool.name || tool.function?.name;
+                        return IMAGE_GENERATION_FUNCTION_NAMES.has(name);
+                    });
+                    if (!hasHostedImageGeneration && !hasImageGenerationFunction) {
                         cleanedBody.tools.push(this.imageGenTool);
                     }
                 }
