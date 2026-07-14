@@ -15,7 +15,7 @@
 
 ## Scope
 
-Build this on branch `yyn/customized-branch` in `C:\Users\CoderYYN\Desktop\aiclient2api-image2-multi-input\AIClient-2-API`.
+Build this on branch `yyn/customized-branch` from the repository root.
 
 In scope:
 

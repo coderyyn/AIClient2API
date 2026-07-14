@@ -179,7 +179,7 @@ async function persistRawCaptureConfig(config = {}, options = {}) {
     });
 }
 
-async function ensureRawCaptureAuth(req, res, config = {}) {
+async function ensureRequestAuditAuth(req, res, config = {}) {
     if (config._requestAuditSkipAuth) return true;
     const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : new URL(req.url || '/', 'http://localhost').searchParams.get('token');
@@ -221,8 +221,8 @@ function parseQuery(requestUrl) {
 
 export async function handleRequestAuditRoutes(method, path, req, res, config = {}) {
     if (!path.startsWith('/api/request-audit')) return false;
+    if (!await ensureRequestAuditAuth(req, res, config)) return true;
     if (path === '/api/request-audit/raw-capture') {
-        if (!await ensureRawCaptureAuth(req, res, config)) return true;
         if (!rawCaptureController) {
             sendJson(res, 503, { success: false, error: { message: 'Raw capture controller is not ready' } });
             return true;

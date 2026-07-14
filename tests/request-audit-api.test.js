@@ -33,6 +33,7 @@ describe('request audit api aggregation', () => {
 
   test('summary includes analysis freshness and diagnostic counts', async () => {
     const payload = await callRoute('/api/request-audit/summary', {
+      _requestAuditSkipAuth: true,
       _requestAuditStore: {
         query: jest.fn(async () => [{ requestId: 'req-1', usage: { promptTokens: 1000, cachedTokens: 10 } }])
       },
@@ -51,6 +52,7 @@ describe('request audit api aggregation', () => {
 
   test('requests attach materialized diagnosis when available', async () => {
     const payload = await callRoute('/api/request-audit/requests', {
+      _requestAuditSkipAuth: true,
       _requestAuditStore: {
         query: jest.fn(async () => [{ requestId: 'req-1', usage: { promptTokens: 1000, cachedTokens: 10 } }])
       },
@@ -138,6 +140,16 @@ describe('request audit api aggregation', () => {
     setRawCaptureController({ getStatus: jest.fn(), updateOptions: jest.fn() });
 
     const payload = await callRoute('/api/request-audit/raw-capture', {}, 'GET', null, 401);
+
+    expect(payload.success).toBe(false);
+    expect(payload.error.code).toBe('UNAUTHORIZED');
+  });
+
+  test.each([
+    '/api/request-audit/summary',
+    '/api/request-audit/requests'
+  ])('%s requires admin auth by default', async path => {
+    const payload = await callRoute(path, {}, 'GET', null, 401);
 
     expect(payload.success).toBe(false);
     expect(payload.error.code).toBe('UNAUTHORIZED');
