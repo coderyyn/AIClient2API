@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIClient2API 定制分支人工验收</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-soft: #f0f4f8;
+      --text: #18202c;
+      --muted: #5c6a7a;
+      --border: #d8e0ea;
+      --green: #16794c;
+      --amber: #996515;
+      --red: #b42318;
+      --blue: #1d5f99;
+      --ink: #0f172a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: end;
+      padding: 24px 0 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    h2 {
+      margin-top: 28px;
+      font-size: 18px;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    h3 {
+      font-size: 14px;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    .subtle {
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    .stamp {
+      text-align: right;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .metric, .section, .callout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .metric {
+      padding: 14px;
+      min-height: 92px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .metric .note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .section {
+      padding: 18px;
+    }
+
+    .section + .section {
+      margin-top: 14px;
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: 132px 1fr;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .item:last-child { border-bottom: 0; }
+
+    .key {
+      color: var(--muted);
+    }
+
+    .value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 650;
+      font-size: 12px;
+      border: 1px solid transparent;
+    }
+
+    .pill.ok { color: var(--green); background: #e8f5ee; border-color: #b9dec9; }
+    .pill.warn { color: var(--amber); background: #fff7df; border-color: #efd790; }
+    .pill.bad { color: var(--red); background: #fff0ed; border-color: #f3b9b0; }
+    .pill.info { color: var(--blue); background: #eaf3fb; border-color: #b8d5ed; }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+
+    .table th, .table td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    .table th {
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-weight: 650;
+      font-size: 12px;
+    }
+
+    .table tr:last-child td { border-bottom: 0; }
+
+    code {
+      font-family: "Cascadia Code", Consolas, monospace;
+      background: #eef2f6;
+      border: 1px solid #dbe3ec;
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #172033;
+      font-size: 12px;
+    }
+
+    ul {
+      margin: 12px 0 0;
+      padding-left: 18px;
+    }
+
+    li + li { margin-top: 6px; }
+
+    .callout {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--amber);
+    }
+
+    .callout strong { color: var(--ink); }
+
+    footer {
+      margin-top: 28px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+
+    @media (max-width: 820px) {
+      header, .grid, .status-row {
+        grid-template-columns: 1fr;
+      }
+
+      .stamp {
+        text-align: left;
+      }
+
+      .item {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>AIClient2API 定制分支人工验收</h1>
+        <p class="subtle">范围：提供商池账号可见性、Codex 认证失效健康标记、真实本地接口请求、Codex CLI 同源用量查询。</p>
+      </div>
+      <div class="stamp">
+        <div>2026-06-17 10:34 CST</div>
+        <div><code>yyn/customized-branch</code></div>
+      </div>
+    </header>
+
+    <section class="status-row" aria-label="验收摘要">
+      <div class="metric">
+        <div class="label">Codex 账号渲染</div>
+        <div class="value">1 条</div>
+        <div class="note">管理弹窗可见</div>
+      </div>
+      <div class="metric">
+        <div class="label">真实模型列表</div>
+        <div class="value">10 个</div>
+        <div class="note"><code>/v1/models</code> 成功</div>
+      </div>
+      <div class="metric">
+        <div class="label">Codex 用量查询</div>
+        <div class="value">1/1</div>
+        <div class="note"><code>openai-codex-oauth</code> 刷新成功</div>
+      </div>
+      <div class="metric">
+        <div class="label">Token 明细</div>
+        <div class="value">3 项</div>
+        <div class="note">今日、近 7 天、累计</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="section">
+        <h2>本次修复</h2>
+        <div class="item">
+          <div class="key">前端账号不可见</div>
+          <div class="value">
+            <span class="pill ok">已修复</span>
+            <p class="subtle">Codex OAuth 路径字段处引用了尚未定义的 <code>field2Def</code>，导致渲染中断。已改为当前字段定义 <code>field1Def</code>。</p>
+          </div>
+        </div>
+        <div class="item">
+          <div class="key">认证失败仍显示健康</div>
+          <div class="value">
+            <span class="pill ok">已修复</span>
+            <p class="subtle">上游 <code>401/token_invalidated</code> 现在会在 stream 和 unary 路径立即调用 <code>markProviderUnhealthyImmediately</code>。</p>
+          </div>
+        </div>
+        <div class="item">
+          <div class="key">CLI 同源 token usage</div>
+          <div class="value">
+            <span class="pill ok">已修复</span>
+            <p class="subtle">Codex CLI 的 <code>/usage</code> 会读取 <code>wham/profiles/me</code> 中的 <code>daily_usage_buckets</code>。后端现在会同时查询 <code>wham/usage</code> 和 <code>wham/profiles/me</code>，并在用量查询里展示今日、近 7 天、累计 token。</p>
+          </div>
+        </div>
+        <div class="item">
+          <div class="key">当前账号状态</div>
+          <div class="value">
+            <span class="pill ok">用量查询成功</span>
+            <p class="subtle">本地容器真实请求 <code>/api/usage/openai-codex-oauth?refresh=true</code> 成功，唯一启用账号返回 5h/周额度与 token 明细。历史 Chat 请求的凭据失效记录仍保留在下方验证表中。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>运行环境</h2>
+        <div class="item">
+          <div class="key">容器</div>
+          <div class="value"><code>aiclient2api-image2-test</code></div>
+        </div>
+        <div class="item">
+          <div class="key">镜像</div>
+          <div class="value"><code>aiclient2api:customized-branch-20260617-codex-profile-usage</code></div>
+        </div>
+        <div class="item">
+          <div class="key">服务</div>
+          <div class="value"><code>http://localhost:3000</code>，Docker health 为 <span class="pill ok">healthy</span></div>
+        </div>
+        <div class="item">
+          <div class="key">敏感信息</div>
+          <div class="value">报告未包含 API key、OAuth token、账号邮箱或密码。</div>
+        </div>
+      </section>
+    </div>
+
+    <section class="section">
+      <h2>验证记录</h2>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>结果</th>
+            <th>证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>前端回归测试</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>tests/provider-modal-render-source.test.js</code></td>
+          </tr>
+          <tr>
+            <td>认证失败健康标记测试</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>tests/provider-auth-failure-health.test.js</code>，覆盖 unary 与 stream。</td>
+          </tr>
+          <tr>
+            <td>Provider 相关测试</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>provider-pool-affinity</code>、<code>provider-pool-codex-quota</code> 一并通过。</td>
+          </tr>
+          <tr>
+            <td>语法检查</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>node --check src/utils/common.js</code> 与 <code>node --check static/app/modal.js</code>。</td>
+          </tr>
+          <tr>
+            <td>真实模型列表</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>/v1/models</code> 返回 10 个模型，包含 <code>gpt-5.4-mini</code> 与 <code>gpt-image-2</code>。</td>
+          </tr>
+          <tr>
+            <td>真实 Chat 请求</td>
+            <td><span class="pill warn">到达上游但凭据失效</span></td>
+            <td><code>/v1/chat/completions</code> 返回 <code>401 authentication_error</code>，错误类别为 <code>token_invalidated</code>。</td>
+          </tr>
+          <tr>
+            <td>Codex CLI profile endpoint</td>
+            <td><span class="pill ok">通过</span></td>
+            <td>官方 Codex CLI 源码确认 <code>/usage</code> 读取 <code>https://chatgpt.com/backend-api/wham/profiles/me</code>。</td>
+          </tr>
+          <tr>
+            <td>Codex token usage 格式化</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>tests/codex-usage-format.test.js</code> 覆盖 <code>daily_usage_buckets</code> 到今日、近 7 天、累计 token 的转换。</td>
+          </tr>
+          <tr>
+            <td>真实 Codex 用量查询</td>
+            <td><span class="pill ok">通过</span></td>
+            <td><code>/api/usage/openai-codex-oauth?refresh=true</code> 返回 <code>primary_window</code>、<code>secondary_window</code>、<code>daily_token_usage</code>、<code>weekly_token_usage</code>、<code>total_token_usage</code>。</td>
+          </tr>
+          <tr>
+            <td>管理页 DOM 验证</td>
+            <td><span class="pill ok">通过</span></td>
+            <td>Codex 管理弹窗 <code>providerRows=1</code>，总账户 <code>1</code>，健康账户 <code>0</code>。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>人工验收步骤</h2>
+      <ul>
+        <li>打开 <code>http://localhost:3000/#providers</code>，确认 OpenAI Codex OAuth 显示 <code>0/1</code>。</li>
+        <li>点击 OpenAI Codex OAuth 分组，确认弹窗里总账户数为 <code>1</code>，并能看到 1 条账号行。</li>
+        <li>打开用量查询，选择或刷新 Codex，确认出现 <code>Daily Tokens</code>、<code>Weekly Tokens</code>、<code>Total Tokens</code> 三个 token 明细项。</li>
+        <li>该账号若在提供商池仍显示异常或不健康，说明内容生成链路曾触发过上游 OAuth 失效；这不影响本次用量查询修复的验收。</li>
+        <li>重新授权 Codex 账号后，再用模型测试或 <code>/v1/chat/completions</code> 做内容生成验收。</li>
+      </ul>
+      <div class="callout">
+        <strong>本次追加结论：</strong>用量查询现在已接入 Codex CLI 同源 token profile；5h/周额度百分比仍来自 <code>wham/usage</code>，今日、近 7 天、累计 token 来自 <code>wham/profiles/me</code>。
+      </div>
+    </section>
+
+    <footer>
+      本页为本地验收制品，路径：<code>docs/yyn-customized-branch-acceptance-20260617.html</code>。
+    </footer>
+  </main>
+</body>
+</html>

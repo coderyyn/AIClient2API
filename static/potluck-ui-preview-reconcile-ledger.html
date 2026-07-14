@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Potluck UI 预览 - 统计元信息条</title>
+    <link rel="stylesheet" href="app/base.css">
+    <style>
+        body { background: var(--bg-secondary); min-height: 100vh; margin: 0; }
+        .preview-banner {
+            background: #334155;
+            color: #e2e8f0;
+            padding: 14px 20px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .preview-controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .preview-controls button {
+            border: 1px solid rgba(255,255,255,.25);
+            background: rgba(255,255,255,.08);
+            color: #fff;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .preview-controls button.active { background: #059669; border-color: #059669; }
+        .main-container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        .stats-meta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 1rem;
+            padding: 10px 14px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg, 10px);
+            font-size: 13px;
+        }
+        .stats-meta-time { color: var(--text-secondary); }
+        .stats-meta-time time { color: var(--text-primary); font-weight: 500; }
+        .stats-meta-badge-bad {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 999px;
+            color: var(--danger-color);
+            background: rgba(239,68,68,.08);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+        }
+        .stat-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .stat-card .label { font-size: 12px; color: var(--text-secondary); }
+        .stat-card .value { font-size: 1.5rem; font-weight: 700; color: var(--primary-color); }
+        .hidden-note {
+            margin: 1rem 0;
+            padding: 12px 14px;
+            border: 1px dashed var(--border-color);
+            border-radius: 10px;
+            color: var(--text-tertiary);
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-banner">
+        默认<strong>隐藏</strong>元信息条；仅当对账异常且更新时间超过 30 分钟时才展示（避免刚跑完对账的瞬时状态打扰）。
+        <div class="preview-controls">
+            <button type="button" class="active" data-case="hidden-ok">对账正常 → 隐藏</button>
+            <button type="button" data-case="hidden-fresh">异常但 &lt;30 分钟 → 隐藏</button>
+            <button type="button" data-case="show">异常且 ≥30 分钟 → 展示</button>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div id="statsMetaBar" class="stats-meta-bar" style="display:none;">
+            <span class="stats-meta-time">统计数据最后更新：<time id="statsLastUpdatedAt">2026/07/05 08:00</time></span>
+            <span class="stats-meta-badge-bad">统计异常</span>
+        </div>
+        <div id="hiddenNote" class="hidden-note">元信息条已隐藏（当前场景无需提示）</div>
+
+        <div class="stats-grid" style="margin-top:1rem;">
+            <div class="stat-card"><div class="label">总 Key 数</div><div class="value">12</div></div>
+            <div class="stat-card"><div class="label">今日总调用</div><div class="value">1,842</div></div>
+            <div class="stat-card"><div class="label">累计 Tokens</div><div class="value">39.1B</div></div>
+            <div class="stat-card"><div class="label">今日缓存</div><div class="value">2.4M</div></div>
+        </div>
+    </div>
+
+    <script>
+        const bar = document.getElementById('statsMetaBar');
+        const note = document.getElementById('hiddenNote');
+        document.querySelectorAll('[data-case]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('[data-case]').forEach(b => b.classList.toggle('active', b === btn));
+                const show = btn.dataset.case === 'show';
+                bar.style.display = show ? 'flex' : 'none';
+                note.style.display = show ? 'none' : 'block';
+                note.textContent = btn.dataset.case === 'hidden-ok'
+                    ? '元信息条已隐藏：对账正常 (status=ok)'
+                    : btn.dataset.case === 'hidden-fresh'
+                        ? '元信息条已隐藏：虽有异常标记，但对账时间在 30 分钟内'
+                        : '元信息条已展示：对账异常且更新时间已超过 30 分钟';
+            });
+        });
+    </script>
+</body>
+</html>

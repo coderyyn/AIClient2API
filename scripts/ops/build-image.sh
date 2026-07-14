@@ -1,0 +1,42 @@
+#!/bin/sh
+# 从干净的 git 提交构建生产镜像，替代手工 patch 镜像。
+# 通过 `git archive` 导出指定提交到临时目录再 build，
+# 保证镜像内容与提交一致，不受工作树未提交改动和 CRLF 影响。
+#
+# 用法:
+#   build-image.sh [GIT_REF] [IMAGE_TAG]
+# 默认:
+#   GIT_REF=HEAD
+#   IMAGE_TAG=aiclient2api:customized-branch-<shortsha>-<yyyymmdd>
+#
+# 可选代理（Go sidecar 依赖下载失败时）:
+#   BUILD_HTTP_PROXY=http://host.docker.internal:7890 build-image.sh
+set -eu
+
+GIT_REF=${1:-HEAD}
+COMMIT=$(git rev-parse --short "$GIT_REF")
+IMAGE_TAG=${2:-aiclient2api:customized-branch-$COMMIT-$(date +%Y%m%d)}
+
+BUILD_ARGS=""
+if [ -n "${BUILD_HTTP_PROXY:-}" ]; then
+  BUILD_ARGS="--build-arg HTTP_PROXY=$BUILD_HTTP_PROXY --build-arg HTTPS_PROXY=$BUILD_HTTP_PROXY"
+fi
+
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+echo "exporting $GIT_REF ($COMMIT) to $TMP_DIR"
+git archive "$GIT_REF" | tar -x -C "$TMP_DIR"
+
+echo "building $IMAGE_TAG"
+# shellcheck disable=SC2086
+docker build \
+  $BUILD_ARGS \
+  --label "yyn.base_commit=$COMMIT" \
+  --label "yyn.build_source=git-archive" \
+  --label "yyn.build_date=$(date -Iseconds)" \
+  -t "$IMAGE_TAG" \
+  "$TMP_DIR"
+
+echo "built $IMAGE_TAG from commit $COMMIT"
+echo "next: docker save/scp/load, rename old container as timestamped backup, start new, verify /health"

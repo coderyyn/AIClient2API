@@ -1,0 +1,58 @@
+{
+  "plan_type": "PRO",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 3,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 578954,
+      "reset_at": 1784487507
+    },
+    "secondary_window": null
+  },
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "codex_bengalfox",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "used_percent": 48,
+          "limit_window_seconds": 604800,
+          "reset_after_seconds": 579270,
+          "reset_at": 1784487824
+        },
+        "secondary_window": null
+      }
+    }
+  ],
+  "rate_limit_reset_credits": {
+    "available_count": 1,
+    "total_earned_count": 1,
+    "credits": []
+  },
+  "token_usage_profile": {
+    "stats": {
+      "lifetime_tokens": 14755515284,
+      "daily_usage_buckets": [
+        {
+          "start_date": "2026-07-12",
+          "tokens": 439941815
+        }
+      ],
+      "weekly_usage_buckets": [
+        {
+          "start_date": "2026-07-06",
+          "tokens": 3382115315
+        }
+      ]
+    },
+    "metadata": {
+      "stats_as_of": "2026-07-12",
+      "generated_at": "2026-07-13T02:09:15.016506Z",
+      "stats_error": null
+    }
+  }
+}

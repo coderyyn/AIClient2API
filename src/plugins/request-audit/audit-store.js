@@ -1,0 +1,152 @@
+import fs from 'fs';
+import { promises as fsp } from 'fs';
+import path from 'path';
+import readline from 'readline';
+
+function toDate(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function dateKeyFromTimestamp(value) {
+    const date = toDate(value) || new Date();
+    return date.toISOString().slice(0, 10);
+}
+
+function isAuditFile(name) {
+    return /^audit-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name);
+}
+
+function archiveTimestamp(value = new Date()) {
+    return value.toISOString().replace(/[-:]/g, '').replace('.', '');
+}
+
+export class RequestAuditStore {
+    constructor({
+        dir = path.join(process.cwd(), 'configs', 'request-audit'),
+        archiveDir,
+        retentionHours = 24,
+        maxFileBytes = 100 * 1024 * 1024
+    } = {}) {
+        this.dir = dir;
+        this.archiveDir = archiveDir || path.join(this.dir, 'archived-large');
+        this.retentionHours = Number(retentionHours) || 24;
+        this.maxFileBytes = Number(maxFileBytes) || 100 * 1024 * 1024;
+    }
+
+    getFilePath(timestamp = new Date()) {
+        return path.join(this.dir, `audit-${dateKeyFromTimestamp(timestamp)}.jsonl`);
+    }
+
+    async append(event) {
+        await fsp.mkdir(this.dir, { recursive: true });
+        const filePath = this.getFilePath(event?.timestamp);
+        const line = `${JSON.stringify(event)}\n`;
+        await this.rotateIfNeeded(filePath, Buffer.byteLength(line, 'utf8'));
+        await fsp.appendFile(filePath, line, { encoding: 'utf8', mode: 0o600 });
+    }
+
+    async query(filters = {}) {
+        const since = toDate(filters.since);
+        const until = toDate(filters.until);
+        const files = await this.listFiles();
+        const rows = [];
+        const limit = Math.min(Math.max(Number(filters.limit) || 2000, 0), 2000);
+
+        for (const filePath of files) {
+            try {
+                for await (const event of this.readEvents(filePath)) {
+                    if (!this.matches(event, { ...filters, since, until })) continue;
+                    rows.push(event);
+                    if (limit && rows.length >= limit) break;
+                }
+            } catch (_error) {
+                continue;
+            }
+            if (limit && rows.length >= limit) break;
+        }
+
+        rows.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+        return limit ? rows.slice(0, limit) : rows;
+    }
+
+    async rotateIfNeeded(filePath, incomingBytes = 0) {
+        const maxFileBytes = Number(this.maxFileBytes);
+        if (!Number.isFinite(maxFileBytes) || maxFileBytes <= 0) return;
+
+        const stat = await fsp.stat(filePath).catch(error => {
+            if (error?.code === 'ENOENT') return null;
+            throw error;
+        });
+        if (!stat?.isFile() || stat.size + incomingBytes <= maxFileBytes) return;
+
+        await fsp.mkdir(this.archiveDir, { recursive: true, mode: 0o700 });
+        const destination = await this.getArchivePath(filePath);
+        await fsp.rename(filePath, destination).catch(error => {
+            if (error?.code !== 'ENOENT') throw error;
+        });
+    }
+
+    async getArchivePath(filePath) {
+        const baseName = `${path.basename(filePath)}.${archiveTimestamp()}`;
+        let destination = path.join(this.archiveDir, baseName);
+        for (let index = 1; index < 1000; index += 1) {
+            if (!fs.existsSync(destination)) return destination;
+            destination = path.join(this.archiveDir, `${baseName}.${index}`);
+        }
+        return destination;
+    }
+
+    async *readEvents(filePath) {
+        const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+        const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        try {
+            for await (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    yield JSON.parse(line);
+                } catch (_error) {
+                    // Ignore corrupted partial lines instead of failing the whole query.
+                }
+            }
+        } finally {
+            lines.close();
+            stream.destroy();
+        }
+    }
+
+    matches(event, filters) {
+        const timestamp = toDate(event?.timestamp);
+        if (filters.since && timestamp && timestamp < filters.since) return false;
+        if (filters.until && timestamp && timestamp >= filters.until) return false;
+        if (filters.keyHash && event?.potluckKey?.hash !== filters.keyHash) return false;
+        if (filters.keyPrefix && event?.potluckKey?.prefix !== filters.keyPrefix) return false;
+        if (filters.requestId && event?.requestId !== filters.requestId) return false;
+        if (filters.model && event?.request?.model !== filters.model) return false;
+        if (filters.provider && event?.request?.toProvider !== filters.provider) return false;
+        if (filters.outcome && event?.status?.outcome !== filters.outcome) return false;
+        return true;
+    }
+
+    async listFiles() {
+        if (!fs.existsSync(this.dir)) return [];
+        const entries = await fsp.readdir(this.dir, { withFileTypes: true });
+        return entries
+            .filter(entry => entry.isFile() && isAuditFile(entry.name))
+            .map(entry => path.join(this.dir, entry.name))
+            .sort();
+    }
+
+    async cleanup(now = new Date()) {
+        if (!fs.existsSync(this.dir)) return;
+        const cutoff = toDate(now).getTime() - this.retentionHours * 60 * 60 * 1000;
+        const files = await this.listFiles();
+        for (const filePath of files) {
+            const match = path.basename(filePath).match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+            const fileDate = match ? new Date(`${match[1]}T23:59:59.999Z`) : null;
+            if (fileDate && fileDate.getTime() < cutoff) {
+                await fsp.unlink(filePath).catch(() => {});
+            }
+        }
+    }
+}

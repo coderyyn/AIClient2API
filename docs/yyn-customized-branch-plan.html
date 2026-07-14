@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIClient-2-API 定制化分支改动方案</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-soft: #eef3f8;
+      --text: #1d2633;
+      --muted: #5d6b7a;
+      --line: #d8e0e8;
+      --blue: #175cd3;
+      --blue-soft: #e8f0ff;
+      --green: #087443;
+      --green-soft: #e8f7ef;
+      --amber: #925400;
+      --amber-soft: #fff4df;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --purple: #6941c6;
+      --purple-soft: #f2edff;
+      --radius: 8px;
+      --shadow: 0 1px 2px rgba(22, 34, 51, 0.08);
+      --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 56px;
+    }
+
+    header {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin: 0 0 8px;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      font-size: clamp(28px, 4vw, 40px);
+      line-height: 1.16;
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 880px;
+      color: var(--muted);
+      margin: 14px 0 0;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .meta {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfe;
+      padding: 12px 14px;
+      min-height: 80px;
+    }
+
+    .meta dt {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 0 0 4px;
+    }
+
+    .meta dd {
+      margin: 0;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      margin: 16px 0 0;
+      background: rgba(247, 248, 251, 0.94);
+      border-bottom: 1px solid var(--line);
+      padding: 10px 0;
+      backdrop-filter: blur(10px);
+    }
+
+    .nav-inner {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    .nav-inner a {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 7px 12px;
+    }
+
+    main {
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    h2 {
+      font-size: 22px;
+      line-height: 1.28;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 17px;
+      margin: 18px 0 8px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    .lead {
+      color: var(--muted);
+      max-width: 900px;
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .status {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
+    .status strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .status span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+
+    .badge.green { background: var(--green-soft); color: var(--green); }
+    .badge.blue { background: var(--blue-soft); color: var(--blue); }
+    .badge.amber { background: var(--amber-soft); color: var(--amber); }
+    .badge.red { background: var(--red-soft); color: var(--red); }
+    .badge.purple { background: var(--purple-soft); color: var(--purple); }
+
+    .decision-list,
+    .task-list {
+      display: grid;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .decision-list li,
+    .task-list li {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfe;
+      padding: 12px 14px;
+    }
+
+    .decision-list strong,
+    .task-list strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .three-col {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfe;
+      padding: 14px;
+    }
+
+    .panel h3 {
+      margin-top: 0;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      margin-top: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+      background: #ffffff;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 11px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-soft);
+      font-size: 13px;
+      color: #334155;
+      font-weight: 800;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      background: #eef2f7;
+      border: 1px solid #d9e1ea;
+      border-radius: 6px;
+      padding: 1px 5px;
+      word-break: break-word;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: #111827;
+      color: #f8fafc;
+      border-radius: var(--radius);
+      padding: 14px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .flow-step {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfe;
+      padding: 12px;
+    }
+
+    .flow-step b {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .note {
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 12px 14px;
+      color: #183153;
+      margin-top: 12px;
+    }
+
+    .warning {
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+      color: #503100;
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+      color: #123d2a;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .foot {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 18px;
+      text-align: center;
+    }
+
+    @media (max-width: 920px) {
+      .meta-grid,
+      .status-row,
+      .three-col,
+      .flow {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        padding: 16px 12px 40px;
+      }
+
+      header,
+      section {
+        padding: 16px;
+      }
+
+      .meta-grid,
+      .status-row,
+      .three-col,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-inner {
+        padding: 0 12px;
+      }
+
+      .nav-inner a {
+        flex: 1 1 auto;
+        justify-content: center;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      nav {
+        position: static;
+        background: #ffffff;
+      }
+
+      section,
+      header {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Decision artifact</p>
+      <h1>AIClient-2-API 定制化分支改动方案</h1>
+      <p class="subtitle">目标是从干净上游主线建立长期定制分支，把本地已有特殊能力迁移进去，并新增 Codex 账号 token 用量、缓存命中率观测、API Potluck key 用量视图和可选 provider affinity。本文只描述要改什么，不包含真实账号、密钥或 token。</p>
+      <dl class="meta-grid">
+        <div class="meta">
+          <dt>Git 分支</dt>
+          <dd><code>yyn/customized-branch</code></dd>
+        </div>
+        <div class="meta">
+          <dt>中文显示名</dt>
+          <dd>定制化分支</dd>
+        </div>
+        <div class="meta">
+          <dt>当前基线</dt>
+          <dd><code>origin/main@7005774</code></dd>
+        </div>
+        <div class="meta">
+          <dt>验证环境</dt>
+          <dd><code>aiclient2api-image2-test</code></dd>
+        </div>
+      </dl>
+    </header>
+
+    <nav aria-label="页面导航">
+      <div class="nav-inner">
+        <a href="#decisions">决策闭环</a>
+        <a href="#progress">当前进度</a>
+        <a href="#branch">分支策略</a>
+        <a href="#merge">合并结果</a>
+        <a href="#local">本地能力清单</a>
+        <a href="#features">新增能力</a>
+        <a href="#cache-hit">缓存命中率</a>
+        <a href="#files">改动文件</a>
+        <a href="#tests">验证计划</a>
+      </div>
+    </nav>
+
+    <main>
+      <section id="decisions">
+        <h2>决策闭环</h2>
+        <p class="lead">用户已确认关键策略，当前没有必须阻塞实现的产品决策。本轮已补齐 Codex token 配额过滤、定时预热、官方 /usage token 字段解析和低命中提醒，后续重点是跑测试、重建本地容器并保持定制分支可持续合并上游。</p>
+        <div class="status-row">
+          <div class="status">
+            <strong>分支策略</strong>
+            <span>从干净 <code>origin/main</code> 新建分支，再迁移仍未进主线的本地能力。</span>
+          </div>
+          <div class="status">
+            <strong>工作流</strong>
+            <span>先补项目级 <code>AGENTS.md</code> 和 <code>.plans/</code>。</span>
+          </div>
+          <div class="status">
+            <strong>用量入口</strong>
+            <span>Codex 账号和 API Potluck key 分开做。</span>
+          </div>
+          <div class="status">
+            <strong>接口探测</strong>
+            <span>允许用启用的 Codex 账号做只读 usage 请求；官方 usage 缓存新增 1 小时 TTL。</span>
+          </div>
+          <div class="status">
+            <strong>容器验证</strong>
+            <span>允许重建并重启本地测试容器。</span>
+          </div>
+        </div>
+        <ul class="decision-list">
+          <li>
+            <strong><span class="badge green">已定</span> 配额只看 token</strong>
+            请求次数不参与剩余额度、不参与限额判断。请求次数只作为统计展示维度。
+          </li>
+          <li>
+            <strong><span class="badge green">已定</span> 早晨预热覆盖所有启用 Codex 账号</strong>
+            默认按 <code>06:30</code> 与 <code>11:30 Asia/Shanghai</code> 执行；每个启用 Codex 账号每个时间点触发 <code>2</code> 次轻量请求。启用口径只排除显式禁用账号，不因当前 unhealthy 跳过。
+          </li>
+          <li>
+            <strong><span class="badge green">已定</span> 定制分支不只做 usage 相关能力</strong>
+            日志统计/脱敏、图片接口增强、provider weight 等本地能力已迁移；请求体限制已经进入最新主线，作为上游基线继承，不重复迁移。
+          </li>
+        </ul>
+      </section>
+
+      <section id="progress">
+        <h2>当前实现进度</h2>
+        <div class="three-col">
+          <div class="panel">
+            <h3>已完成并提交</h3>
+            <p><span class="badge green">Done</span> 分支骨架、官方 usage 缓存 1h TTL、手动刷新绕过缓存、Codex 账号+模型+日期本地统计、cache hit ratio、API Potluck key 本周/每日/累计 token 视图、可选 Codex sticky provider、provider weight、日志脱敏/保留、图片接口增强。</p>
+          </div>
+          <div class="panel">
+            <h3>默认策略</h3>
+            <p><span class="badge blue">Observe first</span> sticky provider 已实现但默认关闭：<code>CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=false</code>。开启后仅 API Potluck key 的 Codex 请求按 key 固定到健康账号，账号不可用时自动 fallback。</p>
+          </div>
+          <div class="panel">
+            <h3>本轮新增</h3>
+            <p><span class="badge blue">Pending commit</span> Codex 5h/周 token 配额过滤、<code>06:30</code>/<code>11:30</code> 定时预热、官方 Codex <code>/usage</code> token 字段解析、低 cache hit ratio 告警 UI。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="merge">
+        <h2>最新主线合并结果</h2>
+        <p class="lead">已先执行上游同步，把最新 <code>origin/main</code> 合入本地 <code>main</code>。这个动作只用于更新本地基线认知；后续定制分支仍按 1B 从干净 <code>origin/main</code> 新建，再挑选迁移本地能力。</p>
+        <div class="three-col">
+          <div class="panel">
+            <h3>合并提交</h3>
+            <p><code>8a763f3</code> Merge remote-tracking branch <code>origin/main</code></p>
+            <p class="small">合入后本地 <code>main</code> 已包含上游 <code>v3.2.7</code>。</p>
+          </div>
+          <div class="panel">
+            <h3>上游已包含</h3>
+            <p><code>#641</code> 请求体大小上限已合入主线；<code>#645</code> Antigravity model name fix 和 Gemini thought 转换也已在当前基线。</p>
+          </div>
+          <div class="panel">
+            <h3>冲突处理</h3>
+            <p>旧 <code>tests/request-body.test.js</code> 跟随上游删除；本地图片接口增强测试 <code>tests/image-edits-multipart.test.js</code> 保留为待迁移资产。</p>
+          </div>
+        </div>
+        <div class="note warning">
+          合并前已创建备份分支并保存 stash。当前工作树恢复了本地未提交改动，stash 仍保留作为安全回退点，暂不删除。
+        </div>
+      </section>
+
+      <section id="branch">
+        <h2>分支策略</h2>
+        <p class="lead">执行用户选择的 1B：从上游干净主线开分支，再把本地已有功能按主题迁移进去。这样后续从 <code>origin/main</code> 合并更新更清晰。</p>
+        <div class="flow" aria-label="分支处理流程">
+          <div class="flow-step">
+            <b>1. 保护现场</b>
+            当前脏 <code>main</code> 先做备份分支和 WIP 安全提交，保证未提交改动不丢。
+          </div>
+          <div class="flow-step">
+            <b>2. 新建定制分支</b>
+            从 <code>origin/main</code> 创建 <code>yyn/customized-branch</code>。
+          </div>
+          <div class="flow-step">
+            <b>3. 迁移本地功能</b>
+            按主题 cherry-pick 或拆 patch，不把无关历史硬塞进来。
+          </div>
+          <div class="flow-step">
+            <b>4. 新增 Codex 能力</b>
+            做 token 统计、配额路由、预热、UI 展示和 API Potluck key 汇总。
+          </div>
+          <div class="flow-step">
+            <b>5. 合并上游</b>
+            后续固定从 <code>origin/main</code> merge/rebase 到此分支并跑测试。
+          </div>
+        </div>
+        <div class="note warning">
+          当前已合并最新 <code>origin/main</code>，本地 <code>main</code> 现在相对上游为 <code>ahead 4</code>，并保留本地未提交改动。执行定制分支时仍不能直接 reset，需要从干净上游基线新建分支后再迁移。
+        </div>
+      </section>
+
+      <section id="local">
+        <h2>本地能力与上游基线清单</h2>
+        <p class="lead">这里区分“上游主线已提供”和“已迁移到定制分支”的能力，避免把已经合并的请求体限制重复实现。#642 已被上游关闭，因此 provider weight 已作为本地长期能力落入定制分支。</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>主题</th>
+                <th>当前状态</th>
+                <th>迁移动作</th>
+                <th>关键文件</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>请求体大小上限</td>
+                <td><span class="badge green">上游已合入</span><br>PR #641 已在 <code>origin/main</code>。</td>
+                <td>定制分支直接继承上游实现，不作为本地特有功能重复迁移；只核对本地额外测试是否仍有保留价值。</td>
+                <td><code>src/core/config-manager.js</code><br><code>src/services/api-manager.js</code><br><code>tests/config-manager-request-body.test.js</code></td>
+              </tr>
+              <tr>
+                <td>provider 节点权重</td>
+                <td><span class="badge green">已迁移</span><br>本地提交 <code>1b36823</code></td>
+                <td>作为定制分支能力保留。默认权重 <code>1</code>；配置 <code>providerWeight</code> 后，高权重节点按成功计数比例获得更多流量。</td>
+                <td><code>src/providers/provider-pool-manager.js</code><br><code>src/utils/provider-config-normalizer.js</code><br><code>static/app/modal.js</code></td>
+              </tr>
+              <tr>
+                <td>日志保留天数</td>
+                <td><span class="badge green">已迁移</span><br>本地提交 <code>1dc481a</code></td>
+                <td>已补齐配置、UI、保存逻辑和 logger 清理逻辑，默认 <code>7</code> 天。</td>
+                <td><code>configs/config.json.example</code><br><code>src/core/config-manager.js</code><br><code>src/utils/logger.js</code><br><code>static/app/config-manager.js</code></td>
+              </tr>
+              <tr>
+                <td>AI Monitor 日志脱敏</td>
+                <td><span class="badge green">已迁移</span><br>本地提交 <code>1dc481a</code></td>
+                <td>已迁移 <code>log-sanitizer</code>，把 base64/data URI/长字符串转为摘要，避免日志爆量和泄漏。</td>
+                <td><code>src/plugins/ai-monitor/index.js</code><br><code>src/utils/log-sanitizer.js</code><br><code>tests/ai-monitor-log-sanitizer.test.js</code></td>
+              </tr>
+              <tr>
+                <td>Codex 图片参数增强</td>
+                <td><span class="badge green">已迁移</span><br>本地提交 <code>1dc481a</code></td>
+                <td>已保留 <code>quality</code>、<code>background</code>、<code>output_format</code>、<code>input_fidelity</code> 等 image tool 参数。</td>
+                <td><code>src/providers/openai/codex-core.js</code><br><code>src/services/api-manager.js</code><br><code>tests/image-edits-multipart.test.js</code><br><code>tests/codex-image-quality.test.js</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="features">
+        <h2>新增能力设计</h2>
+        <div class="three-col">
+          <div class="panel">
+            <h3>Codex 账号 token 统计</h3>
+            <p>在 <code>model-usage-stats</code> 中新增账号维度，键为 <code>openai-codex-oauth:uuid</code>。保留现有 provider/model/daily 聚合，新增 <code>accounts</code>、<code>daily[date].models</code> 和 <code>daily[date].accounts</code>。</p>
+            <p><span class="badge blue">入口</span> 用量查询页查看 Codex 账号。</p>
+          </div>
+          <div class="panel">
+            <h3>Codex token 配额路由</h3>
+            <p>在 provider pool 选择前过滤超额账号。字段只对 Codex 生效：<code>codexMax5hTokens</code> 和 <code>codexMaxWeeklyTokens</code>。超额账号不可选，所有账号超额时返回明确 429。</p>
+            <p><span class="badge green">依据</span> 只看 token，不看请求次数。</p>
+          </div>
+          <div class="panel">
+            <h3>早晨 5h 窗口预热</h3>
+            <p>新增 Codex prewarm 服务，每天按配置时间遍历所有启用 Codex 账号，做低成本请求以提前触发 5h 窗口。按账号、日期、时间点记录执行状态，避免服务重启后重复触发同一窗口。</p>
+            <p><span class="badge green">默认</span> <code>06:30</code> 与 <code>11:30 Asia/Shanghai</code>，每账号每窗口 <code>2</code> 次。</p>
+          </div>
+          <div class="panel">
+            <h3>官方 Codex /usage 接入</h3>
+            <p>复用 <code>CodexApiService</code> 的鉴权信息，只做只读 usage 查询。格式化层已兼容多种 daily/weekly/total token 字段形态；接口不可用或字段变化时保留原 rate limit 百分比展示。</p>
+            <p><span class="badge green">已完成</span> 官方 usage 查询默认缓存 <code>1h</code>；现有用量页刷新按钮和 <code>refresh=true</code> 可绕过缓存。</p>
+          </div>
+          <div class="panel">
+            <h3>API Potluck key 用量视图</h3>
+            <p>在插件管理端增加 key 维度的每日、本周和累计用量，不要求用户端输入 key 才能看。管理端可直接查看分发出去的 key 的每日 token、累计 token、缓存命中率和请求次数。</p>
+            <p><span class="badge blue">入口</span> API Potluck 插件页。</p>
+          </div>
+          <div class="panel">
+            <h3>排序与筛选</h3>
+            <p>API Potluck 管理端默认按今日 Token 排序，提供本周 Token、累计 Token、调用次数、QPS/RPM 等下拉选项。</p>
+            <p><span class="badge green">已完成</span> token 优先。</p>
+          </div>
+        </div>
+        <div class="note ok">
+          这套设计的核心是同一份 token 事实源服务多个入口：Codex 账号用于路由和容量判断，API Potluck key 用于分发后审计，两者不要混成一个概念。
+        </div>
+      </section>
+
+      <section id="cache-hit">
+        <h2>缓存命中率排查项</h2>
+        <p class="lead">新增排查主题：美国号池今天额度消耗明显变快，但 total token 与之前接近甚至更少，优先验证是否是 prompt cache 命中率下降导致实际消耗升高。</p>
+        <div class="three-col">
+          <div class="panel">
+            <h3>核心指标</h3>
+            <p>按 Codex 账号、模型、日期展示 <code>cachedTokens</code>、<code>promptTokens</code>、<code>totalTokens</code> 和 <code>cacheHitRatio</code>。</p>
+            <p><span class="badge blue">公式</span> <code>cachedTokens / promptTokens</code></p>
+          </div>
+          <div class="panel">
+            <h3>排查假设</h3>
+            <p>最近改动可能改变转换后的 prompt、tools、metadata、message 顺序或路由分散度，导致原本 50% 以上的缓存命中下降。</p>
+          </div>
+          <div class="panel">
+            <h3>方案联动</h3>
+            <p>现有统计无法持久回答“账号 + 模型 + 日期”的命中率，需要把 cache hit ratio、账号维度和模型日期维度加入定制分支。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>远端验证项</th>
+                <th>结果</th>
+                <th>结论</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2026-06-16 每日总命中率</td>
+                <td><code>15.18%</code></td>
+                <td>显著低于 6 月初多日 <code>50%+</code> 基线，用户观察成立。</td>
+              </tr>
+              <tr>
+                <td>当前容器日志样本</td>
+                <td><code>gpt-5.5: 18.01%</code>，<code>gpt-5.4: 90.33%</code></td>
+                <td>不是所有模型都低，主要由 <code>gpt-5.5</code> 拉低。</td>
+              </tr>
+              <tr>
+                <td>账号维度样本</td>
+                <td><code>8dec7a3e: 11.13%</code>，<code>b4a54e62: 36.73%</code></td>
+                <td>一个账号显著更低；账号只以哈希展示，不暴露真实账号。</td>
+              </tr>
+              <tr>
+                <td>路由分散假设</td>
+                <td>当前样本只看到 2 个账号承担流量</td>
+                <td>不像是大量账号随机分散导致，但账号切换可能加剧下降。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          详细排查方案已持久化到 <code>docs/yyn-codex-usage-cache-hit-investigation.md</code>。远端验证确认今天低命中，方案更新为：必须加入账号+模型+日期维度的 cache hit ratio；路由策略先做观测和告警，不默认自动按命中率调度。
+        </div>
+      </section>
+
+      <section id="architecture">
+        <h2>数据流</h2>
+        <p class="lead">用量统计要从请求处理链路拿到真实选中的 provider uuid，否则只能按 provider 类型统计，无法回答“某个 Codex 账号今天用了多少 token”。</p>
+        <pre aria-label="数据流示意">请求进入
+  -> provider pool 选择 Codex 账号
+  -> common.js / api-manager.js hook 透传 providerUuid 与 providerName
+  -> model-usage-stats finalizeRequest 写入账号维度 daily/weekly/total
+  -> provider-pool-manager 读取 token 窗口统计，过滤超额账号
+  -> /api/usage 展示 Codex 账号用量
+  -> api-potluck 插件页展示分发 key 的每日与累计用量</pre>
+        <div class="two-col">
+          <div class="panel">
+            <h3>本地统计窗口</h3>
+            <p><code>5h</code> 使用滚动窗口 token 统计，服务 provider 选择过滤；每日、每周、累计用于 UI 展示和诊断。</p>
+          </div>
+          <div class="panel">
+            <h3>官方 usage 数据</h3>
+            <p>只读获取 Codex 账号官方 daily/weekly/total；字段稳定后做缓存，避免每次打开页面都打官方接口。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="files">
+        <h2>预计改动文件</h2>
+        <p class="lead">文件会按切片提交，不把所有改动堆成一个大提交。下面是预期范围，实际实现时可能按现有代码结构微调。</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>切片</th>
+                <th>后端文件</th>
+                <th>前端/配置文件</th>
+                <th>测试文件</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>项目接入</td>
+                <td><code>AGENTS.md</code><br><code>.plans/current.md</code><br><code>.plans/status.json</code></td>
+                <td>无业务 UI 改动</td>
+                <td>无</td>
+              </tr>
+              <tr>
+                <td>迁移本地基础能力</td>
+                <td><code>src/core/config-manager.js</code><br><code>src/utils/logger.js</code><br><code>src/utils/log-sanitizer.js</code><br><code>src/services/api-manager.js</code></td>
+                <td><code>configs/config.json.example</code><br><code>static/app/config-manager.js</code><br><code>static/components/section-config.html</code><br><span class="small">请求体限制字段来自上游，只迁移日志保留等本地字段。</span></td>
+                <td><code>tests/image-edits-multipart.test.js</code><br><code>tests/logger-retention.test.js</code><br><code>tests/ai-monitor-log-sanitizer.test.js</code></td>
+              </tr>
+              <tr>
+                <td>Codex usage 与账号统计</td>
+                <td><code>src/plugins/model-usage-stats/stats-manager.js</code><br><code>src/plugins/model-usage-stats/api-routes.js</code><br><code>src/utils/common.js</code><br><code>src/services/api-manager.js</code><br><code>src/providers/openai/codex-core.js</code></td>
+                <td><code>static/app/usage-manager.js</code><br><code>static/model-usage-stats.html</code><br><code>static/components/section-usage.html</code></td>
+                <td>已新增 Codex usage、账号+模型+日期维度统计、cache hit ratio、官方 usage 1 小时 TTL、强制刷新和 token 字段格式化测试</td>
+              </tr>
+              <tr>
+                <td>Codex 配额路由</td>
+                <td><code>src/providers/provider-pool-manager.js</code><br><code>src/utils/provider-config-normalizer.js</code></td>
+                <td><code>static/app/modal.js</code><br><code>static/app/utils.js</code><br><code>static/app/i18n.js</code></td>
+                <td>新增 provider pool token quota 选择测试</td>
+              </tr>
+              <tr>
+                <td>Codex 预热</td>
+                <td><code>src/services/codex-prewarm-service.js</code><br><code>src/services/api-server.js</code> 启动挂载</td>
+                <td><code>configs/config.json.example</code><br><code>src/core/config-manager.js</code><br><code>src/ui-modules/config-api.js</code></td>
+                <td>已新增默认时间、全启用账号覆盖、每账号 2 次和同窗口去重测试</td>
+              </tr>
+              <tr>
+                <td>API Potluck key 用量</td>
+                <td><code>src/plugins/api-potluck/key-manager.js</code><br><code>src/plugins/api-potluck/api-routes.js</code></td>
+                <td>API Potluck 插件静态页和脚本</td>
+                <td>新增 key 每日/累计管理端 API 测试</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tests">
+        <h2>验证计划</h2>
+        <ul class="task-list">
+          <li>
+            <strong>单元测试</strong>
+            已新增 token 窗口统计、provider token quota、prewarm 去重、官方 usage token 格式化测试；收口前继续跑集中 Jest 回归。
+          </li>
+          <li>
+            <strong>只读官方 usage 探测</strong>
+            对启用 Codex 账号调用只读 usage 接口，记录字段结构和错误语义；官方 usage 默认缓存 1 小时，并验证现有手动刷新能绕过缓存。不打印 token、access token、cookie 或账号敏感原文。
+          </li>
+          <li>
+            <strong>缓存命中率排查</strong>
+            对美国号池抽取最近 24 小时和 7 天的 token 统计，按账号、模型、日期计算 <code>cachedTokens / promptTokens</code>。远端已确认 2026-06-16 只有 <code>15.18%</code>，主要由 <code>gpt-5.5</code> 和账号哈希 <code>8dec7a3e</code> 拉低。
+          </li>
+          <li>
+            <strong>本地容器 smoke test</strong>
+            重建并重启 <code>aiclient2api-image2-test</code>，验证配置页、用量页、API Potluck 插件页、Codex 路由和图片接口。
+          </li>
+          <li>
+            <strong>上游同步回归</strong>
+            后续每次合并 <code>origin/main</code> 后先跑测试，再启动容器 smoke，重点看 provider pool 和配置字段冲突。
+          </li>
+        </ul>
+        <div class="note">
+          实现完成前不会 push，也不会合并 PR；所有真实外部调用限定为已授权账号的只读 usage 探测和本地测试容器验证。
+        </div>
+      </section>
+
+      <section id="next">
+        <h2>下一步执行清单</h2>
+        <ol>
+          <li>跑集中 Jest 与语法检查，确认本轮新增实现没有破坏现有 usage/cache/sticky/weight 测试。</li>
+          <li>重建并验证 <code>aiclient2api-image2-test</code>，重点看健康检查、用量页、API Potluck 插件页、Codex 路由和图片接口。</li>
+          <li>把本轮新增能力作为一个原子提交留在 <code>yyn/customized-branch</code>，不 push。</li>
+          <li>后续合并上游 <code>origin/main</code> 时继续以 token 口径为准；请求次数只保留为统计展示。</li>
+        </ol>
+        <p class="small">更新时间：2026-06-16 23:25 +08:00；当前分支 <code>yyn/customized-branch</code> 已完成观测、Potluck token-first、sticky provider、provider weight、日志和图片增强，并新增 Codex token 配额、定时预热、官方 usage token 解析和低命中提醒。本文为本地只读决策制品，不包含密钥、cookie、真实 token 或账号凭据。</p>
+      </section>
+    </main>
+
+    <p class="foot">AIClient-2-API 定制化分支方案</p>
+  </div>
+</body>
+</html>

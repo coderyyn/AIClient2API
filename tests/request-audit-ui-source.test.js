@@ -1,0 +1,58 @@
+import { readFileSync } from 'fs';
+
+describe('request audit ui source', () => {
+  test('static report references summary api and context usage rows', () => {
+    const html = readFileSync('static/request-audit.html', 'utf8');
+    expect(html).toContain('/api/request-audit/summary');
+    expect(html).toContain('/api/potluck/keys');
+    expect(html).toContain('keySelect');
+    expect(html).toContain('选择 Potluck Key');
+    expect(html).toContain('手动输入完整 key');
+    expect(html).toContain('本地计算 hash');
+    expect(html).toContain('crypto.subtle.digest');
+    expect(html).toContain("localStorage.getItem('authToken')");
+    expect(html).toContain('Authorization');
+    expect(html).toContain('keyRelatedNames');
+    expect(html).toContain('关联：');
+    expect(html).toContain('context-stack');
+    expect(html).toContain('按密钥和时间窗复盘请求缓存率');
+    expect(html).toContain('缓存命中率 =');
+    expect(html).toContain('逐请求明细');
+    expect(html).toContain('单次请求 token 分类');
+    expect(html).toContain('type="datetime-local"');
+    expect(html).toContain('默认最近 20 分钟');
+    expect(html).toContain('data-range-minutes="20"');
+    expect(html).toContain('data-range-minutes="60"');
+    expect(html).toContain('data-range-today="true"');
+    expect(html).toContain('value="200"');
+    expect(html).toContain('localDatetimeToIso');
+    expect(html).toContain('分析延迟');
+    expect(html).toContain('可能原因');
+    expect(html).toContain('prefix_changed');
+    expect(html).toContain('tools_changed');
+    expect(html).toContain('account_changed');
+    expect(html).toContain('analysisFreshness');
+    expect(html).toContain('诊断结果仅供排查');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('data-view="audit"');
+    expect(html).toContain('data-view="capture"');
+    expect(html).toContain('auditPanel');
+    expect(html).toContain('capturePanel');
+    expect(html).toContain('showView');
+    expect(html).toContain('aria-selected');
+    expect(html).toContain('缓存审计');
+    expect(html).toContain('原始请求采集');
+    expect(html).toContain('/api/request-audit/raw-capture');
+    expect(html).toContain('rawCaptureKeySelect');
+    expect(html).toContain('rawCaptureKeyInput');
+    expect(html).toContain('resolveRawCaptureKeyHash');
+    expect(html).toContain('rawCaptureManualHelp');
+    expect(html).toContain('手动输入完整采集 key');
+    expect(html).toContain('保存采集设置');
+    expect(html).toContain('会保存原始 prompt');
+    expect(html).toContain('REQUEST_AUDIT_RAW_CAPTURE');
+    for (const id of ['instructions', 'tools', 'conversation', 'attachments', 'cached_input', 'output', 'reasoning']) {
+      expect(html).toContain(id);
+    }
+  });
+});
