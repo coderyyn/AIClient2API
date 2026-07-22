@@ -45,6 +45,12 @@ function initEventStream() {
         window.dispatchEvent(new CustomEvent('oauth_success_event', { detail: data }));
     });
 
+    newEventSource.addEventListener('oauth_error', (event) => {
+        const data = JSON.parse(event.data);
+        showToast(t('common.error'), data.error || t('oauth.error.process'), 'error');
+        window.dispatchEvent(new CustomEvent('oauth_error_event', { detail: data }));
+    });
+
     newEventSource.addEventListener('provider_update', (event) => {
         const data = JSON.parse(event.data);
         handleProviderUpdate(data);

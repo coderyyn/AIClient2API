@@ -24,15 +24,26 @@ jest.mock('../src/providers/adapter.js', () => ({
     serviceInstances: {}
 }));
 
+jest.mock('axios', () => ({
+    __esModule: true,
+    default: {
+        get: jest.fn()
+    }
+}));
+
 import { serviceInstances } from '../src/providers/adapter.js';
+import axios from 'axios';
+import { parseProxyUrl } from '../src/utils/proxy-utils.js';
 import {
     handleGetProxyPools,
-    handleSaveProxyPools
+    handleSaveProxyPools,
+    handleTestProxyPool
 } from '../src/ui-modules/proxy-pool-api.js';
 
 let tempDir = null;
 
 afterEach(() => {
+    jest.clearAllMocks();
     Object.keys(serviceInstances).forEach(key => delete serviceInstances[key]);
     if (tempDir) {
         rmSync(tempDir, { recursive: true, force: true });
@@ -116,6 +127,33 @@ describe('proxy pool API', () => {
         ]);
         expect(serviceInstances['openai-codex-oauthcodex-a']).toBeUndefined();
         expect(serviceInstances['openai-codex-oauthcodex-b']).toBeDefined();
+    });
+
+    test('tests the explicitly selected proxy pool node even when IP binding is available', async () => {
+        const currentConfig = makeTempConfig();
+        const selectedProxyUrl = 'http://127.0.0.1:17892';
+        const boundProxyUrl = 'http://127.0.0.1:17891';
+        writeFileSync(currentConfig.PROXY_POOLS_FILE_PATH, JSON.stringify([{
+            id: 'selected-node',
+            name: 'Selected node',
+            url: selectedProxyUrl,
+            enabled: true,
+            expectedIp: '203.0.113.20'
+        }], null, 2), 'utf8');
+        currentConfig.ipNodeProxy = {
+            getProxyUrl: jest.fn(() => boundProxyUrl)
+        };
+        axios.get.mockResolvedValue({ data: { ip: '203.0.113.20' } });
+        const res = makeRes();
+
+        await handleTestProxyPool(reqWithBody({ proxyId: 'selected-node' }), res, currentConfig);
+
+        const axiosConfig = axios.get.mock.calls[0][1];
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ ok: true, proxyId: 'selected-node', matched: true });
+        expect(axiosConfig.httpsAgent).toBe(parseProxyUrl(selectedProxyUrl).httpsAgent);
+        expect(axiosConfig.httpsAgent).not.toBe(parseProxyUrl(boundProxyUrl).httpsAgent);
+        expect(currentConfig.ipNodeProxy.getProxyUrl).not.toHaveBeenCalled();
     });
 });
 

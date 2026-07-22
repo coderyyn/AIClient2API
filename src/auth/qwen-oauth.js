@@ -206,6 +206,7 @@ async function pollQwenToken(deviceCode, codeVerifier, interval = 5, expiresIn =
                 // 广播授权成功事件
                 broadcastEvent('oauth_success', {
                     provider: 'openai-qwen-oauth',
+                    sessionId: taskId,
                     credPath: credPath,
                     relativePath: relativePath,
                     timestamp: new Date().toISOString()
@@ -318,6 +319,7 @@ export async function handleQwenOAuth(currentConfig, options = {}) {
                 // 广播授权失败事件
                 broadcastEvent('oauth_error', {
                     provider: 'openai-qwen-oauth',
+                    sessionId: taskId,
                     error: error.message,
                     timestamp: new Date().toISOString()
                 });
@@ -327,6 +329,7 @@ export async function handleQwenOAuth(currentConfig, options = {}) {
             authUrl: deviceAuth.verification_uri_complete,
             authInfo: {
                 provider: 'openai-qwen-oauth',
+                sessionId: taskId,
                 deviceCode: deviceAuth.device_code,
                 userCode: deviceAuth.user_code,
                 verificationUri: deviceAuth.verification_uri,

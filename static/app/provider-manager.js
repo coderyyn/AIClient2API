@@ -11,6 +11,11 @@ import { updateUsageProviderConfigs } from './usage-manager.js';
 import { updateConfigProviderConfigs } from './config-manager.js';
 import { loadConfigList, updateProviderFilterOptions } from './upload-config-manager.js';
 import { setServiceMode } from './event-handlers.js';
+import {
+    createOAuthPopupSession,
+    isExpectedCodexOAuthCallbackMessage,
+    isExpectedOAuthPopupCompleteMessage
+} from './oauth-popup.js';
 
 // 保存初始服务器时间和运行时间
 let initialServerTime = null;
@@ -887,104 +892,283 @@ async function handleGenerateAuthUrl(providerType) {
     await executeGenerateAuthUrl(providerType, {});
 }
 
-/**
- * 显示 Codex OAuth 认证方式选择对话框
- * @param {string} providerType - 提供商类型
- */
-async function showCodexAuthMethodSelector(providerType) {
-    let proxyOptionsHtml = '<option value="">不使用代理</option>';
+async function loadCodexAuthProxyChoices(initialProxyId = '') {
+    const normalizedInitialProxyId = String(initialProxyId || '').trim();
     let proxies = [];
+    let loadError = null;
+
     try {
         const response = await window.apiClient.get('/proxy-pools');
         proxies = Array.isArray(response?.proxies) ? response.proxies : [];
-        proxyOptionsHtml += proxies.map(proxy => {
-            const disabled = proxy.enabled === false ? 'disabled' : '';
-            const name = proxy.name || proxy.id;
-            const expectedIp = proxy.expectedIp ? ` / ${proxy.expectedIp}` : '';
-            const label = `${name} (${proxy.id}${expectedIp})${proxy.enabled === false ? ' - 已禁用' : ''}`;
-            return `<option value="${escapeHtml(proxy.id || '')}" data-proxy-name="${escapeHtml(name)}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled}>${escapeHtml(label)}</option>`;
-        }).join('');
     } catch (error) {
         console.warn('Failed to load proxy pools for Codex auth:', error);
+        loadError = error;
     }
 
+    const currentProxy = proxies.find(proxy => String(proxy?.id || '') === normalizedInitialProxyId);
+    const currentProxyUnavailable = Boolean(
+        !loadError && normalizedInitialProxyId && (!currentProxy || currentProxy.enabled === false)
+    );
+    const noProxySelected = normalizedInitialProxyId ? '' : 'selected';
+    let proxyOptionsHtml = `<option value="" ${noProxySelected}>${escapeHtml(t('oauth.codex.noProxy'))}</option>`;
+
+    if (normalizedInitialProxyId && !currentProxy) {
+        const missingCurrentProxyKey = loadError
+            ? 'oauth.codex.currentProxyPreserved'
+            : 'oauth.codex.currentProxyUnavailable';
+        const unavailableAttributes = loadError ? '' : 'data-current-unavailable="true" disabled';
+        proxyOptionsHtml += `
+            <option value="${escapeHtml(normalizedInitialProxyId)}" ${unavailableAttributes} selected>
+                ${escapeHtml(`${normalizedInitialProxyId} - ${t(missingCurrentProxyKey)}`)}
+            </option>
+        `;
+    }
+
+    proxyOptionsHtml += proxies.map(proxy => {
+        const proxyId = String(proxy?.id || '').trim();
+        const disabled = proxy.enabled === false ? 'disabled' : '';
+        const selected = proxyId === normalizedInitialProxyId ? 'selected' : '';
+        const name = proxy.name || proxyId;
+        const expectedIp = proxy.expectedIp ? ` / ${proxy.expectedIp}` : '';
+        const disabledSuffix = proxy.enabled === false ? ` - ${t('oauth.codex.proxyDisabled')}` : '';
+        const label = `${name} (${proxyId}${expectedIp})${disabledSuffix}`;
+        return `<option value="${escapeHtml(proxyId)}" data-proxy-name="${escapeHtml(name)}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled} ${selected}>${escapeHtml(label)}</option>`;
+    }).join('');
+
+    return {
+        proxies,
+        proxyOptionsHtml,
+        loadError,
+        currentProxyUnavailable
+    };
+}
+
+function renderCodexAuthProxySection({ proxyOptionsHtml, loadError, currentProxyUnavailable, isReauthorize }) {
+    const selectDisabled = loadError && isReauthorize ? 'disabled' : '';
+    const hintKey = isReauthorize ? 'oauth.codex.proxyHintReauthorize' : 'oauth.codex.proxyHintCreate';
+    const loadErrorKey = isReauthorize
+        ? 'oauth.codex.proxyLoadErrorReauthorize'
+        : 'oauth.codex.proxyLoadErrorCreate';
+    return `
+        <div class="form-group" style="padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb;">
+            <label for="codexAuthProxySelect" style="display: block; margin-bottom: 6px; font-weight: 600; color: #374151;">${t('oauth.codex.proxyLabel')}</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="codexAuthProxySelect" style="flex: 1; min-width: 0; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" ${selectDisabled}>
+                    ${proxyOptionsHtml}
+                </select>
+                <button type="button" id="codexAuthProxyTestButton" class="btn btn-secondary" style="white-space: nowrap;">
+                    <i class="fas fa-vial"></i> ${t('oauth.codex.proxyTest')}
+                </button>
+            </div>
+            <div id="codexAuthProxyTestResult" style="display: none; margin-top: 8px; padding: 8px; border-radius: 6px; font-size: 12px;"></div>
+            <div id="codexAuthProxyLoadError" style="display: ${loadError ? 'block' : 'none'}; margin-top: 8px; color: #b45309; font-size: 12px;">${t(loadErrorKey)}</div>
+            <div id="codexAuthCurrentProxyWarning" style="display: ${currentProxyUnavailable ? 'block' : 'none'}; margin-top: 8px; color: #b91c1c; font-size: 12px;">${t('oauth.codex.currentProxyUnavailable')}</div>
+            <div style="margin-top: 6px; font-size: 12px; color: #6b7280;">${t(hintKey)}</div>
+        </div>
+    `;
+}
+
+function bindCodexAuthProxyControls(modal, proxies = [], options = {}) {
+    const select = modal.querySelector('#codexAuthProxySelect');
+    const resultEl = modal.querySelector('#codexAuthProxyTestResult');
+    const testButton = modal.querySelector('#codexAuthProxyTestButton');
+    const currentProxyWarning = modal.querySelector('#codexAuthCurrentProxyWarning');
+    const startButton = options.startButton || null;
+    const preserveExistingProxy = options.preserveExistingProxy === true;
+    const methodButtons = Array.from(modal.querySelectorAll('.auth-method-btn'));
+    const selectInitiallyDisabled = select?.disabled === true;
+    let isProxyTestRunning = false;
+    let isBusy = false;
+
+    const updateControlState = () => {
+        const selectedOption = select?.selectedOptions?.[0] || null;
+        const selectedUnavailable = selectedOption?.disabled === true;
+        if (currentProxyWarning) {
+            currentProxyWarning.style.display = selectedUnavailable ? 'block' : 'none';
+        }
+        if (select) {
+            select.disabled = selectInitiallyDisabled || isBusy || isProxyTestRunning;
+        }
+        if (testButton) {
+            testButton.disabled = preserveExistingProxy || isBusy || isProxyTestRunning || !select?.value || selectedUnavailable;
+        }
+        if (startButton) {
+            startButton.disabled = isBusy || isProxyTestRunning || (preserveExistingProxy ? false : selectedUnavailable);
+        }
+        methodButtons.forEach(button => {
+            button.disabled = isBusy || isProxyTestRunning;
+        });
+    };
+
+    select?.addEventListener('change', () => {
+        if (resultEl) {
+            resultEl.style.display = 'none';
+            resultEl.innerHTML = '';
+        }
+        updateControlState();
+    });
+
+    testButton?.addEventListener('click', async () => {
+        isProxyTestRunning = true;
+        updateControlState();
+        try {
+            await testCodexAuthProxy(modal, proxies);
+        } finally {
+            isProxyTestRunning = false;
+            updateControlState();
+        }
+    });
+    updateControlState();
+
+    return {
+        preserveExistingProxy,
+        getProxyId: () => select?.value || '',
+        setBusy: (busy) => {
+            isBusy = busy === true;
+            updateControlState();
+        }
+    };
+}
+
+/**
+ * 显示 Codex OAuth 认证方式或更新授权对话框
+ * @param {string} providerType - 提供商类型
+ * @param {Object} context - create / reauthorize 上下文
+ */
+async function showCodexAuthMethodSelector(providerType, context = {}) {
+    if (document.querySelector('.codex-auth-selector-modal')) {
+        return;
+    }
+
+    const isReauthorize = context.mode === 'reauthorize';
+    const targetProviderUuid = String(context.targetProviderUuid || '').trim();
+    const initialProxyId = String(context.initialProxyId || '').trim();
+    const providerName = String(context.providerName || targetProviderUuid).trim();
     const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
+    modal.className = 'modal-overlay codex-auth-selector-modal';
     modal.style.display = 'flex';
-    
     modal.innerHTML = `
         <div class="modal-content" style="max-width: 500px;">
             <div class="modal-header">
-                <h3><i class="fas fa-key"></i> <span data-i18n="oauth.gemini.selectMethod">${t('oauth.gemini.selectMethod')}</span></h3>
+                <h3><i class="fas fa-key"></i> ${isReauthorize ? t('oauth.codex.reauthorizeTitle') : t('oauth.codex.selectMethod')}</h3>
                 <button class="modal-close">&times;</button>
             </div>
-            <div class="modal-body">
-                <div class="auth-method-options" style="display: flex; flex-direction: column; gap: 12px;">
-                    <div class="form-group" style="padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb;">
-                        <label for="codexAuthProxySelect" style="display: block; margin-bottom: 6px; font-weight: 600; color: #374151;">授权代理节点</label>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <select id="codexAuthProxySelect" style="flex: 1; min-width: 0; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
-                                ${proxyOptionsHtml}
-                            </select>
-                            <button type="button" id="codexAuthProxyTestButton" class="btn btn-secondary" style="white-space: nowrap;">
-                                <i class="fas fa-vial"></i> 测试代理
-                            </button>
-                        </div>
-                        <div id="codexAuthProxyTestResult" style="display: none; margin-top: 8px; padding: 8px; border-radius: 6px; font-size: 12px;"></div>
-                        <div style="margin-top: 6px; font-size: 12px; color: #6b7280;">新绑定账号时，请让本机浏览器也切到同一个代理节点。</div>
-                    </div>
-                    <button class="auth-method-btn" data-method="oauth" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
-                        <i class="fas fa-key" style="font-size: 24px; color: #10b981;"></i>
-                        <div style="text-align: left;">
-                            <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.oauth">${t('oauth.codex.oauth')}</div>
-                            <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.oauthDesc">${t('oauth.codex.oauthDesc')}</div>
-                        </div>
-                    </button>
-                    <button class="auth-method-btn" data-method="batch-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
-                        <i class="fas fa-file-import" style="font-size: 24px; color: #10b981;"></i>
-                        <div style="text-align: left;">
-                            <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.batchImport">${t('oauth.codex.batchImport')}</div>
-                            <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.batchImportDesc">${t('oauth.codex.batchImportDesc')}</div>
-                        </div>
-                    </button>
-                    <button class="auth-method-btn" data-method="cpa-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
-                        <i class="fas fa-file-code" style="font-size: 24px; color: #6366f1;"></i>
-                        <div style="text-align: left;">
-                            <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.cpaImport">${t('oauth.codex.cpaImport')}</div>
-                            <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.cpaImportDesc">${t('oauth.codex.cpaImportDesc')}</div>
-                        </div>
-                    </button>
-                    <button class="auth-method-btn" data-method="sub2api-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
-                        <i class="fas fa-layer-group" style="font-size: 24px; color: #f59e0b;"></i>
-                        <div style="text-align: left;">
-                            <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.sub2apiImport">${t('oauth.codex.sub2apiImport')}</div>
-                            <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.sub2apiImportDesc">${t('oauth.codex.sub2apiImportDesc')}</div>
-                        </div>
-                    </button>
-                </div>
+            <div class="modal-body" style="padding: 28px; text-align: center; color: #4b5563;">
+                <i class="fas fa-spinner fa-spin" style="font-size: 24px; margin-bottom: 10px;"></i>
+                <div>${t('oauth.codex.proxyLoading')}</div>
             </div>
             <div class="modal-footer">
                 <button class="modal-cancel" data-i18n="modal.provider.cancel">${t('modal.provider.cancel')}</button>
             </div>
         </div>
     `;
-    
     document.body.appendChild(modal);
-    
-    // 关闭按钮事件
+    modal.querySelector('.modal-close')?.addEventListener('click', () => modal.remove());
+    modal.querySelector('.modal-cancel')?.addEventListener('click', () => modal.remove());
+
+    const proxyChoices = await loadCodexAuthProxyChoices(initialProxyId);
+    if (!modal.isConnected) return;
+    const preserveExistingProxy = isReauthorize && Boolean(proxyChoices.loadError);
+
+    const reauthorizeAccountHtml = isReauthorize ? `
+        <div style="padding: 12px; border: 1px solid #dbeafe; border-radius: 8px; background: #eff6ff; color: #1e3a8a;">
+            <div><strong>${t('oauth.codex.reauthorizeAccount')}：</strong>${escapeHtml(providerName)}</div>
+            <div style="margin-top: 4px;"><strong>${t('oauth.codex.reauthorizeUuid')}：</strong><code>${escapeHtml(targetProviderUuid)}</code></div>
+        </div>
+    ` : '';
+    const createMethodsHtml = isReauthorize ? '' : `
+        <button class="auth-method-btn" data-method="oauth" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
+            <i class="fas fa-key" style="font-size: 24px; color: #10b981;"></i>
+            <div style="text-align: left;">
+                <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.oauth">${t('oauth.codex.oauth')}</div>
+                <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.oauthDesc">${t('oauth.codex.oauthDesc')}</div>
+            </div>
+        </button>
+        <button class="auth-method-btn" data-method="batch-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
+            <i class="fas fa-file-import" style="font-size: 24px; color: #10b981;"></i>
+            <div style="text-align: left;">
+                <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.batchImport">${t('oauth.codex.batchImport')}</div>
+                <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.batchImportDesc">${t('oauth.codex.batchImportDesc')}</div>
+            </div>
+        </button>
+        <button class="auth-method-btn" data-method="cpa-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
+            <i class="fas fa-file-code" style="font-size: 24px; color: #6366f1;"></i>
+            <div style="text-align: left;">
+                <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.cpaImport">${t('oauth.codex.cpaImport')}</div>
+                <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.cpaImportDesc">${t('oauth.codex.cpaImportDesc')}</div>
+            </div>
+        </button>
+        <button class="auth-method-btn" data-method="sub2api-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
+            <i class="fas fa-layer-group" style="font-size: 24px; color: #f59e0b;"></i>
+            <div style="text-align: left;">
+                <div style="font-weight: 600; color: #333;" data-i18n="oauth.codex.sub2apiImport">${t('oauth.codex.sub2apiImport')}</div>
+                <div style="font-size: 12px; color: #666;" data-i18n="oauth.codex.sub2apiImportDesc">${t('oauth.codex.sub2apiImportDesc')}</div>
+            </div>
+        </button>
+    `;
+
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3><i class="fas fa-key"></i> ${isReauthorize ? t('oauth.codex.reauthorizeTitle') : t('oauth.codex.selectMethod')}</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="auth-method-options" style="display: flex; flex-direction: column; gap: 12px;">
+                    ${reauthorizeAccountHtml}
+                    ${renderCodexAuthProxySection({ ...proxyChoices, isReauthorize })}
+                    ${createMethodsHtml}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-cancel" data-i18n="modal.provider.cancel">${t('modal.provider.cancel')}</button>
+                ${isReauthorize ? `<button id="codexReauthorizeStartButton" class="btn btn-primary"><i class="fas fa-key"></i> ${t('oauth.codex.reauthorizeStart')}</button>` : ''}
+            </div>
+        </div>
+    `;
+
     const closeBtn = modal.querySelector('.modal-close');
     const cancelBtn = modal.querySelector('.modal-cancel');
+    let isGeneratingAuthUrl = false;
+    let proxyControls = null;
+    const setGeneratingAuthUrl = (busy) => {
+        isGeneratingAuthUrl = busy === true;
+        closeBtn.disabled = isGeneratingAuthUrl;
+        cancelBtn.disabled = isGeneratingAuthUrl;
+        proxyControls?.setBusy(isGeneratingAuthUrl);
+    };
     [closeBtn, cancelBtn].forEach(btn => {
         btn.addEventListener('click', () => {
+            if (isGeneratingAuthUrl) return;
             modal.remove();
         });
     });
 
-    const proxyTestButton = modal.querySelector('#codexAuthProxyTestButton');
-    if (proxyTestButton) {
-        proxyTestButton.addEventListener('click', () => testCodexAuthProxy(modal, proxies));
+    const reauthorizeStartButton = modal.querySelector('#codexReauthorizeStartButton');
+    proxyControls = bindCodexAuthProxyControls(modal, proxyChoices.proxies, {
+        startButton: reauthorizeStartButton,
+        preserveExistingProxy
+    });
+
+    if (isReauthorize && reauthorizeStartButton) {
+        reauthorizeStartButton.addEventListener('click', async () => {
+            const proxyId = proxyControls.getProxyId();
+            const originalButtonHtml = reauthorizeStartButton.innerHTML;
+            setGeneratingAuthUrl(true);
+            reauthorizeStartButton.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('oauth.codex.reauthorizeStarting')}`;
+            const started = preserveExistingProxy
+                ? await executeGenerateAuthUrl(providerType, { targetProviderUuid })
+                : await executeGenerateAuthUrl(providerType, { targetProviderUuid, proxyId });
+            if (started) {
+                modal.remove();
+                return;
+            }
+            reauthorizeStartButton.innerHTML = originalButtonHtml;
+            setGeneratingAuthUrl(false);
+        });
+        return;
     }
-    
+
     // 认证方式选择按钮事件
     const methodBtns = modal.querySelectorAll('.auth-method-btn');
     methodBtns.forEach(btn => {
@@ -999,37 +1183,62 @@ async function showCodexAuthMethodSelector(providerType) {
         btn.addEventListener('click', async () => {
             const method = btn.dataset.method;
             const proxyId = modal.querySelector('#codexAuthProxySelect')?.value || '';
-            modal.remove();
-            
+
             if (method === 'batch-import') {
+                modal.remove();
                 showCodexBatchImportModal(providerType);
             } else if (method === 'cpa-import') {
+                modal.remove();
                 showCodexExternalImportModal(providerType, 'cpa');
             } else if (method === 'sub2api-import') {
+                modal.remove();
                 showCodexExternalImportModal(providerType, 'sub2api');
             } else {
-                await executeGenerateAuthUrl(providerType, { proxyId });
+                const originalButtonHtml = btn.innerHTML;
+                setGeneratingAuthUrl(true);
+                btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('modal.provider.auth.initializing')}`;
+                const started = await executeGenerateAuthUrl(providerType, { proxyId });
+                if (started) {
+                    modal.remove();
+                    return;
+                }
+                btn.innerHTML = originalButtonHtml;
+                setGeneratingAuthUrl(false);
             }
         });
     });
 }
 
 async function fetchBrowserExitIp() {
-    const response = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
-    if (!response.ok) {
-        throw new Error(`浏览器出口检测失败: HTTP ${response.status}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+        const response = await fetch('https://api.ipify.org?format=json', {
+            cache: 'no-store',
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            throw new Error(`${t('oauth.codex.proxyBrowserExitFailed')}: HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return String(data?.ip || '').trim();
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw new Error(t('oauth.codex.proxyBrowserExitTimeout'));
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
     }
-    const data = await response.json();
-    return String(data?.ip || '').trim();
 }
 
 function renderProxyTestLine(label, ip, expectedIp) {
     const matched = expectedIp ? ip === expectedIp : null;
     const badge = matched === null
-        ? '未配置预期 IP'
-        : (matched ? '匹配' : '不匹配');
+        ? t('oauth.codex.proxyExpectedIpMissing')
+        : (matched ? t('oauth.codex.proxyMatch') : t('oauth.codex.proxyMismatch'));
     const color = matched === false ? '#b91c1c' : '#047857';
-    return `<div><strong>${label}：</strong>${escapeHtml(ip || '检测失败')} <span style="color: ${color};">(${escapeHtml(badge)})</span></div>`;
+    return `<div><strong>${label}：</strong>${escapeHtml(ip || t('oauth.codex.proxyTestFailed'))} <span style="color: ${color};">(${escapeHtml(badge)})</span></div>`;
 }
 
 async function testCodexAuthProxy(modal, proxies = []) {
@@ -1049,31 +1258,35 @@ async function testCodexAuthProxy(modal, proxies = []) {
     resultEl.style.color = '#1e3a8a';
 
     if (!proxyId) {
-        resultEl.innerHTML = '请先选择一个代理节点。';
+        resultEl.innerHTML = escapeHtml(t('oauth.codex.proxySelectRequired'));
         return;
     }
 
-    button.disabled = true;
     const originalHtml = button.innerHTML;
-    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中';
+    button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('oauth.codex.proxyTesting')}`;
 
     let browserIp = '';
     let serverIp = '';
     let serverError = '';
     let browserError = '';
 
-    try {
-        browserIp = await fetchBrowserExitIp();
-    } catch (error) {
-        browserError = error.message;
+    const [browserProbe, serverProbe] = await Promise.allSettled([
+        fetchBrowserExitIp(),
+        window.apiClient.post('/proxy-pools/test', { proxyId })
+    ]);
+
+    if (browserProbe.status === 'fulfilled') {
+        browserIp = browserProbe.value;
+    } else {
+        browserError = browserProbe.reason?.message || t('oauth.codex.proxyBrowserExitFailed');
     }
 
-    try {
-        const serverResult = await window.apiClient.post('/proxy-pools/test', { proxyId });
+    if (serverProbe.status === 'fulfilled') {
+        const serverResult = serverProbe.value;
         serverIp = String(serverResult?.ip || '').trim();
-        serverError = serverResult?.ok === false ? (serverResult?.error?.message || '服务器代理检测失败') : '';
-    } catch (error) {
-        serverError = error.message;
+        serverError = serverResult?.ok === false ? (serverResult?.error?.message || t('oauth.codex.proxyServerExitFailed')) : '';
+    } else {
+        serverError = serverProbe.reason?.message || t('oauth.codex.proxyServerExitFailed');
     }
 
     const browserMatched = expectedIp ? browserIp === expectedIp : null;
@@ -1084,13 +1297,12 @@ async function testCodexAuthProxy(modal, proxies = []) {
     resultEl.style.border = allMatched ? '1px solid #a7f3d0' : '1px solid #fed7aa';
     resultEl.style.color = allMatched ? '#064e3b' : '#9a3412';
     resultEl.innerHTML = `
-        <div style="font-weight: 600; margin-bottom: 4px;">代理检测：${escapeHtml(proxyName)}</div>
-        <div>预期出口：${escapeHtml(expectedIp || '未配置')}</div>
-        ${renderProxyTestLine('浏览器出口', browserIp || browserError, expectedIp)}
-        ${renderProxyTestLine('服务器出口', serverIp || serverError, expectedIp)}
+        <div style="font-weight: 600; margin-bottom: 4px;">${t('oauth.codex.proxyTestTitle')}：${escapeHtml(proxyName)}</div>
+        <div>${t('oauth.codex.proxyExpectedExit')}：${escapeHtml(expectedIp || t('oauth.codex.proxyNotConfigured'))}</div>
+        ${renderProxyTestLine(t('oauth.codex.proxyBrowserExit'), browserIp || browserError, expectedIp)}
+        ${renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp || serverError, expectedIp)}
     `;
 
-    button.disabled = false;
     button.innerHTML = originalHtml;
 }
 
@@ -4048,35 +4260,17 @@ async function executeGenerateAuthUrl(providerType, extraOptions = {}) {
                 window.addEventListener('oauth_success_event', handleSuccess);
             }
 
-            if (extraOptions.targetProviderUuid) {
-                const targetProviderUuid = extraOptions.targetProviderUuid;
-                const handleReauthorizeSuccess = async (e) => {
-                    const data = e.detail;
-                    if (data.provider === providerType && data.targetProviderUuid === targetProviderUuid) {
-                        window.removeEventListener('oauth_success_event', handleReauthorizeSuccess);
-                        try {
-                            await window.apiClient.post('/reload-config');
-                            if (window.refreshProviderConfig) {
-                                await window.refreshProviderConfig(providerType);
-                            }
-                            showToast(t('common.success'), t('modal.provider.reauthorizeSuccess'), 'success');
-                        } catch (refreshError) {
-                            console.error('Failed to refresh provider after reauthorization:', refreshError);
-                            showToast(t('common.warning'), t('modal.provider.reauthorizeRefreshFailed') + ': ' + refreshError.message, 'warning');
-                        }
-                    }
-                };
-                window.addEventListener('oauth_success_event', handleReauthorizeSuccess);
-            }
-
             // 显示授权信息模态框
             showAuthModal(response.authUrl, response.authInfo);
+            return true;
         } else {
             showToast(t('common.error'), t('modal.provider.auth.failed'), 'error');
+            return false;
         }
     } catch (error) {
         console.error('生成授权链接失败:', error);
         showToast(t('common.error'), t('modal.provider.auth.failed') + `: ${error.message}`, 'error');
+        return false;
     }
 }
 
@@ -4102,6 +4296,8 @@ function getAuthFilePath(provider) {
  * @param {Object} authInfo - 授权信息
  */
 function showAuthModal(authUrl, authInfo) {
+    const OAUTH_FINALIZATION_TIMEOUT_MS = 60 * 1000;
+    const CODEX_POPUP_CLOSE_GRACE_MS = 2 * 1000;
     const modal = document.createElement('div');
     modal.className = 'modal-overlay';
     modal.style.display = 'flex';
@@ -4245,6 +4441,7 @@ function showAuthModal(authUrl, authInfo) {
                             </button>
                         </div>
                     </div>
+                    <div class="auth-status-message" role="status" aria-live="polite" style="display: none; margin-top: 12px; padding: 10px; border-radius: 6px;"></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -4258,146 +4455,357 @@ function showAuthModal(authUrl, authInfo) {
     `;
     
     document.body.appendChild(modal);
-    
-    // 关闭按钮事件
+
     const closeBtn = modal.querySelector('.modal-close');
     const cancelBtn = modal.querySelector('.modal-cancel');
-    [closeBtn, cancelBtn].forEach(btn => {
-        btn.addEventListener('click', () => {
-            modal.remove();
-        });
-    });
-    
-    // 重新生成按钮事件
+    const copyBtn = modal.querySelector('.copy-btn');
+    const openBtn = modal.querySelector('.open-auth-btn');
     const regenerateBtn = modal.querySelector('.regenerate-port-btn');
+    const regenerateBuilderIdBtn = modal.querySelector('.regenerate-builder-id-btn');
+    const statusMessage = modal.querySelector('.auth-status-message');
+    const expectedCallbackOrigin = (() => {
+        try {
+            return authInfo.redirectUri ? new URL(authInfo.redirectUri).origin : null;
+        } catch (error) {
+            return null;
+        }
+    })();
+
+    let requiresFreshOAuthSession = false;
+    let isAuthorizationBusy = false;
+    let isManualCallbackSubmitting = false;
+    let callbackReceived = false;
+    let manualInput = null;
+    let applyBtn = null;
+    let popupSession = null;
+    let popupCloseGraceTimer = null;
+
+    const clearPopupCloseGrace = () => {
+        if (popupCloseGraceTimer !== null) {
+            clearTimeout(popupCloseGraceTimer);
+            popupCloseGraceTimer = null;
+        }
+    };
+
+    const showAuthStatus = (message, type = 'info') => {
+        if (!statusMessage) return;
+        statusMessage.style.display = 'block';
+        statusMessage.style.background = type === 'error' ? '#fef2f2' : '#eff6ff';
+        statusMessage.style.border = type === 'error' ? '1px solid #fecaca' : '1px solid #bfdbfe';
+        statusMessage.style.color = type === 'error' ? '#991b1b' : '#1e3a8a';
+        statusMessage.textContent = message;
+    };
+
+    const setManualCallbackBusy = (busy) => {
+        isManualCallbackSubmitting = busy === true;
+        if (manualInput) manualInput.disabled = isManualCallbackSubmitting;
+        if (applyBtn) applyBtn.disabled = isManualCallbackSubmitting;
+    };
+
+    const setAuthorizationBusy = (busy) => {
+        isAuthorizationBusy = busy === true;
+        openBtn.disabled = isAuthorizationBusy;
+        if (regenerateBtn) regenerateBtn.disabled = isAuthorizationBusy;
+        if (regenerateBuilderIdBtn) regenerateBuilderIdBtn.disabled = isAuthorizationBusy;
+    };
+
+    const matchesCurrentOAuthSession = (data) => {
+        if (!data || data.provider !== authInfo.provider) return false;
+        if (authInfo.sessionId && data.sessionId !== authInfo.sessionId) return false;
+        if (authInfo.targetProviderUuid && data.targetProviderUuid !== authInfo.targetProviderUuid) return false;
+        return true;
+    };
+
+    const closeAuthWindow = () => popupSession?.closeAuthWindow();
+    const stopPopupPolling = () => popupSession?.stopPopupPolling();
+
+    const closeAuthModal = () => {
+        clearPopupCloseGrace();
+        popupSession?.dispose();
+        setManualCallbackBusy(false);
+        modal.remove();
+    };
+
+    const showRetryState = (message) => {
+        clearPopupCloseGrace();
+        callbackReceived = false;
+        setManualCallbackBusy(false);
+        setAuthorizationBusy(false);
+        showAuthStatus(message, 'error');
+        if (authInfo.provider === 'openai-codex-oauth') {
+            requiresFreshOAuthSession = true;
+            openBtn.innerHTML = `<i class="fas fa-redo"></i> <span>${t('oauth.modal.retry')}</span>`;
+            if (manualInput) manualInput.disabled = true;
+            if (applyBtn) applyBtn.disabled = true;
+        }
+        openBtn.disabled = false;
+    };
+
+    const handleOAuthSuccess = async (event = null) => {
+        const data = event?.detail || event;
+        if (data && !matchesCurrentOAuthSession(data)) return;
+
+        clearPopupCloseGrace();
+        popupSession?.dispose();
+        modal.remove();
+
+        if (authInfo.targetProviderUuid) {
+            try {
+                await window.apiClient.post('/reload-config');
+                if (window.refreshProviderConfig) {
+                    await window.refreshProviderConfig(authInfo.provider);
+                }
+                showToast(t('common.success'), t('modal.provider.reauthorizeSuccess'), 'success');
+            } catch (refreshError) {
+                console.error('Failed to refresh provider after reauthorization:', refreshError);
+                showToast(t('common.warning'), t('modal.provider.reauthorizeRefreshFailed') + ': ' + refreshError.message, 'warning');
+            }
+        }
+
+        await Promise.allSettled([loadProviders(), loadConfigList()]);
+    };
+
+    const handleOAuthError = (event) => {
+        const data = event?.detail || event;
+        if (!matchesCurrentOAuthSession(data)) return;
+        popupSession?.dispose();
+        showRetryState(data.error || t('oauth.error.process'));
+    };
+
+    const handlePopupMessage = (event) => {
+        const data = event.data;
+        if (!data || (data.type !== 'codex-oauth-callback-received' && data.type !== 'oauth-popup-complete')) {
+            return;
+        }
+
+        if (data.type === 'codex-oauth-callback-received') {
+            if (!isExpectedCodexOAuthCallbackMessage(event, {
+                authWindow: popupSession?.getAuthWindow(),
+                expectedCallbackOrigin,
+                provider: authInfo.provider,
+                sessionId: authInfo.sessionId
+            })) return;
+            clearPopupCloseGrace();
+            callbackReceived = true;
+            setAuthorizationBusy(true);
+            setManualCallbackBusy(true);
+            popupSession.armListenerTimeout(OAUTH_FINALIZATION_TIMEOUT_MS);
+            stopPopupPolling();
+            closeAuthWindow();
+            showAuthStatus(t('oauth.processing'), 'info');
+            return;
+        }
+
+        if (!isExpectedOAuthPopupCompleteMessage(event, {
+            authWindow: popupSession?.getAuthWindow(),
+            expectedOrigin: window.location.origin,
+            provider: authInfo.provider
+        })) return;
+        handleOAuthSuccess(data);
+    };
+
+    const handlePopupClosed = () => {
+        if (callbackReceived) return;
+        stopPopupPolling();
+        popupSession.setAuthWindow(null);
+        if (authInfo.provider === 'openai-codex-oauth') {
+            clearPopupCloseGrace();
+            popupSession.armListenerTimeout(OAUTH_FINALIZATION_TIMEOUT_MS);
+            setAuthorizationBusy(true);
+            if (manualInput) manualInput.disabled = true;
+            if (applyBtn) applyBtn.disabled = true;
+            showAuthStatus(t('oauth.modal.popupClosedPending'), 'info');
+            popupCloseGraceTimer = setTimeout(() => {
+                popupCloseGraceTimer = null;
+                if (!modal.isConnected || callbackReceived) return;
+                isAuthorizationBusy = false;
+                openBtn.disabled = false;
+                if (regenerateBtn) regenerateBtn.disabled = true;
+                if (regenerateBuilderIdBtn) regenerateBuilderIdBtn.disabled = true;
+                setManualCallbackBusy(false);
+            }, CODEX_POPUP_CLOSE_GRACE_MS);
+            return;
+        }
+        popupSession.stopListenerTimeout();
+        setAuthorizationBusy(false);
+        openBtn.disabled = false;
+    };
+
+    popupSession = createOAuthPopupSession({
+        eventTarget: window,
+        onSuccess: handleOAuthSuccess,
+        onError: handleOAuthError,
+        onMessage: handlePopupMessage,
+        armTimeoutOnRegister: false,
+        onTimeout: () => {
+            if (!modal.isConnected) return;
+            closeAuthWindow();
+            showRetryState(t('oauth.modal.timeout'));
+        },
+        onCloseError: (error) => console.warn('Failed to close OAuth window:', error)
+    });
+    if (authInfo.provider === 'openai-codex-oauth') {
+        popupSession.registerListeners();
+    }
+
+    [closeBtn, cancelBtn].forEach(btn => btn.addEventListener('click', closeAuthModal));
+
     if (regenerateBtn) {
         regenerateBtn.onclick = async () => {
+            if (isAuthorizationBusy) return;
             const newPort = modal.querySelector('.auth-port-input').value;
             if (newPort && newPort !== requiredPort) {
-                modal.remove();
-                // 构造重新请求的参数
+                closeAuthModal();
                 const options = { ...authInfo, port: newPort };
-                // 移除不需要传递回后端的字段
                 delete options.provider;
                 delete options.redirectUri;
                 delete options.callbackPort;
-                
                 await executeGenerateAuthUrl(authInfo.provider, options);
             }
         };
     }
 
-    // Builder ID Start URL 重新生成按钮事件
-    const regenerateBuilderIdBtn = modal.querySelector('.regenerate-builder-id-btn');
     if (regenerateBuilderIdBtn) {
         regenerateBuilderIdBtn.onclick = async () => {
+            if (isAuthorizationBusy) return;
             const builderIdStartUrl = modal.querySelector('.builder-id-start-url-input').value.trim();
             const region = modal.querySelector('.builder-id-region-input').value.trim();
-            modal.remove();
-            // 构造重新请求的参数
+            closeAuthModal();
             const options = {
                 ...authInfo,
                 builderIDStartURL: builderIdStartUrl || 'https://view.awsapps.com/start',
                 region: region || 'us-east-1'
             };
-            // 移除不需要传递回后端的字段
             delete options.provider;
             delete options.redirectUri;
             delete options.callbackPort;
-            
             await executeGenerateAuthUrl(authInfo.provider, options);
         };
     }
 
-    // 复制链接按钮
-    const copyBtn = modal.querySelector('.copy-btn');
     copyBtn.addEventListener('click', () => {
         const input = modal.querySelector('.auth-url-input');
         input.select();
         document.execCommand('copy');
         showToast(t('common.success'), t('oauth.success.msg'), 'success');
     });
-    
-    // 在浏览器中打开按钮
-    const openBtn = modal.querySelector('.open-auth-btn');
-    openBtn.addEventListener('click', () => {
-        // Kiro Google/GitHub 授权使用新标签页打开，并提示开启 F12
-        const isKiroSocial = authInfo.provider === 'claude-kiro-oauth' && authInfo.authMethod === 'social';
-        let authWindow;
 
-        if (isKiroSocial) {
-            authWindow = window.open(authUrl, '_blank');
-            showToast(t('common.info'), '已在新标签页打开授权，建议按 F12 开启开发者工具以查看过程日志', 'info');
-        } else {
-            // 使用子窗口打开，以便监听 URL 变化
-            const width = 600;
-            const height = 700;
-            const left = (window.screen.width - width) / 2 + 600;
-            const top = (window.screen.height - height) / 2;
-            
-            authWindow = window.open(
-                authUrl,
-                'OAuthAuthWindow',
-                `width=${width},height=${height},left=${left},top=${top},status=no,resizable=yes,scrollbars=yes`
-            );
+    const processCallback = async (urlStr, isManualInput = false) => {
+        try {
+            let cleanUrlStr = urlStr.trim();
+            if (isManualInput && !cleanUrlStr.includes('://') && !cleanUrlStr.includes('?')) {
+                let state = authInfo.sessionId || '';
+                if (!state && authUrl) {
+                    try {
+                        const parsedAuthUrl = new URL(authUrl);
+                        state = parsedAuthUrl.searchParams.get('state') || '';
+                    } catch (error) {
+                        // Use the session id supplied by the backend when the URL is not parseable.
+                    }
+                }
+                const baseUrl = authInfo.redirectUri || `http://127.0.0.1:${authInfo.port || 56121}/callback`;
+                cleanUrlStr = `${baseUrl}?code=${cleanUrlStr}${state ? '&state=' + state : ''}`;
+            }
+
+            const match = cleanUrlStr.match(/(https?|kiro):\/\/[^\s]+/);
+            if (match) cleanUrlStr = match[0];
+            if (cleanUrlStr.startsWith('kiro://kiro.kiroAgent')) {
+                const localPort = authInfo.port || 19876;
+                cleanUrlStr = cleanUrlStr.replace('kiro://kiro.kiroAgent', `http://localhost:${localPort}`);
+            }
+
+            const url = new URL(cleanUrlStr);
+            if (!url.searchParams.has('code') && !url.searchParams.has('token')) {
+                showToast(t('common.warning'), t('oauth.invalid.url'), 'warning');
+                return;
+            }
+
+            stopPopupPolling();
+            const localUrl = new URL(url.href);
+            localUrl.hostname = window.location.hostname;
+            localUrl.protocol = window.location.protocol;
+            showAuthStatus(t('oauth.processing'), 'info');
+            showToast(t('common.info'), t('oauth.processing'), 'info');
+
+            if (isManualInput) {
+                if (isManualCallbackSubmitting) return;
+                setManualCallbackBusy(true);
+                setAuthorizationBusy(true);
+                popupSession.armListenerTimeout();
+                try {
+                    const response = await window.apiClient.post('/oauth/manual-callback', {
+                        provider: authInfo.provider,
+                        callbackUrl: url.href,
+                        authMethod: authInfo.authMethod
+                    });
+                    if (!response.success) {
+                        throw new Error(response.error || t('oauth.error.process'));
+                    }
+
+                    if (!modal.isConnected) return;
+                    if (authInfo.provider === 'openai-codex-oauth') {
+                        popupSession.armListenerTimeout(OAUTH_FINALIZATION_TIMEOUT_MS);
+                        closeAuthWindow();
+                        showAuthStatus(t('oauth.processing'), 'info');
+                    } else {
+                        await handleOAuthSuccess();
+                        showToast(t('common.success'), t('oauth.success.msg'), 'success');
+                    }
+                } catch (error) {
+                    console.error('OAuth manual callback request failed');
+                    if (!modal.isConnected) return;
+                    if (authInfo.provider === 'openai-codex-oauth') {
+                        const isDefiniteCallbackFailure = Number.isInteger(error?.status)
+                            && error.status >= 400
+                            && error.status < 500;
+                        if (isDefiniteCallbackFailure) {
+                            popupSession.dispose();
+                            showRetryState(error.message || t('oauth.error.process'));
+                            showToast(t('common.error'), error.message || t('oauth.error.process'), 'error');
+                        } else {
+                            popupSession.armListenerTimeout(OAUTH_FINALIZATION_TIMEOUT_MS);
+                            closeAuthWindow();
+                            showAuthStatus(t('oauth.processing'), 'info');
+                        }
+                    } else {
+                        setManualCallbackBusy(false);
+                        setAuthorizationBusy(false);
+                        showAuthStatus(error.message || t('oauth.error.process'), 'error');
+                        showToast(t('common.error'), error.message || t('oauth.error.process'), 'error');
+                    }
+                }
+                return;
+            }
+
+            const authWindow = popupSession.getAuthWindow();
+            if (authWindow) {
+                try {
+                    authWindow.location.href = localUrl.href;
+                    return;
+                } catch (error) {
+                    // Cross-origin access can fail; fall back to a direct request below.
+                }
+            }
+            fetch(localUrl.href).catch(() => console.error('OAuth callback request failed'));
+        } catch (error) {
+            console.error('Failed to process OAuth callback');
+            if (isManualInput) {
+                setManualCallbackBusy(false);
+                setAuthorizationBusy(false);
+            }
+            showToast(t('common.error'), t('oauth.error.format'), 'error');
         }
+    };
 
-        let pollTimer = null;
-        const cleanupAuthListeners = () => {
-            if (pollTimer) {
-                clearInterval(pollTimer);
-                pollTimer = null;
-            }
-            window.removeEventListener('oauth_success_event', handleOAuthSuccess);
-            window.removeEventListener('message', handlePopupMessage);
-        };
-
-        // 监听 OAuth 成功事件，自动关闭窗口和模态框
-        const handleOAuthSuccess = () => {
-            if (authWindow && !authWindow.closed) {
-                authWindow.close();
-            }
-            modal.remove();
-            cleanupAuthListeners();
-            
-            // 授权成功后刷新配置和提供商列表
-            loadProviders();
-            loadConfigList();
-        };
-
-        // 回调页主动 postMessage 时，优先使用父页面关闭子窗口
-        const handlePopupMessage = (event) => {
-            if (event.origin !== window.location.origin) {
-                return;
-            }
-
-            const data = event.data;
-            if (!data || data.type !== 'oauth-popup-complete') {
-                return;
-            }
-
-            if (data.provider && data.provider !== authInfo.provider) {
-                return;
-            }
-
-            handleOAuthSuccess();
-        };
-
-        window.addEventListener('oauth_success_event', handleOAuthSuccess);
-        window.addEventListener('message', handlePopupMessage);
-        
-        if (authWindow) {
-            showToast(t('common.info'), t('oauth.window.opened'), 'info');
-            
-            // 添加手动输入回调 URL 的 UI
-            const urlSection = modal.querySelector('.auth-url-section');
-            if (urlSection && !modal.querySelector('.manual-callback-section')) {
+    const ensureManualCallbackControls = () => {
+        const urlSection = modal.querySelector('.auth-url-section');
+        if (urlSection && !modal.querySelector('.manual-callback-section')) {
             const manualInputHtml = `
                 <div class="manual-callback-section" style="margin-top: 20px; padding: 15px; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px;">
                     <h4 style="color: #92400e; margin-bottom: 8px;"><i class="fas fa-exclamation-circle"></i> <span data-i18n="oauth.manual.title">${t('oauth.manual.title')}</span></h4>
                     <p style="font-size: 0.875rem; color: #b45309; margin-bottom: 10px;" data-i18n-html="oauth.manual.desc">${t('oauth.manual.desc')}</p>
                     <div class="auth-url-container" style="display: flex; gap: 5px;">
-                        <input type="text" class="manual-callback-input" data-i18n="oauth.manual.placeholder" placeholder="粘贴回调 URL (包含 code=...) 或 kiro:// 链接" style="flex: 1; padding: 8px; border: 1px solid #fcd34d; border-radius: 4px; background: white; color: black;">
+                        <input type="text" class="manual-callback-input" data-i18n="oauth.manual.placeholder" placeholder="${t('oauth.manual.placeholder')}" style="flex: 1; padding: 8px; border: 1px solid #fcd34d; border-radius: 4px; background: white; color: black;">
                         <button class="btn btn-success apply-callback-btn" style="padding: 8px 15px; white-space: nowrap; background: #059669; color: white; border: none; border-radius: 4px; cursor: pointer;">
                             <i class="fas fa-check"></i> <span data-i18n="oauth.manual.submit">${t('oauth.manual.submit')}</span>
                         </button>
@@ -4405,134 +4813,87 @@ function showAuthModal(authUrl, authInfo) {
                 </div>
             `;
             urlSection.insertAdjacentHTML('afterend', manualInputHtml);
-            }
+        }
 
-            const manualInput = modal.querySelector('.manual-callback-input');
-            const applyBtn = modal.querySelector('.apply-callback-btn');
-
-            // 处理回调 URL 的核心逻辑
-            const processCallback = (urlStr, isManualInput = false) => {
-                try {
-                    // 尝试清理 URL（允许 kiro:// 协议）
-                    let cleanUrlStr = urlStr.trim();
-
-                    // 如果只输入了 code (没有 :// 且不包含 ?)，尝试自动补全为包含 code 和 state (sessionId) 的完整 callback URL
-                    if (isManualInput && !cleanUrlStr.includes('://') && !cleanUrlStr.includes('?')) {
-                        let state = authInfo.sessionId || '';
-                        if (!state && authUrl) {
-                            try {
-                                const parsedAuthUrl = new URL(authUrl);
-                                state = parsedAuthUrl.searchParams.get('state') || '';
-                            } catch (e) {}
-                        }
-                        const baseUrl = authInfo.redirectUri || `http://127.0.0.1:${authInfo.port || 56121}/callback`;
-                        cleanUrlStr = `${baseUrl}?code=${cleanUrlStr}${state ? '&state=' + state : ''}`;
-                        console.log('Detected code only input, auto-completing callback URL:', cleanUrlStr);
-                    }
-
-                    const match = cleanUrlStr.match(/(https?|kiro):\/\/[^\s]+/);
-                    if (match) {
-                        cleanUrlStr = match[0];
-                    }
-                    
-                    // 替换 kiro://kiro.kiroAgent 为本地 HTTP 地址
-                    if (cleanUrlStr.startsWith('kiro://kiro.kiroAgent')) {
-                        const localPort = authInfo.port || 19876;
-                        cleanUrlStr = cleanUrlStr.replace('kiro://kiro.kiroAgent', `http://localhost:${localPort}`);
-                        console.log('Detected Kiro deep link, converted to local HTTP:', cleanUrlStr);
-                    }
-
-                    const url = new URL(cleanUrlStr);
-                    
-                    if (url.searchParams.has('code') || url.searchParams.has('token')) {
-                        if (pollTimer) {
-                            clearInterval(pollTimer);
-                            pollTimer = null;
-                        }
-                        // 构造本地可处理的 URL，只修改 hostname，保持原始 URL 的端口号不变
-                        const localUrl = new URL(url.href);
-                        localUrl.hostname = window.location.hostname;
-                        localUrl.protocol = window.location.protocol;
-                        
-                        showToast(t('common.info'), t('oauth.processing'), 'info');
-                        
-                        // 如果是手动输入，直接通过 fetch 请求处理，然后关闭子窗口
-                        if (isManualInput) {
-                            // 通过服务端API处理手动输入的回调URL
-                            window.apiClient.post('/oauth/manual-callback', {
-                                provider: authInfo.provider,
-                                callbackUrl: url.href, //使用localhost访问
-                                authMethod: authInfo.authMethod
-                            })
-                                .then(response => {
-                                    if (response.success) {
-                                        console.log('OAuth 回调处理成功');
-                                        handleOAuthSuccess();
-                                        showToast(t('common.success'), t('oauth.success.msg'), 'success');
-                                    } else {
-                                        console.error('OAuth 回调处理失败:', response.error);
-                                        showToast(t('common.error'), response.error || t('oauth.error.process'), 'error');
-                                    }
-                                })
-                                .catch(err => {
-                                    console.error('OAuth 回调请求失败:', err);
-                                    showToast(t('common.error'), t('oauth.error.process'), 'error');
-                                });
-                        } else {
-                            // 自动监听模式：优先在子窗口中跳转（如果没关）
-                            if (authWindow && !authWindow.closed) {
-                                authWindow.location.href = localUrl.href;
-                            } else {
-                                // 备选方案：通过 fetch 请求
-                                // 通过 fetch 请求本地服务器处理回调
-                                fetch(localUrl.href)
-                                    .then(response => {
-                                        if (response.ok) {
-                                            console.log('OAuth 回调处理成功');
-                                        } else {
-                                            console.error('OAuth 回调处理失败:', response.status);
-                                        }
-                                    })
-                                    .catch(err => {
-                                        console.error('OAuth 回调请求失败:', err);
-                                    });
-                            }
-                        }
-                        
-                    } else {
-                        showToast(t('common.warning'), t('oauth.invalid.url'), 'warning');
-                    }
-                } catch (err) {
-                    console.error('处理回调失败:', err);
-                    showToast(t('common.error'), t('oauth.error.format'), 'error');
-                }
-            };
-
+        manualInput = modal.querySelector('.manual-callback-input');
+        applyBtn = modal.querySelector('.apply-callback-btn');
+        if (applyBtn && applyBtn.dataset.oauthBound !== 'true') {
+            applyBtn.dataset.oauthBound = 'true';
             applyBtn.addEventListener('click', () => {
+                if (isManualCallbackSubmitting) return;
                 processCallback(manualInput.value, true);
             });
-
-            // 启动定时器轮询子窗口 URL
-            pollTimer = setInterval(() => {
-                try {
-                    if (authWindow.closed) {
-                        cleanupAuthListeners();
-                        return;
-                    }
-                    // 如果能读到说明回到了同域
-                    const currentUrl = authWindow.location.href;
-                    if (currentUrl && (currentUrl.includes('code=') || currentUrl.includes('token='))) {
-                        processCallback(currentUrl);
-                    }
-                } catch (e) {
-                    // 跨域受限是正常的
-                }
-            }, 1000);
-        } else {
-            showToast(t('common.error'), t('oauth.window.blocked'), 'error');
         }
+        setManualCallbackBusy(isManualCallbackSubmitting);
+    };
+
+    openBtn.addEventListener('click', async () => {
+        if (isAuthorizationBusy) return;
+        clearPopupCloseGrace();
+        if (requiresFreshOAuthSession && authInfo.provider === 'openai-codex-oauth') {
+            setAuthorizationBusy(true);
+            const retryOptions = {};
+            if (authInfo.targetProviderUuid) retryOptions.targetProviderUuid = authInfo.targetProviderUuid;
+            if (authInfo.proxyOverrideProvided) retryOptions.proxyId = authInfo.proxyId || '';
+            const started = await executeGenerateAuthUrl(authInfo.provider, retryOptions);
+            if (started) {
+                closeAuthModal();
+                return;
+            }
+            setAuthorizationBusy(false);
+            return;
+        }
+
+        setAuthorizationBusy(true);
+        callbackReceived = false;
+        const isKiroSocial = authInfo.provider === 'claude-kiro-oauth' && authInfo.authMethod === 'social';
+        let authWindow = null;
+        try {
+            if (isKiroSocial) {
+                authWindow = window.open(authUrl, '_blank');
+                showToast(t('common.info'), '已在新标签页打开授权，建议按 F12 开启开发者工具以查看过程日志', 'info');
+            } else {
+                const width = 600;
+                const height = 700;
+                const left = (window.screen.width - width) / 2 + 600;
+                const top = (window.screen.height - height) / 2;
+                authWindow = window.open(
+                    authUrl,
+                    'OAuthAuthWindow',
+                    `width=${width},height=${height},left=${left},top=${top},status=no,resizable=yes,scrollbars=yes`
+                );
+            }
+        } catch (error) {
+            console.warn('Failed to open OAuth window:', error);
+        }
+
+        if (!authWindow) {
+            setAuthorizationBusy(false);
+            showToast(t('common.error'), t('oauth.window.blocked'), 'error');
+            return;
+        }
+
+        popupSession.setAuthWindow(authWindow);
+        popupSession.registerListeners();
+        popupSession.armListenerTimeout();
+        ensureManualCallbackControls();
+        showToast(t('common.info'), t('oauth.window.opened'), 'info');
+        popupSession.startPopupPolling((currentWindow) => {
+            if (!currentWindow) return;
+            try {
+                if (currentWindow.closed) {
+                    handlePopupClosed();
+                    return;
+                }
+                const currentUrl = currentWindow.location.href;
+                if (currentUrl && (currentUrl.includes('code=') || currentUrl.includes('token='))) {
+                    processCallback(currentUrl);
+                }
+            } catch (error) {
+                // Cross-origin access is expected until the popup reaches the callback URL.
+            }
+        }, 500);
     });
-    
 }
 
 /**
@@ -4957,6 +5318,7 @@ export {
     showAuthModal,
     executeGenerateAuthUrl,
     handleGenerateAuthUrl,
+    showCodexAuthMethodSelector,
     checkUpdate,
     performUpdate,
     showAddProviderGroupModal

@@ -10,25 +10,73 @@ const TOKEN_STORE_FILE = path.join(process.cwd(), 'configs', 'token-store.json')
 // 用量缓存文件路径
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
 
+const REPLAYABLE_EVENT_TYPES = new Set(['oauth_success', 'oauth_error']);
+const MAX_EVENT_REPLAY_BUFFER = 50;
+
+function ensureEventReplayState() {
+    if (!Number.isSafeInteger(global.eventSequence) || global.eventSequence < 0) {
+        global.eventSequence = 0;
+    }
+    if (!Array.isArray(global.eventReplayBuffer)) {
+        global.eventReplayBuffer = [];
+    }
+}
+
+function formatEventFrame(eventType, payload, eventId) {
+    return `id: ${eventId}\nevent: ${eventType}\ndata: ${payload}\n\n`;
+}
+
 /**
  * Helper function to broadcast events to UI clients
  * @param {string} eventType - The type of event
  * @param {any} data - The data to broadcast
  */
 export function broadcastEvent(eventType, data) {
+    ensureEventReplayState();
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
+    let structuredData = data;
+    if (typeof structuredData === 'string') {
+        try {
+            structuredData = JSON.parse(structuredData);
+        } catch (error) {
+            structuredData = null;
+        }
+    }
+    const eventId = ++global.eventSequence;
+    const frame = formatEventFrame(eventType, payload, eventId);
+
+    const isReplayableCodexTerminal = REPLAYABLE_EVENT_TYPES.has(eventType)
+        && structuredData?.provider === 'openai-codex-oauth'
+        && typeof structuredData?.sessionId === 'string'
+        && structuredData.sessionId;
+    if (isReplayableCodexTerminal) {
+        global.eventReplayBuffer.push({ eventId, eventType, payload });
+        if (global.eventReplayBuffer.length > MAX_EVENT_REPLAY_BUFFER) {
+            global.eventReplayBuffer.splice(0, global.eventReplayBuffer.length - MAX_EVENT_REPLAY_BUFFER);
+        }
+    }
+
     if (global.eventClients && global.eventClients.length > 0) {
-        const payload = typeof data === 'string' ? data : JSON.stringify(data);
-        global.eventClients.forEach(client => {
-            client.write(`event: ${eventType}\n`);
-            client.write(`data: ${payload}\n\n`);
+        global.eventClients = global.eventClients.filter(client => {
+            if (client.writableEnded || client.destroyed) return false;
+            try {
+                client.write(frame);
+                return true;
+            } catch (error) {
+                logger.warn('[Event Broadcast] Failed to broadcast event:', error.message);
+                return false;
+            }
         });
     }
+
+    return eventId;
 }
 
 /**
  * Server-Sent Events for real-time updates
  */
 export async function handleEvents(req, res) {
+    ensureEventReplayState();
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -37,7 +85,16 @@ export async function handleEvents(req, res) {
     });
 
     try {
-        res.write('\n');
+        const parsedLastEventId = Number.parseInt(req.headers?.['last-event-id'], 10);
+        if (Number.isSafeInteger(parsedLastEventId) && parsedLastEventId >= 0) {
+            global.eventReplayBuffer
+                .filter(event => event.eventId > parsedLastEventId)
+                .forEach(event => {
+                    res.write(formatEventFrame(event.eventType, event.payload, event.eventId));
+                });
+        }
+
+        res.write(formatEventFrame('stream_ready', '{}', global.eventSequence));
     } catch (err) {
         logger.error('[Event Broadcast] Failed to write initial data:', err.message);
         return true;

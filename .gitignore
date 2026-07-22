@@ -1,5 +1,9 @@
 node_modules
 logs/
+configs/provider_pools.test.json
+.idea/
+.plans/94-to-27-migration-status.md
+.plans/94-to-27-migration.md
 .serena/
 .claude/
 CLAUDE.md

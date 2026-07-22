@@ -5,7 +5,7 @@ import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import { getProxyPoolsFilePath, normalizeProxyPools } from '../utils/proxy-pool-store.js';
-import { configureAxiosProxy } from '../utils/proxy-utils.js';
+import { parseProxyUrl } from '../utils/proxy-utils.js';
 
 function getProviderPoolsFilePath(currentConfig = {}) {
     return currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
@@ -136,16 +136,24 @@ export async function handleTestProxyPool(req, res, currentConfig) {
 
         const axiosConfig = {
             timeout: 15000,
+            proxy: false,
             headers: {
                 Accept: 'application/json'
             }
         };
-        configureAxiosProxy(axiosConfig, {
-            ...currentConfig,
-            uuid: 'proxy-pool-test',
-            customName: proxy.name || proxy.id,
-            PROXY_ID: proxy.id
-        }, 'openai-codex-oauth');
+        const selectedProxyConfig = parseProxyUrl(proxy.url);
+        if (!selectedProxyConfig) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                ok: false,
+                proxyId,
+                name: proxy.name,
+                error: { message: 'Proxy URL is invalid or unsupported' }
+            }));
+            return true;
+        }
+        axiosConfig.httpAgent = selectedProxyConfig.httpAgent;
+        axiosConfig.httpsAgent = selectedProxyConfig.httpsAgent;
 
         const response = await axios.get('https://api.ipify.org?format=json', axiosConfig);
         const ip = String(response?.data?.ip || '').trim();

@@ -1,4 +1,4 @@
-import { getServiceAdapter, serviceInstances } from '../providers/adapter.js';
+import { getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import { ProviderPoolManager } from '../providers/provider-pool-manager.js';
 import deepmerge from 'deepmerge';
@@ -80,15 +80,31 @@ function withStickyProviderAffinity(config, providerType, options = {}) {
     return selectionOptions;
 }
 
+function restoreProviderPoolsAfterFailedPersist(config, originalProviderPools) {
+    config.providerPools = originalProviderPools;
+    if (!providerPoolManager) return;
+
+    providerPoolManager.providerPools = originalProviderPools;
+    try {
+        providerPoolManager.initializeProviderStatus();
+    } catch (refreshError) {
+        logger.warn(`[Auto-Link] Provider pool rollback restored data but status refresh failed: ${refreshError.message}`);
+    }
+}
+
 /**
  * 扫描 configs 目录并自动关联未关联的配置文件到对应的提供商
  * @param {Object} config - 服务器配置对象
  * @param {Object} options - 可选参数
  * @param {boolean} options.onlyCurrentCred - 为 true 时，只自动关联当前凭证
  * @param {string} options.credPath - 当前凭证的路径（当 onlyCurrentCred 为 true 时必需）
+ * @param {boolean} options.throwOnPersistError - 为 true 时，写盘失败回滚内存并抛错
  * @returns {Promise<Object>} 更新后的 providerPools 对象
  */
 export async function autoLinkProviderConfigs(config, options = {}) {
+    const originalProviderPools = options.throwOnPersistError
+        ? JSON.parse(JSON.stringify(config.providerPools || {}))
+        : null;
     // 确保 providerPools 对象存在
     if (!config.providerPools) {
         config.providerPools = {};
@@ -103,6 +119,9 @@ export async function autoLinkProviderConfigs(config, options = {}) {
         if (result) {
             totalNewProviders = 1;
             allNewProviders[result.displayName] = [result.provider];
+        } else if (options.throwOnPersistError) {
+            restoreProviderPoolsAfterFailedPersist(config, originalProviderPools);
+            throw new Error(`Failed to link current credential: ${options.credPath}`);
         }
     } else {
         // 遍历所有提供商映射
@@ -135,7 +154,8 @@ export async function autoLinkProviderConfigs(config, options = {}) {
                 providerType,
                 credPathKey,
                 defaultCheckModel,
-                needsProjectId
+                needsProjectId,
+                existingProviders: config.providerPools[providerType]
             });
             
             // 如果有新的配置文件需要关联
@@ -169,15 +189,23 @@ export async function autoLinkProviderConfigs(config, options = {}) {
             }
         } catch (error) {
             logger.error(`[Auto-Link] Failed to save provider_pools.json: ${error.message}`);
+            if (options.throwOnPersistError) {
+                restoreProviderPoolsAfterFailedPersist(config, originalProviderPools);
+                throw error;
+            }
         }
     } else {
         logger.info('[Auto-Link] No new configs to link');
     }
     
     // Update provider pool manager if available
-    if (providerPoolManager) {
-        providerPoolManager.providerPools = config.providerPools;
-        providerPoolManager.initializeProviderStatus();
+    try {
+        if (providerPoolManager) {
+            providerPoolManager.providerPools = config.providerPools;
+            providerPoolManager.initializeProviderStatus();
+        }
+    } catch (refreshError) {
+        logger.warn(`[Auto-Link] Provider pools saved but manager refresh failed: ${refreshError.message}`);
     }
     return config.providerPools;
 }
@@ -189,8 +217,15 @@ export async function autoLinkProviderConfigs(config, options = {}) {
  */
 export async function replaceProviderCredentialPath(config, options = {}) {
     const { providerType, providerUuid, credPath } = options;
+    const hasProxyOverride = Object.prototype.hasOwnProperty.call(options, 'proxyId');
+    const normalizedProxyId = hasProxyOverride && typeof options.proxyId === 'string'
+        ? options.proxyId.trim()
+        : '';
     if (!providerType || !providerUuid || !credPath) {
         throw new Error('providerType, providerUuid and credPath are required');
+    }
+    if (hasProxyOverride && typeof options.proxyId !== 'string') {
+        throw new Error('proxyId must be a string when provided');
     }
 
     const mapping = PROVIDER_MAPPINGS.find(item => item.providerType === providerType);
@@ -216,7 +251,7 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             throw new Error(`Provider not found: ${providerType}/${providerUuid}`);
         }
 
-        updatedProvider = applyCodexIdentityToProvider({
+        const nextProvider = {
             ...providers[providerIndex],
             [mapping.credPathKey]: formatSystemPath(credPath),
             isHealthy: true,
@@ -224,17 +259,41 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             errorCount: 0,
             lastErrorTime: null,
             lastErrorMessage: null
-        }, codexIdentity);
+        };
+
+        if (hasProxyOverride) {
+            if (normalizedProxyId) {
+                nextProvider.PROXY_ID = normalizedProxyId;
+            } else {
+                delete nextProvider.PROXY_ID;
+            }
+        }
+
+        updatedProvider = applyCodexIdentityToProvider(nextProvider, codexIdentity);
 
         providerPools[providerType][providerIndex] = updatedProvider;
         await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
 
-        if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+        try {
+            invalidateServiceAdapter(providerType, providerUuid);
+        } catch (invalidateError) {
+            logger.warn(`[Auto-Link] Provider persisted but cached adapter invalidation failed: ${invalidateError.message}`);
         }
-        if (config) {
-            config.providerPools = providerPools;
+
+        try {
+            if (config) {
+                config.providerPools = providerPools;
+            }
+        } catch (configRefreshError) {
+            logger.warn(`[Auto-Link] Provider pool persisted but config refresh failed: ${configRefreshError.message}`);
+        }
+        try {
+            if (providerPoolManager) {
+                providerPoolManager.providerPools = providerPools;
+                providerPoolManager.initializeProviderStatus();
+            }
+        } catch (managerRefreshError) {
+            logger.warn(`[Auto-Link] Provider pool persisted but manager refresh failed: ${managerRefreshError.message}`);
         }
     });
 
@@ -446,7 +505,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
  * @param {boolean} options.needsProjectId - 是否需要 PROJECT_ID
  */
 async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options) {
-    const { providerType, credPathKey, defaultCheckModel, needsProjectId } = options;
+    const { providerType, credPathKey, defaultCheckModel, needsProjectId, existingProviders = [] } = options;
     
     try {
         const files = await pfs.readdir(dirPath, { withFileTypes: true });
@@ -471,6 +530,13 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                     const isLinked = isPathUsed(relativePath, fileName, linkedPaths);
                     
                     if (!isLinked) {
+                        if (isCodexProviderType(providerType)) {
+                            const providersForIdentityCheck = [...existingProviders, ...newProviders];
+                            if (findProviderIndexByCodexIdentity(providersForIdentityCheck, codexIdentity) >= 0) {
+                                logger.info(`[Auto-Link] Skipping duplicate Codex credential identity: ${relativePath}`);
+                                continue;
+                            }
+                        }
                         // 使用公共方法创建新的提供商配置
                         const newProvider = createProviderConfig({
                             credPathKey,

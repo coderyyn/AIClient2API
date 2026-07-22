@@ -66,6 +66,16 @@ export async function handleGenerateAuthUrl(req, res, currentConfig, providerTyp
             // Codex OAuth（OAuth2 + PKCE）
             options.requestHost = req.headers['x-forwarded-host'] || req.headers.host || null;
             const result = await handleCodexOAuth(currentConfig, options);
+            if (result?.success === false) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: {
+                        message: result.error || 'Failed to generate Codex OAuth URL'
+                    }
+                }));
+                return true;
+            }
             authUrl = result.authUrl;
             authInfo = result.authInfo;
         } else if (providerType === 'grok-cli-oauth') {
@@ -121,7 +131,6 @@ export async function handleManualOAuthCallback(req, res) {
         }
 
         logger.info(`[OAuth Manual Callback] Processing manual callback for ${provider}`);
-        logger.info(`[OAuth Manual Callback] Callback URL: ${callbackUrl}`);
 
         // 解析回调URL
         const url = new URL(callbackUrl);
@@ -142,9 +151,17 @@ export async function handleManualOAuthCallback(req, res) {
         if (provider === 'openai-codex-oauth' && code && state) {
             const { handleCodexOAuthCallback } = await import('../auth/oauth-handlers.js');
             const result = await handleCodexOAuthCallback(code, state);
+            const responseBody = result.success ? result : {
+                ...result,
+                error: {
+                    message: typeof result.error === 'string'
+                        ? result.error
+                        : (result.error?.message || 'OAuth callback failed')
+                }
+            };
 
-            res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
+            res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(responseBody));
             return true;
         }
 
@@ -165,7 +182,7 @@ export async function handleManualOAuthCallback(req, res) {
         localUrl.protocol = 'http:';
 
         try {
-            console.log(`[OAuth Manual Callback] Sending request to local server: ${localUrl.href}`);
+            logger.info(`[OAuth Manual Callback] Forwarding callback to local server for ${provider}`);
             const response = await fetch(localUrl.href);
 
             if (response.ok) {
@@ -176,8 +193,7 @@ export async function handleManualOAuthCallback(req, res) {
                     message: 'OAuth callback processed successfully'
                 }));
             } else {
-                const errorText = await response.text();
-                logger.error(`[OAuth Manual Callback] Callback processing failed:`, errorText);
+                logger.error(`[OAuth Manual Callback] Callback processing failed with status ${response.status}`);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: false,
@@ -185,7 +201,7 @@ export async function handleManualOAuthCallback(req, res) {
                 }));
             }
         } catch (fetchError) {
-            logger.error(`[OAuth Manual Callback] Failed to process callback:`, fetchError);
+            logger.error('[OAuth Manual Callback] Failed to forward callback to the local OAuth server');
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: false,
@@ -195,7 +211,7 @@ export async function handleManualOAuthCallback(req, res) {
 
         return true;
     } catch (error) {
-        logger.error('[OAuth Manual Callback] Error:', error);
+        logger.error('[OAuth Manual Callback] Callback request could not be processed');
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: false,

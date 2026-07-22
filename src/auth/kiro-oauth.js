@@ -352,6 +352,7 @@ async function handleKiroBuilderIDDeviceCode(currentConfig, options = {}) {
         logger.error(`${KIRO_OAUTH_CONFIG.logPrefix} 轮询失败 [${taskId}]:`, error);
         broadcastEvent('oauth_error', {
             provider: 'claude-kiro-oauth',
+            sessionId: taskId,
             error: error.message,
             timestamp: new Date().toISOString()
         });
@@ -361,6 +362,7 @@ async function handleKiroBuilderIDDeviceCode(currentConfig, options = {}) {
         authUrl: deviceAuth.verificationUriComplete,
         authInfo: {
             provider: 'claude-kiro-oauth',
+            sessionId: taskId,
             authMethod: 'builder-id',
             deviceCode: deviceAuth.deviceCode,
             userCode: deviceAuth.userCode,
@@ -448,6 +450,7 @@ async function pollKiroBuilderIDToken(clientId, clientSecret, deviceCode, interv
                 // 广播成功事件（符合现有规范）
                 broadcastEvent('oauth_success', {
                     provider: 'claude-kiro-oauth',
+                    sessionId: taskId,
                     credPath,
                     relativePath: path.relative(process.cwd(), credPath),
                     timestamp: new Date().toISOString()

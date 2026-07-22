@@ -1864,13 +1864,18 @@ async function reauthorizeProvider(uuid, event) {
         return;
     }
 
-    if (!confirm(t('modal.provider.reauthorizeConfirm'))) {
+    const currentProvider = currentProviders.find(provider => provider.uuid === uuid);
+    if (!currentProvider) {
+        showToast(t('common.error'), t('modal.provider.notFound'), 'error');
         return;
     }
 
     try {
-        await window.executeGenerateAuthUrl(providerType, {
-            targetProviderUuid: uuid
+        await window.showCodexAuthMethodSelector(providerType, {
+            mode: 'reauthorize',
+            targetProviderUuid: uuid,
+            initialProxyId: currentProvider.PROXY_ID || '',
+            providerName: currentProvider.customName || currentProvider.codexEmail || uuid
         });
     } catch (error) {
         console.error('Failed to reauthorize provider:', error);

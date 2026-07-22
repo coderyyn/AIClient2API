@@ -8,8 +8,10 @@ import axios from 'axios';
 import { broadcastEvent } from '../services/ui-manager.js';
 import { autoLinkProviderConfigs, replaceProviderCredentialPath } from '../services/service-manager.js';
 import { CONFIG } from '../core/config-manager.js';
-import { configureAxiosProxy } from '../utils/proxy-utils.js';
+import { configureAxiosProxy, parseProxyUrl } from '../utils/proxy-utils.js';
+import { resolveProxyPoolEntry } from '../utils/proxy-pool-store.js';
 import { buildCodexRedirectUri } from '../utils/codex-utils.js';
+import { generateCodexCallbackPage } from './codex-oauth-response-page.js';
 
 /**
  * Codex OAuth 配置
@@ -28,6 +30,30 @@ const CODEX_OAUTH_CONFIG = {
  * 活动的服务器实例管理（与 gemini-oauth 一致）
  */
 const activeServers = new Map();
+let codexOAuthTransition = Promise.resolve();
+
+function withCodexOAuthTransitionLock(operation) {
+    const run = codexOAuthTransition.then(operation, operation);
+    codexOAuthTransition = run.then(() => undefined, () => undefined);
+    return run;
+}
+
+function setLatestCodexOAuthSession(sessionId) {
+    global.codexOAuthLatestSessionId = sessionId;
+}
+
+function clearLatestCodexOAuthSession(sessionId) {
+    if (global.codexOAuthLatestSessionId === sessionId) {
+        delete global.codexOAuthLatestSessionId;
+    }
+}
+
+function assertLatestCodexOAuthSession(sessionId) {
+    const latestSessionId = global.codexOAuthLatestSessionId;
+    if (latestSessionId && latestSessionId !== sessionId) {
+        throw new Error('OAuth authorization was replaced by a newer request');
+    }
+}
 
 function sanitizeCodexCredentialFilenamePart(value) {
     const sanitized = String(value || 'default')
@@ -80,19 +106,77 @@ async function closeActiveServer(provider, port = null) {
     }
 }
 
+function closeCodexOAuthServer(server) {
+    if (!server) return;
+
+    const activeServer = activeServers.get('openai-codex-oauth');
+    if (activeServer?.server === server) {
+        activeServers.delete('openai-codex-oauth');
+    }
+
+    if (!server.listening) return;
+
+    try {
+        server.close(error => {
+            if (error) {
+                logger.warn(`[Codex Auth] Failed to close callback server: ${error.message}`);
+            }
+        });
+    } catch (error) {
+        logger.warn(`[Codex Auth] Failed to close callback server: ${error.message}`);
+    }
+}
+
+function claimCodexOAuthSession(sessionId) {
+    if (!global.codexOAuthSessions || !global.codexOAuthSessions.has(sessionId)) {
+        return null;
+    }
+
+    const session = global.codexOAuthSessions.get(sessionId);
+    global.codexOAuthSessions.delete(sessionId);
+    if (session?.pollTimer) {
+        clearInterval(session.pollTimer);
+        session.pollTimer = null;
+    }
+    if (!global.codexOAuthLatestSessionId) {
+        setLatestCodexOAuthSession(sessionId);
+    }
+    return session;
+}
+
 /**
  * Codex OAuth 认证类
  * 实现 OAuth2 + PKCE 流程
  */
+export function createCodexOAuthAxiosConfig(config = {}, options = {}) {
+    const axiosConfig = { timeout: 30000 };
+    if (options.forceDirect) {
+        axiosConfig.proxy = false;
+        return axiosConfig;
+    }
+
+    if (options.selectedProxyUrl) {
+        const selectedProxyConfig = parseProxyUrl(options.selectedProxyUrl);
+        if (!selectedProxyConfig) {
+            throw new Error('Selected proxy URL is invalid or unsupported');
+        }
+        axiosConfig.proxy = false;
+        axiosConfig.httpAgent = selectedProxyConfig.httpAgent;
+        axiosConfig.httpsAgent = selectedProxyConfig.httpsAgent;
+        return axiosConfig;
+    }
+
+    return configureAxiosProxy(axiosConfig, config, 'openai-codex-oauth');
+}
+
 class CodexAuth {
-    constructor(config) {
+    constructor(config, proxyOptions = {}) {
         this.config = config;
         this.redirectUri = null;
         
         // 配置代理支持
-        const axiosConfig = { timeout: 30000 };
-        configureAxiosProxy(axiosConfig, config, 'openai-codex-oauth');
-        if (axiosConfig.httpAgent || axiosConfig.httpsAgent) {
+        const axiosConfig = createCodexOAuthAxiosConfig(config, proxyOptions);
+        if (!proxyOptions.forceDirect && (axiosConfig.httpAgent || axiosConfig.httpsAgent)) {
             logger.info('[Codex Auth] Proxy enabled for OAuth requests');
         }
         
@@ -210,7 +294,7 @@ class CodexAuth {
 
         // 关闭服务器
         if (this.server) {
-            this.server.close();
+            closeCodexOAuthServer(this.server);
             this.server = null;
         }
 
@@ -249,7 +333,6 @@ class CodexAuth {
         authUrl.searchParams.set('codex_cli_simplified_flow', 'true');
 
         logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Opening browser for authentication...`);
-        logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} If browser doesn't open, visit: ${authUrl.toString()}`);
 
         try {
             await open(authUrl.toString());
@@ -301,63 +384,32 @@ class CodexAuth {
             server.on('request', (req, res) => {
                 if (req.url.startsWith('/auth/callback')) {
                     const url = new URL(req.url, this.getRedirectUri());
+                    const callbackLocale = req.headers?.['accept-language'] || 'zh-CN';
                     const code = url.searchParams.get('code');
                     const state = url.searchParams.get('state');
                     const error = url.searchParams.get('error');
                     const errorDescription = url.searchParams.get('error_description');
 
                     if (error) {
+                        const callbackError = new Error(errorDescription || error);
                         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-                        res.end(`
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <title>Authentication Failed</title>
-                                <style>
-                                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-                                    h1 { color: #d32f2f; }
-                                    p { color: #666; }
-                                </style>
-                            </head>
-                            <body>
-                                <h1>❌ Authentication Failed</h1>
-                                <p>${errorDescription || error}</p>
-                                <p>You can close this window and try again.</p>
-                            </body>
-                            </html>
-                        `);
-                        server.emit('auth-error', new Error(errorDescription || error));
+                        res.end(generateCodexCallbackPage({
+                            isSuccess: false,
+                            message: errorDescription || error,
+                            sessionId: state || '',
+                            locale: callbackLocale
+                        }));
+                        server.emit('auth-error', {
+                            error: callbackError,
+                            state
+                        });
                     } else if (code && state) {
                         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                        res.end(`
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <title>Authentication Successful</title>
-                                <style>
-                                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-                                    h1 { color: #4caf50; }
-                                    p { color: #666; }
-                                    .countdown { font-size: 24px; font-weight: bold; color: #2196f3; }
-                                </style>
-                                <script>
-                                    let countdown = 10;
-                                    setInterval(() => {
-                                        countdown--;
-                                        document.getElementById('countdown').textContent = countdown;
-                                        if (countdown <= 0) {
-                                            window.close();
-                                        }
-                                    }, 1000);
-                                </script>
-                            </head>
-                            <body>
-                                <h1>✅ Authentication Successful!</h1>
-                                <p>You can now close this window and return to the application.</p>
-                                <p>This window will close automatically in <span id="countdown" class="countdown">10</span> seconds.</p>
-                            </body>
-                            </html>
-                        `);
+                        res.end(generateCodexCallbackPage({
+                            isSuccess: true,
+                            sessionId: state,
+                            locale: callbackLocale
+                        }));
                         server.emit('auth-success', { code, state });
                     }
                 } else if (req.url === '/success') {
@@ -406,10 +458,10 @@ class CodexAuth {
                 }
             });
 
-            server.once('auth-error', (error) => {
+            server.once('auth-error', (callbackError) => {
                 clearTimeout(timeout);
                 server.close();
-                reject(error);
+                reject(callbackError?.error || callbackError);
             });
         });
     }
@@ -904,20 +956,60 @@ export async function refreshCodexTokensWithRetry(refreshToken, config = {}, max
     throw lastError;
 }
 
-async function persistCodexOAuthCredentials(credentials, targetProviderUuid = null, providerDefaults = {}) {
+async function persistCodexOAuthCredentials(credentials, targetProviderUuid = null, proxySelection = {}) {
+    const proxyId = typeof proxySelection.proxyId === 'string'
+        ? proxySelection.proxyId.trim()
+        : '';
+    const proxyOverrideProvided = proxySelection.proxyOverrideProvided === true;
+
     if (targetProviderUuid) {
-        return replaceProviderCredentialPath(CONFIG, {
-            providerType: 'openai-codex-oauth',
-            providerUuid: targetProviderUuid,
-            credPath: credentials.relativePath
-        });
+        try {
+            return await replaceProviderCredentialPath(CONFIG, {
+                providerType: 'openai-codex-oauth',
+                providerUuid: targetProviderUuid,
+                credPath: credentials.relativePath,
+                ...(proxyOverrideProvided ? { proxyId } : {})
+            });
+        } catch (error) {
+            await removeCodexOAuthCredentialFile(credentials.credPath);
+            throw error;
+        }
     }
 
-    return autoLinkProviderConfigs(CONFIG, {
-        onlyCurrentCred: true,
-        credPath: credentials.relativePath,
-        providerDefaults
-    });
+    try {
+        return await autoLinkProviderConfigs(CONFIG, {
+            onlyCurrentCred: true,
+            credPath: credentials.relativePath,
+            providerDefaults: proxyId ? { PROXY_ID: proxyId } : {},
+            throwOnPersistError: true
+        });
+    } catch (error) {
+        await removeCodexOAuthCredentialFile(credentials.credPath);
+        throw error;
+    }
+}
+
+async function removeCodexOAuthCredentialFile(credPath) {
+    if (!credPath) return;
+
+    const codexCredentialDir = path.resolve(process.cwd(), 'configs', 'codex');
+    const absoluteCredPath = path.resolve(String(credPath));
+    const relativeToCredentialDir = path.relative(codexCredentialDir, absoluteCredPath);
+    const isGeneratedCodexCredential = relativeToCredentialDir
+        && !path.isAbsolute(relativeToCredentialDir)
+        && !relativeToCredentialDir.startsWith('..');
+    if (!isGeneratedCodexCredential) {
+        logger.warn(`[Codex Auth] Refusing to remove credential outside generated directory: ${absoluteCredPath}`);
+        return;
+    }
+
+    try {
+        await fs.promises.unlink(absoluteCredPath);
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            logger.warn(`[Codex Auth] Failed to remove unlinked credential file: ${error.message}`);
+        }
+    }
 }
 
 function resolveTargetProviderConfig(currentConfig, targetProviderUuid) {
@@ -933,6 +1025,26 @@ function resolveTargetProviderConfig(currentConfig, targetProviderUuid) {
     return providers.find(provider => provider?.uuid === targetProviderUuid) || {};
 }
 
+export function assertCodexOAuthProxyAvailable(config = {}, proxyId = '') {
+    const normalizedProxyId = String(proxyId || '').trim();
+    if (!normalizedProxyId) {
+        return null;
+    }
+
+    const proxyEntry = resolveProxyPoolEntry({
+        ...config,
+        PROXY_ID: normalizedProxyId
+    });
+    if (!proxyEntry) {
+        throw new Error(`Selected proxy node is unavailable: ${normalizedProxyId}`);
+    }
+    if (!parseProxyUrl(proxyEntry.url)) {
+        throw new Error(`Selected proxy node is unavailable: ${normalizedProxyId}`);
+    }
+
+    return proxyEntry;
+}
+
 /**
  * 处理 Codex OAuth 认证
  * @param {Object} currentConfig - 当前配置
@@ -944,48 +1056,101 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
         ? options.targetProviderUuid.trim()
         : null;
     const targetProviderConfig = resolveTargetProviderConfig(currentConfig, targetProviderUuid);
+    const hasProxyOverride = Object.prototype.hasOwnProperty.call(options, 'proxyId');
+    if (hasProxyOverride && typeof options.proxyId !== 'string') {
+        return {
+            success: false,
+            error: 'proxyId must be a string when provided',
+            authInfo: {
+                provider: 'openai-codex-oauth',
+                method: 'oauth2-pkce'
+            }
+        };
+    }
     const selectedProxyId = targetProviderUuid
-        ? targetProviderConfig.PROXY_ID
-        : (options.proxyId || options.PROXY_ID || '').trim();
-    const providerDefaults = selectedProxyId ? { PROXY_ID: selectedProxyId } : {};
-    const auth = new CodexAuth({
+        ? (hasProxyOverride ? String(options.proxyId || '').trim() : String(targetProviderConfig.PROXY_ID || '').trim())
+        : String(options.proxyId || options.PROXY_ID || '').trim();
+    const authConfig = {
         ...currentConfig,
-        ...providerDefaults,
         ...targetProviderConfig,
         requestHost: options.requestHost || null
-    });
-
+    };
+    if (targetProviderUuid) {
+        delete authConfig.CODEX_OAUTH_CREDS_FILE_PATH;
+    }
+    if (selectedProxyId) {
+        authConfig.PROXY_ID = selectedProxyId;
+    } else if (hasProxyOverride) {
+        delete authConfig.PROXY_ID;
+    }
+    let auth = null;
     try {
+        const selectedProxyEntry = assertCodexOAuthProxyAvailable(authConfig, selectedProxyId);
+        auth = new CodexAuth(authConfig, {
+            forceDirect: hasProxyOverride && !selectedProxyId,
+            selectedProxyUrl: selectedProxyEntry?.url || null
+        });
         logger.info('[Codex Auth] Generating OAuth URL...');
 
-        // 清理所有旧的会话和服务器
-        if (global.codexOAuthSessions && global.codexOAuthSessions.size > 0) {
-            logger.info('[Codex Auth] Cleaning up old OAuth sessions...');
-            for (const [sessionId, session] of global.codexOAuthSessions.entries()) {
-                try {
-                    // 清理定时器
-                    if (session.pollTimer) {
-                        clearInterval(session.pollTimer);
+        let authUrl;
+        let state;
+        let pkce;
+        let server;
+        let sessionId;
+        let session;
+
+        // 清理旧会话、生成新回调服务器并发布新 generation，共用同一线性化锁。
+        await withCodexOAuthTransitionLock(async () => {
+            if (global.codexOAuthSessions && global.codexOAuthSessions.size > 0) {
+                logger.info('[Codex Auth] Cleaning up old OAuth sessions...');
+                for (const [sessionId] of global.codexOAuthSessions.entries()) {
+                    try {
+                        const staleSession = claimCodexOAuthSession(sessionId);
+                        clearLatestCodexOAuthSession(sessionId);
+                        closeCodexOAuthServer(staleSession?.server);
+                        if (staleSession) {
+                            broadcastEvent('oauth_error', {
+                                provider: 'openai-codex-oauth',
+                                sessionId,
+                                targetProviderUuid: staleSession.targetProviderUuid,
+                                error: 'OAuth authorization was replaced by a newer request',
+                                timestamp: new Date().toISOString()
+                            });
+                        }
+                    } catch (error) {
+                        logger.warn('[Codex Auth] Failed to clean up a previous OAuth session:', error.message);
                     }
-                    // 不在这里显式关闭 server，由 startCallbackServer 中的 closeActiveServer 处理
-                    global.codexOAuthSessions.delete(sessionId);
-                } catch (error) {
-                    logger.warn(`[Codex Auth] Failed to clean up session ${sessionId}:`, error.message);
                 }
             }
-        }
 
-        // 生成授权 URL 和启动回调服务器
-        const { authUrl, state, pkce, server } = await auth.generateAuthUrl();
+            const generatedAuth = await auth.generateAuthUrl();
+            authUrl = generatedAuth.authUrl;
+            state = generatedAuth.state;
+            pkce = generatedAuth.pkce;
+            server = generatedAuth.server;
+
+            if (!global.codexOAuthSessions) {
+                global.codexOAuthSessions = new Map();
+            }
+
+            sessionId = state;
+            session = {
+                auth,
+                state,
+                pkce,
+                server,
+                targetProviderUuid,
+                proxyId: selectedProxyId,
+                proxyOverrideProvided: hasProxyOverride,
+                pollTimer: null,
+                createdAt: Date.now()
+            };
+
+            setLatestCodexOAuthSession(sessionId);
+            global.codexOAuthSessions.set(sessionId, session);
+        });
 
         logger.info('[Codex Auth] OAuth URL generated successfully');
-
-        // 存储 OAuth 会话信息，供后续回调使用
-        if (!global.codexOAuthSessions) {
-            global.codexOAuthSessions = new Map();
-        }
-
-        const sessionId = state; // 使用 state 作为 session ID
         
         // 轮询计数器
         let pollCount = 0;
@@ -994,20 +1159,6 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
         let pollTimer = null;
         let isCompleted = false;
         
-        // 创建会话对象
-        const session = {
-            auth,
-            state,
-            pkce,
-            server,
-            targetProviderUuid,
-            proxyId: selectedProxyId || null,
-            pollTimer: null,
-            createdAt: Date.now()
-        };
-        
-        global.codexOAuthSessions.set(sessionId, session);
-
         // 启动轮询日志
         pollTimer = setInterval(() => {
             pollCount++;
@@ -1016,13 +1167,22 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
             }
             
             if (pollCount >= maxPollCount && !isCompleted) {
-                clearInterval(pollTimer);
+                isCompleted = true;
                 const totalSeconds = (maxPollCount * pollInterval) / 1000;
                 logger.info(`[Codex Auth] Polling timeout (${totalSeconds}s), releasing session for next authorization`);
-                
-                // 清理会话
-                if (global.codexOAuthSessions.has(sessionId)) {
-                    global.codexOAuthSessions.delete(sessionId);
+
+                const expiredSession = claimCodexOAuthSession(sessionId);
+                if (expiredSession) {
+                    clearLatestCodexOAuthSession(sessionId);
+                    detachCallbackListeners();
+                    closeCodexOAuthServer(expiredSession.server);
+                    broadcastEvent('oauth_error', {
+                        provider: 'openai-codex-oauth',
+                        sessionId,
+                        targetProviderUuid,
+                        error: 'OAuth authorization timed out',
+                        timestamp: new Date().toISOString()
+                    });
                 }
             }
         }, pollInterval);
@@ -1031,69 +1191,117 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
         session.pollTimer = pollTimer;
 
         // 监听回调服务器的 auth-success 事件，自动完成 OAuth 流程
-        server.once('auth-success', async (result) => {
-            isCompleted = true;
-            if (pollTimer) {
-                clearInterval(pollTimer);
+        const detachCallbackListeners = () => {
+            server.removeListener('auth-success', handleAuthSuccess);
+            server.removeListener('auth-error', handleAuthError);
+        };
+        const handleAuthSuccess = async (result) => {
+            if (!result || result.state !== sessionId) {
+                logger.warn('[Codex Auth] Ignoring callback with mismatched OAuth state');
+                return;
             }
-            
+
+            detachCallbackListeners();
+            isCompleted = true;
+            const claimedSession = claimCodexOAuthSession(sessionId);
+            if (!claimedSession) {
+                logger.warn('[Codex Auth] OAuth session was already completed or expired');
+                closeCodexOAuthServer(server);
+                return;
+            }
+
             try {
                 logger.info('[Codex Auth] Received auth callback, completing OAuth flow...');
-                
-                const session = global.codexOAuthSessions.get(sessionId);
-                if (!session) {
-                    logger.error('[Codex Auth] Session not found');
-                    return;
-                }
 
                 // 完成 OAuth 流程
-                const credentials = await auth.completeOAuthFlow(result.code, result.state, session.state, session.pkce);
+                const credentials = await claimedSession.auth.completeOAuthFlow(
+                    result.code,
+                    result.state,
+                    claimedSession.state,
+                    claimedSession.pkce
+                );
 
-                // 清理会话
-                global.codexOAuthSessions.delete(sessionId);
+                await withCodexOAuthTransitionLock(async () => {
+                    try {
+                        try {
+                            assertLatestCodexOAuthSession(sessionId);
+                        } catch (error) {
+                            await removeCodexOAuthCredentialFile(credentials.credPath);
+                            throw error;
+                        }
 
-                // 广播认证成功事件
-                broadcastEvent('oauth_success', {
-                    provider: 'openai-codex-oauth',
-                    credPath: credentials.credPath,
-                    relativePath: credentials.relativePath,
-                    timestamp: new Date().toISOString(),
-                    email: credentials.email,
-                    accountId: credentials.account_id,
-                    targetProviderUuid
+                        await persistCodexOAuthCredentials(credentials, claimedSession.targetProviderUuid, {
+                            proxyId: claimedSession.proxyId,
+                            proxyOverrideProvided: claimedSession.proxyOverrideProvided
+                        });
+
+                        // 仅在凭据和代理配置持久化完成后广播认证成功事件
+                        broadcastEvent('oauth_success', {
+                            provider: 'openai-codex-oauth',
+                            sessionId,
+                            credPath: credentials.credPath,
+                            relativePath: credentials.relativePath,
+                            timestamp: new Date().toISOString(),
+                            email: credentials.email,
+                            accountId: credentials.account_id,
+                            targetProviderUuid: claimedSession.targetProviderUuid
+                        });
+                    } finally {
+                        clearLatestCodexOAuthSession(sessionId);
+                    }
                 });
-
-                await persistCodexOAuthCredentials(credentials, targetProviderUuid, providerDefaults);
 
                 logger.info('[Codex Auth] OAuth flow completed successfully');
             } catch (error) {
+                clearLatestCodexOAuthSession(sessionId);
                 logger.error('[Codex Auth] Failed to complete OAuth flow:', error.message);
                 
                 // 广播认证失败事件
                 broadcastEvent('oauth_error', {
                     provider: 'openai-codex-oauth',
+                    sessionId,
+                    targetProviderUuid: claimedSession.targetProviderUuid,
                     error: error.message,
                     timestamp: new Date().toISOString()
                 });
+            } finally {
+                closeCodexOAuthServer(claimedSession.server);
             }
-        });
+        };
 
         // 监听 auth-error 事件
-        server.once('auth-error', (error) => {
-            isCompleted = true;
-            if (pollTimer) {
-                clearInterval(pollTimer);
+        const handleAuthError = (callbackError) => {
+            if (!callbackError || callbackError.state !== sessionId) {
+                logger.warn('[Codex Auth] Ignoring OAuth error with mismatched state');
+                return;
             }
-            
+
+            detachCallbackListeners();
+            isCompleted = true;
+            const claimedSession = claimCodexOAuthSession(sessionId);
+            if (!claimedSession) {
+                closeCodexOAuthServer(server);
+                return;
+            }
+            clearLatestCodexOAuthSession(sessionId);
+
+            const error = callbackError.error instanceof Error
+                ? callbackError.error
+                : new Error(String(callbackError.error || 'OAuth authorization failed'));
             logger.error('[Codex Auth] Auth error:', error.message);
-            global.codexOAuthSessions.delete(sessionId);
-            
+            closeCodexOAuthServer(claimedSession.server);
+
             broadcastEvent('oauth_error', {
                 provider: 'openai-codex-oauth',
+                sessionId,
+                targetProviderUuid: claimedSession.targetProviderUuid,
                 error: error.message,
                 timestamp: new Date().toISOString()
             });
-        });
+        };
+
+        server.on('auth-success', handleAuthSuccess);
+        server.on('auth-error', handleAuthError);
 
         return {
             success: true,
@@ -1106,6 +1314,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
                 port: CODEX_OAUTH_CONFIG.port,
                 targetProviderUuid,
                 proxyId: selectedProxyId || null,
+                proxyOverrideProvided: hasProxyOverride,
                 instructions: [
                     '1. 点击下方按钮在浏览器中打开授权链接',
                     '2. 使用您的 OpenAI 账户登录',
@@ -1116,6 +1325,7 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
             }
         };
     } catch (error) {
+        closeCodexOAuthServer(auth?.server);
         logger.error('[Codex Auth] Failed to generate OAuth URL:', error.message);
 
         return {
@@ -1142,34 +1352,58 @@ export async function handleCodexOAuth(currentConfig, options = {}) {
  * @returns {Promise<Object>} 返回认证结果
  */
 export async function handleCodexOAuthCallback(code, state) {
+    let callbackTargetProviderUuid = null;
+    let claimedSession = null;
     try {
-        if (!global.codexOAuthSessions || !global.codexOAuthSessions.has(state)) {
+        claimedSession = claimCodexOAuthSession(state);
+        if (!claimedSession) {
             throw new Error('Invalid or expired OAuth session');
         }
 
-        const session = global.codexOAuthSessions.get(state);
-        const { auth, state: expectedState, pkce, targetProviderUuid = null, proxyId = null } = session;
+        callbackTargetProviderUuid = claimedSession.targetProviderUuid || null;
+        const {
+            auth,
+            state: expectedState,
+            pkce,
+            proxyId = '',
+            proxyOverrideProvided = false
+        } = claimedSession;
+        const targetProviderUuid = callbackTargetProviderUuid;
 
         logger.info('[Codex Auth] Processing OAuth callback...');
 
         // 完成 OAuth 流程
         const result = await auth.completeOAuthFlow(code, state, expectedState, pkce);
 
-        // 清理会话
-        global.codexOAuthSessions.delete(state);
+        await withCodexOAuthTransitionLock(async () => {
+            try {
+                try {
+                    assertLatestCodexOAuthSession(state);
+                } catch (error) {
+                    await removeCodexOAuthCredentialFile(result.credPath);
+                    throw error;
+                }
 
-        // 广播认证成功事件（与 gemini 格式一致）
-        broadcastEvent('oauth_success', {
-            provider: 'openai-codex-oauth',
-            credPath: result.credPath,
-            relativePath: result.relativePath,
-            timestamp: new Date().toISOString(),
-            email: result.email,
-            accountId: result.account_id,
-            targetProviderUuid
+                await persistCodexOAuthCredentials(result, targetProviderUuid, {
+                    proxyId,
+                    proxyOverrideProvided
+                });
+
+                // 仅在凭据和代理配置持久化完成后广播认证成功事件
+                broadcastEvent('oauth_success', {
+                    provider: 'openai-codex-oauth',
+                    sessionId: state,
+                    credPath: result.credPath,
+                    relativePath: result.relativePath,
+                    timestamp: new Date().toISOString(),
+                    email: result.email,
+                    accountId: result.account_id,
+                    targetProviderUuid
+                });
+            } finally {
+                clearLatestCodexOAuthSession(state);
+            }
         });
-
-        await persistCodexOAuthCredentials(result, targetProviderUuid, proxyId ? { PROXY_ID: proxyId } : {});
 
         logger.info('[Codex Auth] OAuth callback processed successfully');
 
@@ -1185,18 +1419,25 @@ export async function handleCodexOAuthCallback(code, state) {
             proxyId
         };
     } catch (error) {
+        clearLatestCodexOAuthSession(state);
         logger.error('[Codex Auth] OAuth callback failed:', error.message);
 
-        // 广播认证失败事件
-        broadcastEvent('oauth_error', {
-            provider: 'openai-codex-oauth',
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
+        // 只有实际领取到会话的处理失败才广播终态；重复/过期回调仅返回请求错误。
+        if (claimedSession) {
+            broadcastEvent('oauth_error', {
+                provider: 'openai-codex-oauth',
+                sessionId: state,
+                targetProviderUuid: callbackTargetProviderUuid,
+                error: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
 
         return {
             success: false,
             error: error.message
         };
+    } finally {
+        closeCodexOAuthServer(claimedSession?.server);
     }
 }
