@@ -652,6 +652,1214 @@ function dateKeys(from, to) {
   return keys;
 }
 
+function shiftDateKey(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function repairAuditFileDate(filePath) {
+  return path.basename(filePath).match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl(?:\.|$)/)?.[1] || '';
+}
+
+export async function discoverRepairAuditFiles({ auditDir, from, to }) {
+  if (!auditDir || !from) throw new Error('auditDir and from are required');
+  const end = to || from;
+  const allowedDates = new Set(dateKeys(shiftDateKey(from, -1), shiftDateKey(end, 1)));
+  const files = [];
+  const directories = [auditDir, path.join(auditDir, 'archived-large')];
+
+  for (const directory of directories) {
+    if (!fs.existsSync(directory)) continue;
+    const entries = await fsp.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.includes('.tmp')) continue;
+      const date = repairAuditFileDate(entry.name);
+      if (!date || !allowedDates.has(date)) continue;
+      files.push(path.join(directory, entry.name));
+    }
+  }
+
+  return files.sort((left, right) => {
+    const dateCompare = repairAuditFileDate(left).localeCompare(repairAuditFileDate(right));
+    if (dateCompare !== 0) return dateCompare;
+    const leftArchived = path.dirname(left) === auditDir ? 0 : 1;
+    const rightArchived = path.dirname(right) === auditDir ? 0 : 1;
+    return leftArchived - rightArchived || left.localeCompare(right);
+  });
+}
+
+async function sha256File(filePath) {
+  const hash = crypto.createHash('sha256');
+  const input = fs.createReadStream(filePath);
+  for await (const chunk of input) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+function deriveBeijingParts(timestamp) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return { date: null, hour: null };
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const value = type => parts.find(part => part.type === type)?.value;
+  return {
+    date: `${value('year')}-${value('month')}-${value('day')}`,
+    hour: value('hour') || '00',
+  };
+}
+
+function compactRepairEvent(event = {}) {
+  const derived = deriveBeijingParts(event.timestamp);
+  return {
+    timestamp: event.timestamp || null,
+    beijingDate: event.beijingDate || derived.date,
+    beijingHour: event.beijingHour || derived.hour || '00',
+    requestId: event.requestId || null,
+    request: {
+      fromProvider: event.request?.fromProvider || null,
+      toProvider: event.request?.toProvider || null,
+      model: event.request?.model || null,
+      actualModel: event.request?.actualModel || event.request?.model || 'unknown',
+    },
+    potluckKey: {
+      present: Boolean(event.potluckKey?.present),
+      hash: event.potluckKey?.hash || null,
+      prefix: event.potluckKey?.prefix || null,
+      name: event.potluckKey?.name || null,
+    },
+    account: {
+      providerUuid: event.account?.providerUuid || null,
+      accountEmail: event.account?.accountEmail || null,
+      providerNameDisplay: event.account?.providerNameDisplay || null,
+    },
+    status: {
+      outcome: event.status?.outcome || 'success',
+      httpStatus: event.status?.httpStatus ?? null,
+    },
+    usage: normalizeUsage(event.usage || {}),
+  };
+}
+
+function repairEventFingerprint(event) {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    event.timestamp,
+    event.beijingDate,
+    event.beijingHour,
+    event.request?.toProvider,
+    event.request?.actualModel,
+    event.potluckKey?.hash,
+    event.account?.providerUuid,
+    event.account?.accountEmail,
+    event.usage,
+  ])).digest('hex');
+}
+
+function repairEventQuality(rawEvent, compactEvent) {
+  const usage = rawEvent?.usage || {};
+  const usageFields = [
+    'promptTokens', 'prompt_tokens', 'input_tokens',
+    'cachedTokens', 'cached_tokens',
+    'completionTokens', 'completion_tokens', 'output_tokens',
+    'reasoningTokens', 'reasoning_tokens',
+    'totalTokens', 'total_tokens',
+  ].filter(field => usage[field] !== undefined).length;
+  return usageFields * 1000 +
+    (compactEvent.account.accountEmail ? 100 : 0) +
+    (compactEvent.account.providerUuid ? 50 : 0) +
+    (compactEvent.request.actualModel !== 'unknown' ? 10 : 0) +
+    Math.min(compactEvent.usage.totalTokens, 9);
+}
+
+export async function scanRepairAuditFiles({ files = [], from, to }) {
+  if (!from) throw new Error('from is required');
+  const end = to || from;
+  const selected = new Map();
+  const parseErrors = [];
+  const sourceFiles = [];
+  let duplicateCount = 0;
+  let nonSuccessCount = 0;
+  let outsideRangeCount = 0;
+  let invalidEventCount = 0;
+
+  for (const filePath of files) {
+    const stat = await fsp.stat(filePath);
+    const source = {
+      path: filePath,
+      utcDate: repairAuditFileDate(filePath),
+      size: stat.size,
+      sha256: await sha256File(filePath),
+      parsedLines: 0,
+      matchedLines: 0,
+      parseErrorCount: 0,
+    };
+    const input = fs.createReadStream(filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    let lineNumber = 0;
+    try {
+      for await (const line of lines) {
+        lineNumber += 1;
+        if (!line.trim()) continue;
+        let rawEvent;
+        try {
+          rawEvent = JSON.parse(line);
+          source.parsedLines += 1;
+        } catch {
+          source.parseErrorCount += 1;
+          parseErrors.push({ file: filePath, line: lineNumber });
+          continue;
+        }
+
+        const event = compactRepairEvent(rawEvent);
+        if (!event.beijingDate) {
+          invalidEventCount += 1;
+          continue;
+        }
+        if (!inDateRange(event.beijingDate, { from, to: end })) {
+          outsideRangeCount += 1;
+          continue;
+        }
+        if (event.status.outcome !== 'success') {
+          nonSuccessCount += 1;
+          continue;
+        }
+        source.matchedLines += 1;
+
+        const dedupeKey = event.requestId
+          ? `request:${event.requestId}`
+          : `fingerprint:${repairEventFingerprint(event)}`;
+        const candidate = {
+          event,
+          quality: repairEventQuality(rawEvent, event),
+          sourcePath: filePath,
+          lineNumber,
+        };
+        const current = selected.get(dedupeKey);
+        if (current) {
+          duplicateCount += 1;
+          const candidateOrder = `${candidate.sourcePath}:${String(candidate.lineNumber).padStart(12, '0')}`;
+          const currentOrder = `${current.sourcePath}:${String(current.lineNumber).padStart(12, '0')}`;
+          if (candidate.quality > current.quality ||
+              (candidate.quality === current.quality && candidateOrder < currentOrder)) {
+            selected.set(dedupeKey, candidate);
+          }
+        } else {
+          selected.set(dedupeKey, candidate);
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    sourceFiles.push(source);
+  }
+
+  const events = [...selected.values()]
+    .map(item => item.event)
+    .sort((left, right) => `${left.timestamp || ''}:${left.requestId || ''}`.localeCompare(`${right.timestamp || ''}:${right.requestId || ''}`));
+  const zeroTokenSuccessCount = events.filter(event => event.usage.totalTokens <= 0 &&
+    event.usage.promptTokens <= 0 && event.usage.completionTokens <= 0).length;
+  return {
+    events,
+    duplicateCount,
+    nonSuccessCount,
+    outsideRangeCount,
+    invalidEventCount,
+    zeroTokenSuccessCount,
+    parseErrors,
+    sourceFiles,
+  };
+}
+
+function createRepairUsageBucket() {
+  return {
+    requestCount: 0,
+    promptTokens: 0,
+    cachedTokens: 0,
+    completionTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    maxQps: 0,
+    maxRpm: 0,
+    maxTps: 0,
+    lastUsedAt: null,
+  };
+}
+
+function addRepairUsage(target, usage, timestamp = null) {
+  const normalized = normalizeUsage(usage);
+  target.requestCount += normalized.requestCount;
+  target.promptTokens += normalized.promptTokens;
+  target.cachedTokens += normalized.cachedTokens;
+  target.completionTokens += normalized.completionTokens;
+  target.reasoningTokens += normalized.reasoningTokens;
+  target.totalTokens += normalized.totalTokens;
+  if (timestamp && (!target.lastUsedAt || timestamp > target.lastUsedAt)) target.lastUsedAt = timestamp;
+  return target;
+}
+
+function currentUsageSummary(value = {}) {
+  return {
+    requestCount: toNumber(value?.requestCount),
+    promptTokens: toNumber(value?.promptTokens),
+    cachedTokens: toNumber(value?.cachedTokens),
+    completionTokens: toNumber(value?.completionTokens),
+    reasoningTokens: toNumber(value?.reasoningTokens),
+    totalTokens: toNumber(value?.totalTokens),
+  };
+}
+
+function makeRepairAccount(event) {
+  const provider = event.request?.toProvider || event.request?.fromProvider || 'unknown';
+  const email = normalizeEmail(event.account?.accountEmail);
+  if ((provider === 'openai-codex-oauth' || provider === 'openaiResponses-custom') && email) {
+    return {
+      key: `openai-codex-oauth:${email}`,
+      provider: 'openai-codex-oauth',
+      providerUuid: email,
+      accountIdentity: email,
+      accountEmail: email,
+      providerUuids: [event.account?.providerUuid].filter(Boolean),
+      providerName: event.account?.providerNameDisplay || null,
+    };
+  }
+  const identity = event.account?.providerUuid || email;
+  if (!identity) return null;
+  return {
+    key: `${provider}:${identity}`,
+    provider,
+    providerUuid: identity,
+    accountIdentity: identity,
+    accountEmail: email,
+    providerUuids: [event.account?.providerUuid].filter(Boolean),
+    providerName: event.account?.providerNameDisplay || null,
+  };
+}
+
+function ensureRepairAccount(accounts, account) {
+  if (!account) return null;
+  if (!accounts[account.key]) {
+    accounts[account.key] = {
+      provider: account.provider,
+      providerUuid: account.providerUuid,
+      accountIdentity: account.accountIdentity,
+      accountEmail: account.accountEmail,
+      providerUuids: [...account.providerUuids],
+      providerName: account.providerName,
+      summary: createRepairUsageBucket(),
+      models: {},
+    };
+  } else {
+    accounts[account.key].providerUuids = [...new Set([
+      ...accounts[account.key].providerUuids,
+      ...account.providerUuids,
+    ])];
+  }
+  return accounts[account.key];
+}
+
+function ensureRepairDay(days, date) {
+  if (!days[date]) {
+    days[date] = {
+      summary: createRepairUsageBucket(),
+      providers: {},
+      models: {},
+      accounts: {},
+      hours: {},
+    };
+  }
+  return days[date];
+}
+
+function addRepairEventToDay(day, event) {
+  const usage = event.usage || {};
+  const timestamp = event.timestamp;
+  const provider = event.request?.toProvider || event.request?.fromProvider || 'unknown';
+  const model = normalizeModelName(event.request?.actualModel || event.request?.model || 'unknown');
+  addRepairUsage(day.summary, usage, timestamp);
+  if (!day.providers[provider]) day.providers[provider] = createRepairUsageBucket();
+  addRepairUsage(day.providers[provider], usage, timestamp);
+  if (!day.models[model]) day.models[model] = createRepairUsageBucket();
+  addRepairUsage(day.models[model], usage, timestamp);
+
+  const account = makeRepairAccount(event);
+  const accountBucket = ensureRepairAccount(day.accounts, account);
+  if (accountBucket) {
+    addRepairUsage(accountBucket.summary, usage, timestamp);
+    if (!accountBucket.models[model]) accountBucket.models[model] = createRepairUsageBucket();
+    addRepairUsage(accountBucket.models[model], usage, timestamp);
+  }
+
+  const hour = event.beijingHour || '00';
+  if (!day.hours[hour]) {
+    day.hours[hour] = { summary: createRepairUsageBucket(), providers: {}, models: {}, accounts: {} };
+  }
+  const hourBucket = day.hours[hour];
+  addRepairUsage(hourBucket.summary, usage, timestamp);
+  if (!hourBucket.providers[provider]) hourBucket.providers[provider] = createRepairUsageBucket();
+  addRepairUsage(hourBucket.providers[provider], usage, timestamp);
+  if (!hourBucket.models[model]) hourBucket.models[model] = createRepairUsageBucket();
+  addRepairUsage(hourBucket.models[model], usage, timestamp);
+  const hourAccount = ensureRepairAccount(hourBucket.accounts, account);
+  if (hourAccount) {
+    addRepairUsage(hourAccount.summary, usage, timestamp);
+    if (!hourAccount.models[model]) hourAccount.models[model] = createRepairUsageBucket();
+    addRepairUsage(hourAccount.models[model], usage, timestamp);
+  }
+}
+
+function buildRepairKeyLookup(store = {}) {
+  const byHash = new Map();
+  for (const [rawKey, keyData] of Object.entries(store.keys || {})) {
+    const hash = hashSecret(rawKey);
+    if (!byHash.has(hash)) byHash.set(hash, []);
+    byHash.get(hash).push({ ...makeKeyRef(rawKey, keyData?.name), rawKey });
+  }
+  return byHash;
+}
+
+function buildRepairCandidates(events, potluckStore) {
+  const byHash = buildRepairKeyLookup(potluckStore);
+  const potluckDaysByKey = {};
+  const modelDays = {};
+  const modelProviderDays = {};
+  const modelAccountEvents = {};
+  const knownPotluckEvents = [];
+  const unknownPotluckByDate = {};
+
+  for (const event of events) {
+    const date = event.beijingDate;
+    const modelDay = ensureRepairDay(modelDays, date);
+    addRepairEventToDay(modelDay, event);
+    const provider = event.request?.toProvider || event.request?.fromProvider || 'unknown';
+    if (!modelProviderDays[date]) modelProviderDays[date] = {};
+    if (!modelProviderDays[date][provider]) {
+      modelProviderDays[date][provider] = { summary: createRepairUsageBucket(), models: {} };
+    }
+    addRepairUsage(modelProviderDays[date][provider].summary, event.usage, event.timestamp);
+    const providerModel = normalizeModelName(event.request?.actualModel || event.request?.model || 'unknown');
+    if (!modelProviderDays[date][provider].models[providerModel]) {
+      modelProviderDays[date][provider].models[providerModel] = createRepairUsageBucket();
+    }
+    addRepairUsage(modelProviderDays[date][provider].models[providerModel], event.usage, event.timestamp);
+    const account = makeRepairAccount(event);
+    if (account) {
+      if (!modelAccountEvents[account.key]) modelAccountEvents[account.key] = [];
+      modelAccountEvents[account.key].push({ timestamp: event.timestamp, totalTokens: toNumber(event.usage?.totalTokens) });
+    }
+
+    if (!event.potluckKey?.present) continue;
+    const matches = event.potluckKey.hash ? byHash.get(event.potluckKey.hash) || [] : [];
+    if (matches.length !== 1) {
+      unknownPotluckByDate[date] = (unknownPotluckByDate[date] || 0) + 1;
+      continue;
+    }
+    const keyRef = matches[0];
+    if (!potluckDaysByKey[keyRef.rawKey]) potluckDaysByKey[keyRef.rawKey] = {};
+    const potluckDay = ensureRepairDay(potluckDaysByKey[keyRef.rawKey], date);
+    addRepairEventToDay(potluckDay, event);
+    knownPotluckEvents.push(event);
+  }
+
+  const ledgerKeyLookup = buildKeyLookup(potluckStore);
+  const dailyRows = [];
+  const hourlyRows = [];
+  for (const event of knownPotluckEvents) {
+    const rows = auditEventToRows(event, { keyLookup: ledgerKeyLookup });
+    dailyRows.push(...rows.daily);
+    hourlyRows.push(...rows.hourly);
+  }
+  return {
+    potluckDaysByKey,
+    modelDays,
+    modelProviderDays,
+    modelAccountEvents,
+    unknownPotluckByDate,
+    dailyRows: mergeRows(dailyRows),
+    hourlyRows: mergeRows(hourlyRows),
+  };
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256Text(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function repairRowsForDate(rows, date) {
+  return rows.filter(row => row.date === date);
+}
+
+function potluckCandidateSummary(candidates, date) {
+  const summary = createRepairUsageBucket();
+  for (const days of Object.values(candidates.potluckDaysByKey)) {
+    const day = days[date];
+    if (day) addRepairUsage(summary, { ...day.summary, requestCount: day.summary.requestCount }, day.summary.lastUsedAt);
+  }
+  return currentUsageSummary(summary);
+}
+
+function hasNonDecreasingCandidate(candidate, current) {
+  return ['requestCount', 'promptTokens', 'cachedTokens', 'completionTokens', 'reasoningTokens', 'totalTokens']
+    .every(metric => toNumber(candidate?.[metric]) >= toNumber(current?.[metric]));
+}
+
+function potluckKeysNonDecreasing(potluckStore, candidates, date) {
+  return Object.entries(potluckStore.keys || {}).every(([rawKey, keyData]) => {
+    const current = currentUsageSummary(keyData?.usageHistory?.[date]?.summary || {});
+    const candidate = currentUsageSummary(candidates.potluckDaysByKey[rawKey]?.[date]?.summary || {});
+    return hasNonDecreasingCandidate(candidate, current);
+  });
+}
+
+function usageMapNonDecreasing(candidateMap = {}, currentMap = {}) {
+  return Object.entries(currentMap || {}).every(([key, current]) =>
+    hasNonDecreasingCandidate(candidateMap?.[key] || {}, current));
+}
+
+function accountMapNonDecreasing(candidateMap = {}, currentMap = {}) {
+  return Object.entries(currentMap || {}).every(([accountKey, current]) => {
+    const candidate = candidateMap?.[accountKey];
+    return Boolean(candidate) &&
+      hasNonDecreasingCandidate(candidate.summary, current?.summary) &&
+      usageMapNonDecreasing(candidate.models, current?.models);
+  });
+}
+
+function hourMapNonDecreasing(candidateMap = {}, currentMap = {}) {
+  return Object.entries(currentMap || {}).every(([hour, current]) => {
+    const candidate = candidateMap?.[hour];
+    return Boolean(candidate) &&
+      hasNonDecreasingCandidate(candidate.summary, current?.summary) &&
+      usageMapNonDecreasing(candidate.providers, current?.providers) &&
+      usageMapNonDecreasing(candidate.models, current?.models) &&
+      accountMapNonDecreasing(candidate.accounts, current?.accounts);
+  });
+}
+
+function dayDimensionsNonDecreasing(candidateDay = {}, currentDay = {}) {
+  return usageMapNonDecreasing(candidateDay.providers, currentDay.providers) &&
+    usageMapNonDecreasing(candidateDay.models, currentDay.models) &&
+    accountMapNonDecreasing(candidateDay.accounts, currentDay.accounts) &&
+    hourMapNonDecreasing(candidateDay.hours, currentDay.hours);
+}
+
+function potluckDimensionsNonDecreasing(potluckStore, candidates, date) {
+  return Object.entries(potluckStore.keys || {}).every(([rawKey, keyData]) =>
+    dayDimensionsNonDecreasing(
+      candidates.potluckDaysByKey?.[rawKey]?.[date] || {},
+      keyData?.usageHistory?.[date] || {},
+    ));
+}
+
+function ledgerRowsNonDecreasing(candidateRows = [], currentRows = []) {
+  const candidateByKey = new Map(candidateRows.map(row => [rowGroupKey(row), row]));
+  return (currentRows || []).every(row => {
+    const candidate = candidateByKey.get(rowGroupKey(row));
+    return Boolean(candidate) && hasNonDecreasingCandidate(candidate.usage, row.usage);
+  });
+}
+
+function modelProviderAttributionSafe(currentDay = {}, candidateProviders = {}) {
+  const covered = createRepairUsageBucket();
+  for (const account of Object.values(currentDay?.accounts || {})) {
+    for (const field of REPAIR_USAGE_FIELDS) covered[field] += toNumber(account?.summary?.[field]);
+  }
+  const fullyCovered = REPAIR_USAGE_FIELDS.every(field => toNumber(covered[field]) === toNumber(currentDay?.[field]));
+  return fullyCovered || Object.keys(candidateProviders || {}).length <= 1;
+}
+
+function beijingDateNow(now) {
+  return deriveBeijingParts(now.toISOString()).date;
+}
+
+async function readJsonIfExists(filePath, fallback) {
+  if (!fs.existsSync(filePath)) return fallback;
+  return JSON.parse(await fsp.readFile(filePath, 'utf8'));
+}
+
+async function writeJsonMode(filePath, value) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+async function buildRepairBaseline({
+  potluckStore,
+  modelStatsStore,
+  ledgerRoot,
+  dates,
+  dailyLedgerRowsByDate = null,
+  hourlyLedgerRowsByDate = null,
+}) {
+  return {
+    potluckSlices: Object.fromEntries(Object.entries(potluckStore.keys || {}).map(([rawKey, keyData]) => [
+      rawKey,
+      Object.fromEntries(dates.map(date => [date, keyData?.usageHistory?.[date] || null])),
+    ])),
+    modelSlices: Object.fromEntries(dates.map(date => [date, modelStatsStore.daily?.[date] || null])),
+    dailyLedgerSlices: Object.fromEntries(await Promise.all(dates.map(async date => [
+      date,
+      dailyLedgerRowsByDate && Object.hasOwn(dailyLedgerRowsByDate, date)
+        ? dailyLedgerRowsByDate[date]
+        : await readLedgerDailyRows(ledgerRoot, date),
+    ]))),
+    hourlyLedgerSlices: Object.fromEntries(await Promise.all(dates.map(async date => [
+      date,
+      hourlyLedgerRowsByDate && Object.hasOwn(hourlyLedgerRowsByDate, date)
+        ? hourlyLedgerRowsByDate[date]
+        : await readLedgerHourlyRows(ledgerRoot, date),
+    ]))),
+  };
+}
+
+export async function createRepairBundle({ base, from, to, outDir, now = new Date() }) {
+  if (!base || !from || !outDir) throw new Error('base, from, and outDir are required');
+  if (fs.existsSync(outDir)) throw new Error('out-dir already exists');
+  const end = to || from;
+  const auditDir = path.join(base, 'request-audit');
+  const files = await discoverRepairAuditFiles({ auditDir, from, to: end });
+  const scan = await scanRepairAuditFiles({ files, from, to: end });
+  const potluckPath = path.join(base, 'api-potluck-keys.json');
+  const modelStatsPath = path.join(base, 'model-usage-stats.json');
+  const ledgerRoot = path.join(base, 'permanent-usage-ledger');
+  const potluckStore = await readJson(potluckPath);
+  const modelStatsStore = await readJsonIfExists(modelStatsPath, { summary: {}, providers: {}, accounts: {}, accountUsageEvents: {}, daily: {} });
+  const candidates = buildRepairCandidates(scan.events, potluckStore);
+  const today = beijingDateNow(now);
+  const sourceDateSet = new Set(scan.sourceFiles.map(file => file.utcDate));
+  const parseErrorDates = new Set(scan.parseErrors.map(error => repairAuditFileDate(error.file)));
+  const days = [];
+
+  for (const date of dateKeys(from, end)) {
+    const requiredUtcDates = [shiftDateKey(date, -1), date];
+    const missingSourceDates = requiredUtcDates.filter(required => !sourceDateSet.has(required));
+    const corruptSourceDates = requiredUtcDates.filter(required => parseErrorDates.has(required));
+    const currentPotluck = summarizePotluckDay(potluckStore, date) || { requestCount: 0, totalTokens: 0 };
+    const currentModelStats = currentUsageSummary(modelStatsStore.daily?.[date] || {});
+    const currentLedgerRows = await readLedgerDailyRows(ledgerRoot, date);
+    const currentLedger = currentLedgerRows === null
+      ? { requestCount: 0, totalTokens: 0 }
+      : summarizeLedgerRows(currentLedgerRows);
+    const currentHourlyLedgerRows = await readLedgerHourlyRows(ledgerRoot, date);
+    const currentHourlyLedger = currentHourlyLedgerRows === null
+      ? { requestCount: 0, totalTokens: 0 }
+      : summarizeLedgerRows(currentHourlyLedgerRows);
+    const candidatePotluck = potluckCandidateSummary(candidates, date);
+    const candidateModelStats = currentUsageSummary(candidates.modelDays[date]?.summary || {});
+    const candidateLedgerRows = repairRowsForDate(candidates.dailyRows, date);
+    const candidateLedger = summarizeLedgerRows(candidateLedgerRows);
+    const candidateHourlyLedgerRows = repairRowsForDate(candidates.hourlyRows, date);
+    const candidateHourlyLedger = summarizeLedgerRows(candidateHourlyLedgerRows);
+    const unknownPotluckKeys = candidates.unknownPotluckByDate[date] || 0;
+    const nonDecreasing = {
+      potluckTotals: hasNonDecreasingCandidate(candidatePotluck, currentPotluck),
+      potluckKeys: potluckKeysNonDecreasing(potluckStore, candidates, date),
+      potluckDimensions: potluckDimensionsNonDecreasing(potluckStore, candidates, date),
+      modelStatsTotals: hasNonDecreasingCandidate(candidateModelStats, currentModelStats),
+      modelStatsDimensions: dayDimensionsNonDecreasing(candidates.modelDays[date] || {}, modelStatsStore.daily?.[date] || {}),
+      modelProviderAttribution: modelProviderAttributionSafe(
+        modelStatsStore.daily?.[date] || {},
+        candidates.modelProviderDays?.[date] || {},
+      ),
+      ledgerTotals: hasNonDecreasingCandidate(candidateLedger, currentLedger),
+      ledgerDimensions: ledgerRowsNonDecreasing(candidateLedgerRows, currentLedgerRows || []),
+      ledgerHourlyTotals: hasNonDecreasingCandidate(candidateHourlyLedger, currentHourlyLedger),
+      ledgerHourlyDimensions: ledgerRowsNonDecreasing(candidateHourlyLedgerRows, currentHourlyLedgerRows || []),
+    };
+    const eligible = date < today &&
+      missingSourceDates.length === 0 &&
+      corruptSourceDates.length === 0 &&
+      unknownPotluckKeys === 0 &&
+      Object.values(nonDecreasing).every(Boolean);
+    days.push({
+      date,
+      eligible,
+      requiredUtcDates,
+      missingSourceDates,
+      corruptSourceDates,
+      unknownPotluckKeys,
+      nonDecreasing,
+      current: {
+        potluck: currentUsageSummary(currentPotluck),
+        modelStats: currentModelStats,
+        ledger: currentUsageSummary(currentLedger),
+        ledgerHourly: currentUsageSummary(currentHourlyLedger),
+      },
+      candidate: {
+        potluck: candidatePotluck,
+        modelStats: candidateModelStats,
+        ledger: currentUsageSummary(candidateLedger),
+        ledgerHourly: currentUsageSummary(candidateHourlyLedger),
+      },
+    });
+  }
+
+  const eligibleDates = days.filter(day => day.eligible).map(day => day.date);
+  const baseline = await buildRepairBaseline({
+    potluckStore,
+    modelStatsStore,
+    ledgerRoot,
+    dates: eligibleDates,
+  });
+  const patch = {
+    schemaVersion: 1,
+    generatedAt: now.toISOString(),
+    from,
+    to: end,
+    eligibleDates,
+    sourceEventDigest: sha256Text(stableJson(scan.events)),
+    sourceFiles: scan.sourceFiles.map(file => ({ utcDate: file.utcDate, sha256: file.sha256, size: file.size })),
+    baselineDigest: sha256Text(stableJson(baseline)),
+    baseline,
+    potluckDaysByKey: candidates.potluckDaysByKey,
+    modelDays: candidates.modelDays,
+    modelProviderDays: candidates.modelProviderDays,
+    modelAccountEvents: candidates.modelAccountEvents,
+  };
+  const report = {
+    schemaVersion: 1,
+    generatedAt: now.toISOString(),
+    range: { from, to: end, excludedActiveDate: today },
+    scan: {
+      sourceFiles: scan.sourceFiles.map(file => ({
+        path: path.relative(base, file.path).replaceAll('\\', '/'),
+        utcDate: file.utcDate,
+        size: file.size,
+        sha256: file.sha256,
+        parsedLines: file.parsedLines,
+        matchedLines: file.matchedLines,
+        parseErrorCount: file.parseErrorCount,
+      })),
+      includedEvents: scan.events.length,
+      duplicateCount: scan.duplicateCount,
+      nonSuccessCount: scan.nonSuccessCount,
+      zeroTokenSuccessCount: scan.zeroTokenSuccessCount,
+      parseErrorCount: scan.parseErrors.length,
+    },
+    days,
+  };
+
+  await fsp.mkdir(outDir, { recursive: true, mode: 0o700 });
+  const reportPath = path.join(outDir, 'report.json');
+  const patchPath = path.join(outDir, 'patch.json');
+  await writeJsonMode(reportPath, report);
+  await writeJsonMode(patchPath, patch);
+  for (const date of eligibleDates) {
+    await atomicWriteJsonl(path.join(outDir, 'ledger', 'daily', `usage-${date}.jsonl`), repairRowsForDate(candidates.dailyRows, date));
+    await atomicWriteJsonl(path.join(outDir, 'ledger', 'hourly', `usage-${date}.jsonl`), repairRowsForDate(candidates.hourlyRows, date));
+  }
+  const reportSha256 = await sha256File(reportPath);
+  const artifacts = [];
+  const artifactPaths = [reportPath, patchPath];
+  for (const date of eligibleDates) {
+    artifactPaths.push(path.join(outDir, 'ledger', 'daily', `usage-${date}.jsonl`));
+    artifactPaths.push(path.join(outDir, 'ledger', 'hourly', `usage-${date}.jsonl`));
+  }
+  for (const filePath of artifactPaths) {
+    artifacts.push({
+      path: path.relative(outDir, filePath).replaceAll('\\', '/'),
+      sha256: await sha256File(filePath),
+      size: (await fsp.stat(filePath)).size,
+    });
+  }
+  const manifest = {
+    schemaVersion: 1,
+    generatedAt: now.toISOString(),
+    reportSha256,
+    eligibleDates,
+    artifacts,
+  };
+  const manifestPath = path.join(outDir, 'manifest.json');
+  await writeJsonMode(manifestPath, manifest);
+  const manifestSha256 = await sha256File(manifestPath);
+  return { report, manifest, reportSha256, manifestSha256, outDir };
+}
+
+const REPAIR_USAGE_FIELDS = [
+  'requestCount',
+  'promptTokens',
+  'cachedTokens',
+  'completionTokens',
+  'reasoningTokens',
+  'totalTokens',
+];
+
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function preserveRepairPeaks(candidate, current) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
+  const result = cloneJson(candidate);
+  if (current && typeof current === 'object' && !Array.isArray(current)) {
+    for (const field of ['maxQps', 'maxRpm', 'maxTps']) {
+      if (field in result || field in current) result[field] = Math.max(toNumber(result[field]), toNumber(current[field]));
+    }
+    if ('lastUsedAt' in result || 'lastUsedAt' in current) {
+      result.lastUsedAt = [result.lastUsedAt, current.lastUsedAt].filter(Boolean).sort().at(-1) || null;
+    }
+    if (Array.isArray(result.providerUuids) || Array.isArray(current.providerUuids)) {
+      result.providerUuids = [...new Set([...(result.providerUuids || []), ...(current.providerUuids || [])].filter(Boolean))];
+    }
+    for (const [key, value] of Object.entries(result)) {
+      if (value && typeof value === 'object' && !Array.isArray(value) && current[key] && typeof current[key] === 'object') {
+        result[key] = preserveRepairPeaks(value, current[key]);
+      }
+    }
+  }
+  return result;
+}
+
+function usageDelta(next = {}, previous = {}) {
+  return Object.fromEntries(REPAIR_USAGE_FIELDS.map(field => [field, toNumber(next[field]) - toNumber(previous[field])]));
+}
+
+function applyUsageDelta(target = {}, delta = {}) {
+  for (const field of REPAIR_USAGE_FIELDS) {
+    target[field] = Math.max(0, toNumber(target[field]) + toNumber(delta[field]));
+  }
+  return target;
+}
+
+function adjustUsageMap(targetMap = {}, nextMap = {}, previousMap = {}) {
+  for (const key of new Set([...Object.keys(nextMap || {}), ...Object.keys(previousMap || {})])) {
+    if (!targetMap[key]) targetMap[key] = createRepairUsageBucket();
+    applyUsageDelta(targetMap[key], usageDelta(nextMap?.[key], previousMap?.[key]));
+    targetMap[key] = preserveRepairPeaks(targetMap[key], previousMap?.[key]);
+  }
+  return targetMap;
+}
+
+function modelDailySlice(day) {
+  if (!day) return null;
+  return {
+    ...cloneJson(day.summary || createRepairUsageBucket()),
+    models: cloneJson(day.models || {}),
+    accounts: cloneJson(day.accounts || {}),
+  };
+}
+
+function usageRemainder(total, covered) {
+  return Object.fromEntries(REPAIR_USAGE_FIELDS.map(field => [field, Math.max(0, toNumber(total?.[field]) - toNumber(covered?.[field]))]));
+}
+
+function deriveOldProviderDay(oldDay, candidateProviders = {}) {
+  const result = {};
+  const coveredSummary = createRepairUsageBucket();
+  const coveredModels = {};
+  for (const account of Object.values(oldDay?.accounts || {})) {
+    const provider = account?.provider || 'unknown';
+    if (!result[provider]) result[provider] = { summary: createRepairUsageBucket(), models: {} };
+    applyUsageDelta(result[provider].summary, currentUsageSummary(account?.summary));
+    applyUsageDelta(coveredSummary, currentUsageSummary(account?.summary));
+    for (const [model, usage] of Object.entries(account?.models || {})) {
+      if (!result[provider].models[model]) result[provider].models[model] = createRepairUsageBucket();
+      if (!coveredModels[model]) coveredModels[model] = createRepairUsageBucket();
+      applyUsageDelta(result[provider].models[model], currentUsageSummary(usage));
+      applyUsageDelta(coveredModels[model], currentUsageSummary(usage));
+    }
+  }
+  const candidateProviderNames = Object.keys(candidateProviders || {});
+  if (candidateProviderNames.length === 1) {
+    const provider = candidateProviderNames[0];
+    if (!result[provider]) result[provider] = { summary: createRepairUsageBucket(), models: {} };
+    applyUsageDelta(result[provider].summary, usageRemainder(oldDay, coveredSummary));
+    for (const [model, usage] of Object.entries(oldDay?.models || {})) {
+      if (!result[provider].models[model]) result[provider].models[model] = createRepairUsageBucket();
+      applyUsageDelta(result[provider].models[model], usageRemainder(usage, coveredModels[model]));
+    }
+  }
+  return result;
+}
+
+function buildNextPotluckStore(currentStore, patch) {
+  const next = cloneJson(currentStore);
+  for (const date of patch.eligibleDates) {
+    for (const [rawKey, keyData] of Object.entries(next.keys || {})) {
+      const previousDay = keyData?.usageHistory?.[date] || null;
+      const candidateDay = patch.potluckDaysByKey?.[rawKey]?.[date] || null;
+      if (!candidateDay) continue;
+      const replacement = preserveRepairPeaks(candidateDay, previousDay);
+      if (!keyData.usageHistory) keyData.usageHistory = {};
+      keyData.usageHistory[date] = replacement;
+      const delta = usageDelta(replacement.summary, previousDay?.summary);
+      keyData.totalUsage = Math.max(0, toNumber(keyData.totalUsage) + delta.requestCount);
+      keyData.totalPromptTokens = Math.max(0, toNumber(keyData.totalPromptTokens) + delta.promptTokens);
+      keyData.totalCachedTokens = Math.max(0, toNumber(keyData.totalCachedTokens) + delta.cachedTokens);
+      keyData.totalCompletionTokens = Math.max(0, toNumber(keyData.totalCompletionTokens) + delta.completionTokens);
+      keyData.totalReasoningTokens = Math.max(0, toNumber(keyData.totalReasoningTokens) + delta.reasoningTokens);
+      keyData.totalTokens = Math.max(0, toNumber(keyData.totalTokens) + delta.totalTokens);
+      if (!keyData.totalModels) keyData.totalModels = {};
+      adjustUsageMap(keyData.totalModels, replacement.models, previousDay?.models);
+    }
+  }
+  return next;
+}
+
+function buildNextModelStatsStore(currentStore, patch, now) {
+  const next = cloneJson(currentStore);
+  next.summary ||= createRepairUsageBucket();
+  next.providers ||= {};
+  next.accounts ||= {};
+  next.accountUsageEvents ||= {};
+  next.daily ||= {};
+
+  for (const date of patch.eligibleDates) {
+    const previousDay = next.daily[date] || null;
+    const candidateDay = modelDailySlice(patch.modelDays?.[date]);
+    if (!candidateDay) continue;
+    const replacement = preserveRepairPeaks(candidateDay, previousDay);
+    applyUsageDelta(next.summary, usageDelta(replacement, previousDay));
+
+    const candidateProviders = patch.modelProviderDays?.[date] || {};
+    const previousProviders = deriveOldProviderDay(previousDay, candidateProviders);
+    for (const provider of new Set([...Object.keys(candidateProviders), ...Object.keys(previousProviders)])) {
+      if (!next.providers[provider]) next.providers[provider] = { summary: createRepairUsageBucket(), models: {} };
+      next.providers[provider].summary ||= createRepairUsageBucket();
+      next.providers[provider].models ||= {};
+      applyUsageDelta(next.providers[provider].summary, usageDelta(
+        candidateProviders?.[provider]?.summary,
+        previousProviders?.[provider]?.summary,
+      ));
+      adjustUsageMap(
+        next.providers[provider].models,
+        candidateProviders?.[provider]?.models,
+        previousProviders?.[provider]?.models,
+      );
+    }
+
+    for (const accountKey of new Set([
+      ...Object.keys(replacement.accounts || {}),
+      ...Object.keys(previousDay?.accounts || {}),
+    ])) {
+      const candidateAccount = replacement.accounts?.[accountKey];
+      const previousAccount = previousDay?.accounts?.[accountKey];
+      if (!next.accounts[accountKey]) {
+        next.accounts[accountKey] = cloneJson(candidateAccount || previousAccount || {});
+        next.accounts[accountKey].summary = createRepairUsageBucket();
+        next.accounts[accountKey].models = {};
+      }
+      if (candidateAccount) {
+        for (const field of ['provider', 'providerUuid', 'accountIdentity', 'accountEmail', 'providerName']) {
+          if (candidateAccount[field] !== undefined) next.accounts[accountKey][field] = candidateAccount[field];
+        }
+        next.accounts[accountKey].providerUuids = [...new Set([
+          ...(next.accounts[accountKey].providerUuids || []),
+          ...(candidateAccount.providerUuids || []),
+        ].filter(Boolean))];
+      }
+      next.accounts[accountKey].summary ||= createRepairUsageBucket();
+      next.accounts[accountKey].models ||= {};
+      applyUsageDelta(next.accounts[accountKey].summary, usageDelta(candidateAccount?.summary, previousAccount?.summary));
+      adjustUsageMap(next.accounts[accountKey].models, candidateAccount?.models, previousAccount?.models);
+    }
+
+    next.daily[date] = replacement;
+  }
+
+  const selectedDates = new Set(patch.eligibleDates);
+  for (const accountKey of new Set([
+    ...Object.keys(next.accountUsageEvents || {}),
+    ...Object.keys(patch.modelAccountEvents || {}),
+  ])) {
+    const retained = (next.accountUsageEvents[accountKey] || []).filter(event => {
+      const eventDate = event?.timestamp ? deriveBeijingParts(event.timestamp).date : null;
+      return !selectedDates.has(eventDate);
+    });
+    const replacements = (patch.modelAccountEvents?.[accountKey] || []).filter(event => {
+      const eventDate = event?.timestamp ? deriveBeijingParts(event.timestamp).date : null;
+      return selectedDates.has(eventDate);
+    });
+    next.accountUsageEvents[accountKey] = [...retained, ...replacements]
+      .sort((left, right) => String(left.timestamp || '').localeCompare(String(right.timestamp || '')));
+  }
+  next.updatedAt = now.toISOString();
+  return next;
+}
+
+function resolveInside(root, relativePath) {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(root, relativePath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('artifact path escapes bundle');
+  }
+  return resolved;
+}
+
+async function verifyRepairArtifacts(bundle, manifest) {
+  for (const artifact of manifest.artifacts || []) {
+    const filePath = resolveInside(bundle, artifact.path);
+    if (!fs.existsSync(filePath)) throw new Error(`repair artifact missing: ${artifact.path}`);
+    if (await sha256File(filePath) !== artifact.sha256) throw new Error(`repair artifact hash mismatch: ${artifact.path}`);
+  }
+}
+
+async function repairMarkerMatches({ markerPath, manifestSha256, reportSha256, base, bundle, eligibleDates }) {
+  if (!fs.existsSync(markerPath)) return false;
+  const marker = await readJson(markerPath);
+  if (marker.manifestSha256 !== manifestSha256 || marker.reportSha256 !== reportSha256) {
+    throw new Error('repair marker approval mismatch');
+  }
+  const potluckStore = await readJson(path.join(base, 'api-potluck-keys.json'));
+  const modelStatsStore = await readJsonIfExists(path.join(base, 'model-usage-stats.json'), {
+    summary: {}, providers: {}, accounts: {}, accountUsageEvents: {}, daily: {},
+  });
+  const currentBaseline = await buildRepairBaseline({
+    potluckStore,
+    modelStatsStore,
+    ledgerRoot: path.join(base, 'permanent-usage-ledger'),
+    dates: eligibleDates,
+  });
+  if (sha256Text(stableJson(currentBaseline)) !== marker.appliedBaselineDigest) {
+    throw new Error('repair marker exists but approved slices changed');
+  }
+  for (const date of eligibleDates) {
+    for (const kind of ['daily', 'hourly']) {
+      const target = path.join(base, 'permanent-usage-ledger', kind, `usage-${date}.jsonl`);
+      const candidate = path.join(bundle, 'ledger', kind, `usage-${date}.jsonl`);
+      if (!fs.existsSync(target) || await sha256File(target) !== await sha256File(candidate)) {
+        throw new Error('repair marker exists but ledger verification failed');
+      }
+    }
+  }
+  return true;
+}
+
+async function backupRepairTargets({ base, targets, backupDir }) {
+  if (fs.existsSync(backupDir)) throw new Error('backup directory already exists');
+  await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 });
+  const entries = [];
+  for (const target of targets) {
+    const relative = path.relative(base, target);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('repair target escapes base');
+    const backupPath = path.join(backupDir, relative);
+    const exists = fs.existsSync(target);
+    if (exists) {
+      await fsp.mkdir(path.dirname(backupPath), { recursive: true, mode: 0o700 });
+      await fsp.copyFile(target, backupPath);
+      await fsp.chmod(backupPath, 0o600).catch(() => {});
+    }
+    entries.push({ relative, existed: exists, sha256: exists ? await sha256File(target) : null });
+  }
+  await writeJsonMode(path.join(backupDir, 'backup-manifest.json'), { createdAt: new Date().toISOString(), entries });
+  return entries;
+}
+
+async function restoreRepairTargets({ base, backupDir, entries }) {
+  for (const entry of entries) {
+    const target = path.join(base, entry.relative);
+    const backupPath = path.join(backupDir, entry.relative);
+    if (entry.existed) {
+      await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await fsp.copyFile(backupPath, target);
+      await fsp.chmod(target, 0o600).catch(() => {});
+    } else {
+      await fsp.rm(target, { force: true });
+    }
+  }
+}
+
+async function replaceRepairTargets(targets) {
+  const staged = [];
+  try {
+    for (const target of targets) {
+      await fsp.mkdir(path.dirname(target.path), { recursive: true, mode: 0o700 });
+      const tempPath = `${target.path}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.repair.tmp`;
+      const handle = await fsp.open(tempPath, 'w', 0o600);
+      try {
+        await handle.writeFile(target.body);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      staged.push({ ...target, tempPath });
+    }
+    for (const target of staged) {
+      await fsp.rename(target.tempPath, target.path);
+      await fsp.chmod(target.path, 0o600).catch(() => {});
+    }
+  } finally {
+    await Promise.all(staged.map(target => fsp.rm(target.tempPath, { force: true }).catch(() => {})));
+  }
+}
+
+export async function applyRepairBundle({
+  base,
+  bundle,
+  approvedManifestSha256,
+  approvedReportSha256,
+  backupDir,
+  now = new Date(),
+  replaceTargets = replaceRepairTargets,
+}) {
+  if (!base || !bundle || !backupDir) throw new Error('base, bundle, and backupDir are required');
+  const manifestPath = path.join(bundle, 'manifest.json');
+  const reportPath = path.join(bundle, 'report.json');
+  const patchPath = path.join(bundle, 'patch.json');
+  const manifestSha256 = await sha256File(manifestPath);
+  if (manifestSha256 !== approvedManifestSha256) throw new Error('manifest approval hash mismatch');
+  const reportSha256 = await sha256File(reportPath);
+  if (reportSha256 !== approvedReportSha256) throw new Error('report approval hash mismatch');
+  const manifest = await readJson(manifestPath);
+  if (manifest.reportSha256 !== reportSha256) throw new Error('manifest report hash mismatch');
+  await verifyRepairArtifacts(bundle, manifest);
+  const patch = await readJson(patchPath);
+  if (!Array.isArray(patch.eligibleDates) || patch.eligibleDates.length === 0) throw new Error('repair bundle has no eligible dates');
+
+  const markerPath = path.join(base, 'permanent-usage-ledger', 'repairs', `${manifestSha256}.json`);
+  if (await repairMarkerMatches({
+    markerPath,
+    manifestSha256,
+    reportSha256,
+    base,
+    bundle,
+    eligibleDates: patch.eligibleDates,
+  })) {
+    return { status: 'already-applied', eligibleDates: patch.eligibleDates };
+  }
+
+  const files = await discoverRepairAuditFiles({
+    auditDir: path.join(base, 'request-audit'),
+    from: patch.from,
+    to: patch.to,
+  });
+  const scan = await scanRepairAuditFiles({ files, from: patch.from, to: patch.to });
+  if (sha256Text(stableJson(scan.events)) !== patch.sourceEventDigest) throw new Error('repair source event digest changed');
+  const currentSourceFiles = scan.sourceFiles.map(file => ({ utcDate: file.utcDate, sha256: file.sha256, size: file.size }));
+  if (stableJson(currentSourceFiles) !== stableJson(patch.sourceFiles)) throw new Error('repair source file hashes changed');
+
+  const potluckPath = path.join(base, 'api-potluck-keys.json');
+  const modelStatsPath = path.join(base, 'model-usage-stats.json');
+  const ledgerRoot = path.join(base, 'permanent-usage-ledger');
+  const potluckStore = await readJson(potluckPath);
+  const modelStatsStore = await readJsonIfExists(modelStatsPath, { summary: {}, providers: {}, accounts: {}, accountUsageEvents: {}, daily: {} });
+  const baseline = await buildRepairBaseline({
+    potluckStore,
+    modelStatsStore,
+    ledgerRoot,
+    dates: patch.eligibleDates,
+  });
+  if (sha256Text(stableJson(baseline)) !== patch.baselineDigest) throw new Error('repair baseline changed');
+
+  const nextPotluck = buildNextPotluckStore(potluckStore, patch);
+  const nextModelStats = buildNextModelStatsStore(modelStatsStore, patch, now);
+  const candidateDailyRowsByDate = {};
+  const candidateHourlyRowsByDate = {};
+  for (const date of patch.eligibleDates) {
+    candidateDailyRowsByDate[date] = await readJsonlFiles([
+      path.join(bundle, 'ledger', 'daily', `usage-${date}.jsonl`),
+    ]);
+    candidateHourlyRowsByDate[date] = await readJsonlFiles([
+      path.join(bundle, 'ledger', 'hourly', `usage-${date}.jsonl`),
+    ]);
+  }
+  const expectedAppliedBaseline = await buildRepairBaseline({
+    potluckStore: nextPotluck,
+    modelStatsStore: nextModelStats,
+    ledgerRoot,
+    dates: patch.eligibleDates,
+    dailyLedgerRowsByDate: candidateDailyRowsByDate,
+    hourlyLedgerRowsByDate: candidateHourlyRowsByDate,
+  });
+  const appliedBaselineDigest = sha256Text(stableJson(expectedAppliedBaseline));
+  const targetBodies = [
+    { path: potluckPath, body: `${JSON.stringify(nextPotluck, null, 2)}\n` },
+    { path: modelStatsPath, body: `${JSON.stringify(nextModelStats, null, 2)}\n` },
+  ];
+  for (const date of patch.eligibleDates) {
+    for (const kind of ['daily', 'hourly']) {
+      const source = path.join(bundle, 'ledger', kind, `usage-${date}.jsonl`);
+      targetBodies.push({
+        path: path.join(ledgerRoot, kind, `usage-${date}.jsonl`),
+        body: await fsp.readFile(source),
+      });
+    }
+  }
+  targetBodies.push({
+    path: markerPath,
+    body: `${JSON.stringify({
+      schemaVersion: 1,
+      appliedAt: now.toISOString(),
+      manifestSha256,
+      reportSha256,
+      eligibleDates: patch.eligibleDates,
+      appliedBaselineDigest,
+    }, null, 2)}\n`,
+  });
+
+  const backupEntries = await backupRepairTargets({
+    base,
+    targets: targetBodies.map(target => target.path),
+    backupDir,
+  });
+  try {
+    await replaceTargets(targetBodies);
+  } catch (error) {
+    await restoreRepairTargets({ base, backupDir, entries: backupEntries });
+    throw error;
+  }
+  return { status: 'applied', eligibleDates: patch.eligibleDates, backupDir, markerPath };
+}
+
+async function commandRepairReport(args) {
+  const base = args.base || process.cwd();
+  const from = args.from;
+  const to = args.to || from;
+  const outDir = args['out-dir'];
+  if (!from) throw new Error('--from is required');
+  if (!outDir) throw new Error('--out-dir is required');
+  const now = args.now ? new Date(args.now) : new Date();
+  if (!Number.isFinite(now.getTime())) throw new Error('--now must be an ISO timestamp');
+  const result = await createRepairBundle({ base, from, to, outDir, now });
+  console.log(JSON.stringify({
+    outDir: result.outDir,
+    manifestSha256: result.manifestSha256,
+    reportSha256: result.reportSha256,
+    eligibleDates: result.manifest.eligibleDates,
+    days: result.report.days.map(day => ({
+      date: day.date,
+      eligible: day.eligible,
+      unknownPotluckKeys: day.unknownPotluckKeys,
+      missingSourceDates: day.missingSourceDates,
+      corruptSourceDates: day.corruptSourceDates,
+    })),
+  }, null, 2));
+}
+
+async function commandRepairApply(args) {
+  const base = args.base || process.cwd();
+  const bundle = args.bundle;
+  const backupDir = args['backup-dir'];
+  const approvedManifestSha256 = args['approved-manifest-sha256'];
+  const approvedReportSha256 = args['approved-report-sha256'];
+  if (!bundle) throw new Error('--bundle is required');
+  if (!backupDir) throw new Error('--backup-dir is required');
+  if (!approvedManifestSha256) throw new Error('--approved-manifest-sha256 is required');
+  if (!approvedReportSha256) throw new Error('--approved-report-sha256 is required');
+  const now = args.now ? new Date(args.now) : new Date();
+  if (!Number.isFinite(now.getTime())) throw new Error('--now must be an ISO timestamp');
+  const result = await applyRepairBundle({
+    base,
+    bundle,
+    approvedManifestSha256,
+    approvedReportSha256,
+    backupDir,
+    now,
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
@@ -715,6 +1923,12 @@ async function commandRecomputeAudit(args) {
 
 async function readLedgerDailyRows(ledgerRoot, date) {
   const filePath = path.join(ledgerRoot, 'daily', `usage-${date}.jsonl`);
+  if (!fs.existsSync(filePath)) return null;
+  return readJsonlFiles([filePath]);
+}
+
+async function readLedgerHourlyRows(ledgerRoot, date) {
+  const filePath = path.join(ledgerRoot, 'hourly', `usage-${date}.jsonl`);
   if (!fs.existsSync(filePath)) return null;
   return readJsonlFiles([filePath]);
 }
@@ -810,7 +2024,9 @@ async function main() {
   if (command === 'recompute-audit') return commandRecomputeAudit(args);
   if (command === 'cleanup-hourly') return commandCleanupHourly(args);
   if (command === 'reconcile') return commandReconcile(args);
-  throw new Error('Usage: daily-usage-ledger.mjs <write|recompute-audit|cleanup-hourly|reconcile> --base <dir> --from YYYY-MM-DD [--to YYYY-MM-DD]');
+  if (command === 'repair-report') return commandRepairReport(args);
+  if (command === 'repair-apply') return commandRepairApply(args);
+  throw new Error('Usage: daily-usage-ledger.mjs <write|recompute-audit|cleanup-hourly|reconcile|repair-report|repair-apply> [options]');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
