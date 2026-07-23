@@ -18,6 +18,12 @@ import * as http from 'http';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { isRetryableNetworkError } from '../utils/common.js';
+import {
+    createExplicitWorkerStarter,
+    createMasterShutdownCoordinator,
+    createWorkerLifecycle,
+    restartAfterGracefulStop
+} from './master-worker-lifecycle.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +37,8 @@ let workerStatus = {
     startTime: null,
     restartCount: 0,
     lastRestartTime: null,
-    isRestarting: false
+    isRestarting: false,
+    isStopping: false
 };
 
 // 配置
@@ -39,9 +46,37 @@ const config = {
     workerScript: path.join(__dirname, '../services/api-server.js'),
     maxRestartAttempts: 10,
     restartDelay: 1000, // 重启延迟（毫秒）
+    workerStopTimeout: 30000, // 优雅停机总等待时间（毫秒）
     masterPort: parseInt(process.env.MASTER_PORT) || 3100, // 主进程管理端口
     args: process.argv.slice(2) // 传递给子进程的参数
 };
+
+const workerLifecycle = createWorkerLifecycle({
+    getWorker: () => workerProcess,
+    clearWorker: stoppedWorker => {
+        if (workerProcess === stoppedWorker) {
+            workerProcess = null;
+            workerStatus.pid = null;
+        }
+    },
+    setStopping: value => {
+        workerStatus.isStopping = value;
+    },
+    logger,
+    stopTimeoutMs: config.workerStopTimeout
+});
+
+const requestMasterShutdown = createMasterShutdownCoordinator({
+    stopWorker: () => stopWorker(true),
+    exit: code => process.exit(code),
+    logger
+});
+
+const startWorkerExplicitly = createExplicitWorkerStarter({
+    lifecycle: workerLifecycle,
+    hasWorker: () => workerProcess !== null,
+    startWorker
+});
 
 /**
  * 启动子进程
@@ -81,8 +116,11 @@ function startWorker() {
         workerProcess = null;
         workerStatus.pid = null;
 
-        // 如果不是主动重启导致的退出，尝试自动重启
-        if (!workerStatus.isRestarting && code !== 0) {
+        // 仅对非主动停机造成的异常退出尝试自动重启
+        if (workerLifecycle.shouldAutoRestart({
+            code,
+            isRestarting: workerStatus.isRestarting
+        })) {
             logger.info('[Master] Worker crashed, attempting auto-restart...');
             scheduleRestart();
         }
@@ -97,52 +135,31 @@ function startWorker() {
 /**
  * 停止子进程
  * @param {boolean} graceful - 是否优雅关闭
- * @returns {Promise<void>}
+ * @param {number|null} intent - 可选的已有生命周期意图
+ * @returns {Promise<Object>}
  */
-function stopWorker(graceful = true) {
-    return new Promise((resolve) => {
-        if (!workerProcess) {
-            logger.info('[Master] No worker process to stop');
-            resolve();
-            return;
-        }
-
-        logger.info('[Master] Stopping worker process, PID:', workerProcess.pid);
-
-        const timeout = setTimeout(() => {
-            if (workerProcess) {
-                logger.info('[Master] Force killing worker process...');
-                workerProcess.kill('SIGKILL');
-            }
-            resolve();
-        }, 5000); // 5秒超时后强制杀死
-
-        workerProcess.once('exit', () => {
-            clearTimeout(timeout);
-            workerProcess = null;
-            workerStatus.pid = null;
-            logger.info('[Master] Worker process stopped');
-            resolve();
-        });
-
-        if (graceful) {
-            // 发送优雅关闭信号
-            workerProcess.send({ type: 'shutdown' });
-            workerProcess.kill('SIGTERM');
-        } else {
-            workerProcess.kill('SIGKILL');
-        }
-    });
+function stopWorker(graceful = true, intent = null) {
+    return workerLifecycle.stop({ graceful, intent });
 }
 
 /**
  * 重启子进程
+ * @param {number|null} pendingIntent - 可选的已排队重启意图
  * @returns {Promise<Object>}
  */
-async function restartWorker() {
+async function restartWorker(pendingIntent = null) {
     if (workerStatus.isRestarting) {
         logger.info('[Master] Restart already in progress');
         return { success: false, message: 'Restart already in progress' };
+    }
+
+    const restartIntent = pendingIntent ?? workerLifecycle.beginRestartIntent();
+    if (!workerLifecycle.isIntentCurrent(restartIntent)) {
+        logger.info('[Master] Restart superseded by a newer lifecycle intent');
+        return {
+            success: false,
+            message: 'Restart superseded by a newer lifecycle intent'
+        };
     }
 
     workerStatus.isRestarting = true;
@@ -152,13 +169,12 @@ async function restartWorker() {
     logger.info('[Master] Restarting worker process...');
 
     try {
-        await stopWorker(true);
-        
-        // 等待一小段时间确保端口释放
-        await new Promise(resolve => setTimeout(resolve, config.restartDelay));
-        
-        startWorker();
-        workerStatus.isRestarting = false;
+        await restartAfterGracefulStop({
+            stopWorker: () => stopWorker(true, restartIntent),
+            startWorker,
+            delayMs: config.restartDelay,
+            canStart: () => workerLifecycle.isIntentCurrent(restartIntent)
+        });
 
         return {
             success: true,
@@ -167,12 +183,13 @@ async function restartWorker() {
             restartCount: workerStatus.restartCount
         };
     } catch (error) {
-        workerStatus.isRestarting = false;
         logger.error('[Master] Failed to restart worker:', error.message);
         return {
             success: false,
             message: 'Failed to restart worker: ' + error.message
         };
+    } finally {
+        workerStatus.isRestarting = false;
     }
 }
 
@@ -187,10 +204,11 @@ function scheduleRestart() {
     }
 
     const delay = Math.min(config.restartDelay * Math.pow(2, workerStatus.restartCount), 30000);
+    const restartIntent = workerLifecycle.beginRestartIntent();
     logger.info(`[Master] Scheduling restart in ${delay}ms...`);
 
     setTimeout(() => {
-        restartWorker();
+        restartWorker(restartIntent);
     }, delay);
 }
 
@@ -234,6 +252,7 @@ function getStatus() {
             restartCount: workerStatus.restartCount,
             lastRestartTime: workerStatus.lastRestartTime,
             isRestarting: workerStatus.isRestarting,
+            isStopping: workerLifecycle.isStopping(),
             isRunning: workerProcess !== null
         }
     };
@@ -278,21 +297,30 @@ function createMasterServer() {
         // 停止端点
         if (method === 'POST' && path === '/master/stop') {
             logger.info('[Master] Stop requested via API');
-            await stopWorker(true);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, message: 'Worker stopped' }));
+            try {
+                await stopWorker(true);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, message: 'Worker stopped' }));
+            } catch (error) {
+                logger.error('[Master] Failed to stop worker:', error.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    message: 'Failed to stop worker: ' + error.message
+                }));
+            }
             return;
         }
 
         // 启动端点
         if (method === 'POST' && path === '/master/start') {
             logger.info('[Master] Start requested via API');
-            if (workerProcess) {
+            const result = startWorkerExplicitly();
+            if (!result.success) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, message: 'Worker already running' }));
+                res.end(JSON.stringify(result));
                 return;
             }
-            startWorker();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, message: 'Worker started', pid: workerStatus.pid }));
             return;
@@ -333,16 +361,14 @@ function createMasterServer() {
  */
 function setupSignalHandlers() {
     // 优雅关闭
-    process.on('SIGTERM', async () => {
+    process.on('SIGTERM', () => {
         logger.info('[Master] Received SIGTERM, shutting down...');
-        await stopWorker(true);
-        process.exit(0);
+        requestMasterShutdown({ trigger: 'SIGTERM' });
     });
 
-    process.on('SIGINT', async () => {
+    process.on('SIGINT', () => {
         logger.info('[Master] Received SIGINT, shutting down...');
-        await stopWorker(true);
-        process.exit(0);
+        requestMasterShutdown({ trigger: 'SIGINT' });
     });
 
     // 未捕获的异常

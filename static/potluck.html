@@ -12,6 +12,7 @@
             background: var(--bg-secondary);
             min-height: 100vh;
         }
+        .toast.warning { border-left: 4px solid var(--warning-color); }
 
         /* 顶部导航 */
         .navbar {
@@ -2443,9 +2444,8 @@
                 body: JSON.stringify({ dailyLimit }) 
             });
             if (result && result.success) {
-                showToast(result.message, 'success');
                 closeModal('applyLimitModal');
-                loadData();
+                handleManagementMutationResult(result, result.message);
             } else {
                 showToast(result?.error?.message || '操作失败', 'error');
             }
@@ -2605,7 +2605,7 @@
                 document.getElementById('newKeyDisplay').textContent = currentNewKey;
                 closeModal('createModal');
                 openModal('showKeyModal');
-                loadData();
+                handleManagementMutationResult(result);
                 document.getElementById('keyName').value = '';
                 document.getElementById('keyLimit').value = '';
                 document.getElementById('keyLimit').disabled = false;
@@ -2787,21 +2787,21 @@
         async function resetUsage(keyId) {
             if (!confirm('确定要重置该 Key 的今日调用次数吗？')) return;
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/reset`, { method: 'POST' });
-            if (result && result.success) { showToast('已重置', 'success'); loadData(); }
+            if (result && result.success) { handleManagementMutationResult(result, '已重置'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
         async function resetTokenStats(keyId) {
             if (!confirm('确定要重置该 Key 的 Token 统计吗？这会清空该 Key 的今日/累计 Token 与历史 Token 统计，但保留调用次数。')) return;
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/reset-tokens`, { method: 'POST' });
-            if (result && result.success) { showToast('Token 统计已重置', 'success'); loadData(); }
+            if (result && result.success) { handleManagementMutationResult(result, 'Token 统计已重置'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
         async function resetAllTokenStats() {
             if (!confirm('确定要重置全部 Key 的 Token 统计吗？这会清空所有 Key 的今日/累计 Token 与历史 Token 统计，但保留调用次数。')) return;
             const result = await apiRequest(`${API_BASE}/stats/reset-tokens`, { method: 'POST' });
-            if (result && result.success) { showToast('全部 Token 统计已重置', 'success'); loadData(); }
+            if (result && result.success) { handleManagementMutationResult(result, '全部 Token 统计已重置'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
@@ -2816,7 +2816,7 @@
             const dailyLimit = readDailyLimitInput('newLimit', 'newLimitUnlimited');
             if (!validateDailyLimit(dailyLimit)) return;
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/limit`, { method: 'PUT', body: JSON.stringify({ dailyLimit }) });
-            if (result && result.success) { showToast('限额已更新', 'success'); closeModal('editLimitModal'); loadData(); }
+            if (result && result.success) { closeModal('editLimitModal'); handleManagementMutationResult(result, '限额已更新'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
@@ -2831,21 +2831,30 @@
             const name = document.getElementById('newName').value;
             if (!name) { showToast('请输入有效的名称', 'error'); return; }
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/name`, { method: 'PUT', body: JSON.stringify({ name }) });
-            if (result && result.success) { showToast('名称已更新', 'success'); closeModal('editNameModal'); loadData(); }
+            if (result && result.success) { closeModal('editNameModal'); handleManagementMutationResult(result, '名称已更新'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
         async function toggleKey(keyId) {
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/toggle`, { method: 'POST' });
-            if (result && result.success) { showToast(result.message, 'success'); loadData(); }
+            if (result && result.success) { handleManagementMutationResult(result, result.message); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 
         async function deleteKey(keyId) {
             if (!confirm('确定要删除该 Key 吗？此操作不可恢复。')) return;
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
-            if (result && result.success) { showToast('已删除', 'success'); loadData(); }
+            if (result && result.success) { handleManagementMutationResult(result, '已删除'); }
             else { showToast(result?.error?.message || '删除失败', 'error'); }
+        }
+
+        function handleManagementMutationResult(result, successMessage) {
+            if (result.persistencePending) {
+                showToast(result.message || '变更已在内存生效，后台将继续重试持久化；重启服务前请先确认写入状态。', 'warning');
+            } else if (successMessage) {
+                showToast(successMessage, 'success');
+            }
+            loadData();
         }
 
         function openModal(id) { document.getElementById(id).classList.add('active'); }

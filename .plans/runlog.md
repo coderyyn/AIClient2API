@@ -65,3 +65,5 @@
 产物：docs/yyn-customized-branch-plan.html、docs/yyn-codex-usage-cache-hit-investigation.md、测试镜像 aiclient2api:customized-branch-20260616、本地容器 aiclient2api-image2-test。
 关键决策：普通日志邮箱脱敏作为本地定制能力补充提交；原始需求中更改路由/窗口的能力保留到下一批，不混入观测优先批次。
 验证：集中运行 9 个 Jest suite，共 24 个测试通过；Docker 镜像构建成功；测试容器重启后 healthy；/health 返回 healthy；potluck.html 返回 200；启动日志邮箱已脱敏。
+
+DECISION: 2026-07-22 OOM 止血继续复用现有 atomicWriteFile 与 usage ledger；现有工具只保证单文件原子替换，不能处理 dirty 版本、批量调度和优雅退出，因此新增最小持久化协调逻辑，而不引入数据库或第二套权威存储。

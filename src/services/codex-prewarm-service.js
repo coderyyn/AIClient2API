@@ -148,6 +148,7 @@ export class CodexPrewarmService {
         this.state = null;
         this.timer = null;
         this.isRunning = false;
+        this.idleWaiters = new Set();
     }
 
     async loadState() {
@@ -287,6 +288,10 @@ export class CodexPrewarmService {
             return summary;
         } finally {
             this.isRunning = false;
+            for (const resolve of this.idleWaiters) {
+                resolve();
+            }
+            this.idleWaiters.clear();
         }
     }
 
@@ -312,10 +317,15 @@ export class CodexPrewarmService {
         return true;
     }
 
-    stop() {
+    async stop() {
         if (this.timer) {
             clearInterval(this.timer);
             this.timer = null;
+        }
+        if (this.isRunning) {
+            await new Promise(resolve => {
+                this.idleWaiters.add(resolve);
+            });
         }
     }
 }

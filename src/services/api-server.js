@@ -11,6 +11,9 @@ import { getTLSSidecar } from '../utils/tls-sidecar.js';
 import { HEALTH_CHECK } from '../utils/constants.js';
 import { startCodexPrewarmService } from './codex-prewarm-service.js';
 import { startUsageCacheAutoRefreshService } from './usage-cache-auto-refresh-service.js';
+import { createAsyncActivityTracker, createStartupShutdownGate } from './async-activity-tracker.js';
+import { createShutdownCoordinator } from './shutdown-coordinator.js';
+import { registerWorkerShutdownHandlers } from './worker-shutdown-handlers.js';
 
 /**
  * @license
@@ -130,6 +133,12 @@ const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
 let serverInstance = null;
 let codexPrewarmService = null;
 let usageCacheAutoRefreshService = null;
+let heartbeatTimerId = null;
+let startupPromise = Promise.resolve();
+const requestActivityTracker = createAsyncActivityTracker();
+const heartbeatActivityTracker = createAsyncActivityTracker();
+const healthCheckActivityTracker = createAsyncActivityTracker();
+const startupShutdownGate = createStartupShutdownGate({ logger });
 
 /**
  * 发送消息给主进程
@@ -141,135 +150,88 @@ function sendToMaster(message) {
     }
 }
 
-/**
- * 设置子进程通信处理
- */
-function setupWorkerCommunication() {
-    if (!IS_WORKER_PROCESS) return;
+async function stopBackgroundServices() {
+    const failures = [];
+    const stopOne = async (name, operation) => {
+        try {
+            await operation();
+        } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            const failure = new Error(`${name}: ${message}`);
+            failure.cause = reason;
+            failures.push(failure);
+        }
+    };
 
-    // 监听来自主进程的消息
-    process.on('message', (message) => {
-        if (!message || !message.type) return;
+    await stopOne('Codex prewarm', async () => {
+        const service = codexPrewarmService;
+        codexPrewarmService = null;
+        await service?.stop();
+    });
 
-        logger.info('[Worker] Received message from master:', message.type);
+    await stopOne('usage cache auto refresh', async () => {
+        const service = usageCacheAutoRefreshService;
+        usageCacheAutoRefreshService = null;
+        await service?.stop();
+    });
 
-        switch (message.type) {
-            case 'shutdown':
-                logger.info('[Worker] Shutdown requested by master');
-                gracefulShutdown();
-                break;
-            case 'status':
-                sendToMaster({
-                    type: 'status',
-                    data: {
-                        pid: process.pid,
-                        uptime: process.uptime(),
-                        memoryUsage: process.memoryUsage()
-                    }
-                });
-                break;
-            default:
-                logger.info('[Worker] Unknown message type:', message.type);
+    await stopOne('heartbeat and token refresh', async () => {
+        if (heartbeatTimerId) {
+            clearInterval(heartbeatTimerId);
+            heartbeatTimerId = null;
+        }
+        await heartbeatActivityTracker.waitForIdle();
+    });
+
+    await stopOne('provider refresh queue', async () => {
+        const providerPoolManager = getProviderPoolManager();
+        await providerPoolManager?.shutdownRefreshQueue();
+    });
+
+    await stopOne('scheduled health check', async () => {
+        if (typeof globalThis.stopHealthCheckTimer === 'function') {
+            await globalThis.stopHealthCheckTimer();
         }
     });
 
-    // 监听断开连接
-    process.on('disconnect', () => {
-        logger.info('[Worker] Disconnected from master, shutting down...');
-        gracefulShutdown();
-    });
+    if (failures.length > 0) {
+        throw new AggregateError(failures, 'Failed to stop one or more background services');
+    }
 }
+
+const requestShutdown = createShutdownCoordinator({
+    getServer: () => serverInstance,
+    onShutdownRequested: () => startupShutdownGate.requestShutdown(),
+    waitForStartup: () => startupPromise,
+    waitForInFlightHandlers: () => requestActivityTracker.waitForIdle(),
+    stopBackgroundServices,
+    destroyPlugins: async () => {
+        const pluginManager = getPluginManager();
+        if (pluginManager) {
+            await pluginManager.destroyAll({ operationTimeoutMs: null });
+        }
+    },
+    stopTlsSidecar: async () => {
+        await getTLSSidecar().stop();
+    },
+    exit: code => process.exit(code),
+    logger
+});
 
 /**
  * 优雅关闭服务器
+ * @param {number} exitCode - 0 for normal shutdown, non-zero for fatal shutdown
+ * @returns {Promise<number>} shared shutdown completion promise
  */
-async function gracefulShutdown() {
-    logger.info('[Server] Initiating graceful shutdown...');
-
-    // 停止所有插件
-    try {
-        const pluginManager = getPluginManager();
-        if (pluginManager) {
-            await pluginManager.destroyAll();
-        }
-    } catch (err) {
-        logger.error('[Server] Error destroying plugins:', err.message);
-    }
-
-    if (codexPrewarmService) {
-        codexPrewarmService.stop();
-        codexPrewarmService = null;
-    }
-
-    if (usageCacheAutoRefreshService) {
-        usageCacheAutoRefreshService.stop();
-        usageCacheAutoRefreshService = null;
-    }
-
-    // 停止 TLS sidecar
-    try {
-        await getTLSSidecar().stop();
-    } catch { /* ignore */ }
-
-    if (serverInstance) {
-        serverInstance.close(() => {
-            logger.info('[Server] HTTP server closed');
-            process.exit(0);
-        });
-
-        // 设置超时，防止无限等待
-        setTimeout(() => {
-            logger.info('[Server] Shutdown timeout, forcing exit...');
-            process.exit(1);
-        }, 10000);
-    } else {
-        process.exit(0);
-    }
-}
-
-/**
- * 设置进程信号处理
- */
-function setupSignalHandlers() {
-    process.on('SIGTERM', () => {
-        logger.info('[Server] Received SIGTERM');
-        gracefulShutdown();
-    });
-
-    process.on('SIGINT', () => {
-        logger.info('[Server] Received SIGINT');
-        gracefulShutdown();
-    });
-
-    process.on('uncaughtException', (error) => {
-        logger.error('[Server] Uncaught exception:', error);
-        
-        // 检查是否为可重试的网络错误
-        if (isRetryableNetworkError(error)) {
-            logger.warn('[Server] Network error detected, continuing operation...');
-            return; // 不退出程序，继续运行
-        }
-        
-        // 对于其他严重错误，执行优雅关闭
-        logger.error('[Server] Fatal error detected, initiating shutdown...');
-        gracefulShutdown();
-    });
-
-    process.on('unhandledRejection', (reason, promise) => {
-        logger.error('[Server] Unhandled rejection at:', promise, 'reason:', reason);
-        
-        // 检查是否为可重试的网络错误
-        if (reason && isRetryableNetworkError(reason)) {
-            logger.warn('[Server] Network error in promise rejection, continuing operation...');
-            return; // 不退出程序，继续运行
-        }
-    });
+function gracefulShutdown(exitCode = 0) {
+    return requestShutdown({ exitCode });
 }
 
 // --- Server Initialization ---
 async function startServer() {
     // Initialize configuration
     await initializeConfig(process.argv.slice(2), 'configs/config.json');
+    if (startupShutdownGate.shouldAbort('TLS sidecar startup')) return null;
     
     // 自动关联 configs 目录中的配置文件到对应的提供商
     // logger.info('[Initialization] Checking for unlinked provider configs...');
@@ -282,6 +244,7 @@ async function startServer() {
             port: CONFIG.TLS_SIDECAR_PORT,
             binaryPath: CONFIG.TLS_SIDECAR_BINARY_PATH || undefined,
         });
+        if (startupShutdownGate.shouldAbort('plugin discovery')) return null;
         if (started) {
             logger.info('[Initialization] TLS sidecar started successfully');
         } else {
@@ -290,10 +253,13 @@ async function startServer() {
     }
 
     // Initialize plugin system
+    if (startupShutdownGate.shouldAbort('plugin discovery')) return null;
     logger.info('[Initialization] Discovering and initializing plugins...');
     await discoverPlugins();
+    if (startupShutdownGate.shouldAbort('plugin initialization')) return null;
     const pluginManager = getPluginManager();
     await pluginManager.initAll(CONFIG);
+    if (startupShutdownGate.shouldAbort('plugin status logging')) return null;
     
     // Log loaded plugins
     const pluginList = pluginManager.getPluginList();
@@ -307,28 +273,64 @@ async function startServer() {
 
     // Initialize API services
     const services = await initApiService(CONFIG, true);
+    if (startupShutdownGate.shouldAbort('Codex prewarm service startup')) return null;
     codexPrewarmService = startCodexPrewarmService(CONFIG, getProviderPoolManager());
+    if (startupShutdownGate.shouldAbort('usage cache auto refresh startup')) return null;
     usageCacheAutoRefreshService = startUsageCacheAutoRefreshService(CONFIG, getProviderPoolManager());
+    if (startupShutdownGate.shouldAbort('UI management initialization')) return null;
     
     // Initialize UI management features
     initializeUIManagement(CONFIG);
     
     // Initialize API management and get heartbeat function
     const heartbeatAndRefreshToken = initializeAPIManagement(services);
+    if (startupShutdownGate.shouldAbort('request handler creation')) return null;
     
     // Create request handler
     const requestHandlerInstance = createRequestHandler(CONFIG, getProviderPoolManager());
+    if (startupShutdownGate.shouldAbort('HTTP server creation')) return null;
 
     serverInstance = http.createServer({
         // 设置服务器级别的超时
         requestTimeout: 0, // 禁用请求超时（流式响应需要）
         headersTimeout: 60000, // 头部超时 60 秒
         keepAliveTimeout: 65000 // Keep-alive 超时
-    }, requestHandlerInstance);
+    }, requestActivityTracker.wrapHttpHandler(requestHandlerInstance));
 
     // 设置服务器的最大连接数
     serverInstance.maxConnections = 1000;
-    serverInstance.listen(CONFIG.SERVER_PORT, CONFIG.HOST, async () => {
+    if (startupShutdownGate.shouldAbort('HTTP listen')) return null;
+    const listeningServer = serverInstance;
+    await new Promise((resolve, reject) => {
+        let settled = false;
+        let listeningCallbackStarted = false;
+        const cleanupStartupListeners = () => {
+            listeningServer.off('error', onListenError);
+            listeningServer.off('close', onCloseBeforeReady);
+        };
+        const finishStartup = (error = null) => {
+            if (settled) return;
+            settled = true;
+            cleanupStartupListeners();
+            if (error) reject(error);
+            else resolve();
+        };
+        const onListenError = error => finishStartup(error);
+        const onCloseBeforeReady = () => {
+            if (!listeningCallbackStarted && startupShutdownGate.isShutdownRequested()) {
+                finishStartup();
+            }
+        };
+
+        listeningServer.once('error', onListenError);
+        listeningServer.once('close', onCloseBeforeReady);
+        listeningServer.listen(CONFIG.SERVER_PORT, CONFIG.HOST, async () => {
+            listeningCallbackStarted = true;
+            try {
+                if (startupShutdownGate.shouldAbort('listen callback')) {
+                    finishStartup();
+                    return;
+                }
         logger.info(`--- Unified API Server Configuration ---`);
         const configuredProviders = Array.isArray(CONFIG.DEFAULT_MODEL_PROVIDERS) && CONFIG.DEFAULT_MODEL_PROVIDERS.length > 0
             ? CONFIG.DEFAULT_MODEL_PROVIDERS
@@ -357,9 +359,14 @@ async function startServer() {
         if (CONFIG.UI_ENABLED) {
             try {
                 const open = (await import('open')).default;
+                if (startupShutdownGate.shouldAbort('UI launch timer')) {
+                    finishStartup();
+                    return;
+                }
                 // 作为子进程启动时，需要更长的延迟确保服务完全就绪
                 const openDelay = IS_WORKER_PROCESS ? 3000 : 1000;
                 setTimeout(() => {
+                    if (startupShutdownGate.isShutdownRequested()) return;
                     let openUrl = `http://${CONFIG.HOST}:${CONFIG.SERVER_PORT}/login.html`;
                     if(CONFIG.HOST === '0.0.0.0'){
                         openUrl = `http://localhost:${CONFIG.SERVER_PORT}/login.html`;
@@ -379,17 +386,28 @@ async function startServer() {
             logger.info(`[UI] UI is disabled.`);
         }
 
+        if (startupShutdownGate.shouldAbort('background timer setup')) {
+            finishStartup();
+            return;
+        }
+
         if (CONFIG.CRON_REFRESH_TOKEN) {
             logger.info(`  • Cron Near Minutes: ${CONFIG.CRON_NEAR_MINUTES}`);
             logger.info(`  • Cron Refresh Token: ${CONFIG.CRON_REFRESH_TOKEN}`);
             // 每 CRON_NEAR_MINUTES 分钟执行一次心跳日志和令牌刷新
-            setInterval(heartbeatAndRefreshToken, CONFIG.CRON_NEAR_MINUTES * 60 * 1000);
+            heartbeatTimerId = setInterval(() => {
+                heartbeatActivityTracker.run(heartbeatAndRefreshToken).catch(error => {
+                    logger.error('[Heartbeat] Scheduled refresh failed:', error);
+                });
+            }, CONFIG.CRON_NEAR_MINUTES * 60 * 1000);
         }
         // 服务器完全启动后,执行初始健康检查
         const poolManager = getProviderPoolManager();
         if (poolManager) {
             logger.info('[Initialization] Performing initial health checks for provider pools...');
-            poolManager.performInitialHealthChecks();
+            healthCheckActivityTracker.run(async () => poolManager.performInitialHealthChecks()).catch(error => {
+                logger.error('[Initialization] Initial health checks failed:', error);
+            });
         }
 
         // 定时健康检查
@@ -401,6 +419,7 @@ async function startServer() {
 
             let isHealthCheckRunning = false;
             let healthCheckTimerId = null;
+            let healthCheckStartupTimerId = null;
 
             // 定时健康检查函数（始终注册，无论初始 enabled 状态）
             const runHealthCheckTimer = (interval) => {
@@ -417,19 +436,19 @@ async function startServer() {
                 // 设计决策：只验证最小值，不设最大值。
                 // 前端有 max=3600000 (1小时) 的 UI 限制，但后端允许更大值以支持特殊需求。
                 const safeInterval = (typeof interval === 'number' && interval >= HEALTH_CHECK.MIN_INTERVAL_MS) ? interval : DEFAULT_INTERVAL;
-                healthCheckTimerId = setInterval(async () => {
+                healthCheckTimerId = setInterval(() => {
                     if (isHealthCheckRunning) {
                         logger.debug('[ScheduledHealthCheck] Skipping - previous run still in progress');
                         return;
                     }
                     isHealthCheckRunning = true;
-                    try {
-                        await poolManager.performHealthChecks();
-                    } catch (error) {
-                        logger.error('[ScheduledHealthCheck] Error:', error);
-                    } finally {
-                        isHealthCheckRunning = false;
-                    }
+                    healthCheckActivityTracker.run(() => poolManager.performHealthChecks())
+                        .catch(error => {
+                            logger.error('[ScheduledHealthCheck] Error:', error);
+                        })
+                        .finally(() => {
+                            isHealthCheckRunning = false;
+                        });
                 }, safeInterval);
                 logger.info(`[ScheduledHealthCheck] Scheduled every ${safeInterval}ms`);
                 return safeInterval;
@@ -438,12 +457,17 @@ async function startServer() {
             // 注册重载/停止函数到 globalThis（供 config-api 热更新使用）
             // 必须在 enabled 检查外注册，保证热更新时可访问
             globalThis.reloadHealthCheckTimer = runHealthCheckTimer;
-            globalThis.stopHealthCheckTimer = () => {
+            globalThis.stopHealthCheckTimer = async () => {
                 if (healthCheckTimerId) {
                     clearInterval(healthCheckTimerId);
                     healthCheckTimerId = null;
                     logger.info('[ScheduledHealthCheck] Timer stopped');
                 }
+                if (healthCheckStartupTimerId) {
+                    clearTimeout(healthCheckStartupTimerId);
+                    healthCheckStartupTimerId = null;
+                }
+                await healthCheckActivityTracker.waitForIdle();
             };
 
             if (scheduledConfig?.enabled) {
@@ -456,12 +480,12 @@ async function startServer() {
                 // 启动时运行健康检查
                 if (scheduledConfig.startupRun !== false) {
                     logger.info('[ScheduledHealthCheck] Running scheduled health check on startup...');
-                    setTimeout(async () => {
-                        try {
-                            await poolManager.performHealthChecks();
-                        } catch (error) {
+                    healthCheckStartupTimerId = setTimeout(() => {
+                        healthCheckStartupTimerId = null;
+                        if (startupShutdownGate.isShutdownRequested()) return;
+                        healthCheckActivityTracker.run(() => poolManager.performHealthChecks()).catch(error => {
                             logger.error('[ScheduledHealthCheck] Startup run error:', error);
-                        }
+                        });
                     }, 100);
                 }
 
@@ -472,23 +496,38 @@ async function startServer() {
         }
 
         // 如果是子进程，通知主进程已就绪
+        if (startupShutdownGate.shouldAbort('worker ready notification')) {
+            finishStartup();
+            return;
+        }
         if (IS_WORKER_PROCESS) {
             sendToMaster({ type: 'ready', pid: process.pid });
         }
+                finishStartup();
+            } catch (error) {
+                finishStartup(error);
+            }
+        });
     });
     return serverInstance; // Return the server instance for testing purposes
 }
 
-// 设置信号处理
-setupSignalHandlers();
-
-// 设置子进程通信
-setupWorkerCommunication();
-
-startServer().catch(err => {
-    logger.error("[Server] Failed to start server:", err.message);
-    process.exit(1);
+const shutdownHandlers = registerWorkerShutdownHandlers({
+    processRef: process,
+    isWorkerProcess: IS_WORKER_PROCESS,
+    requestShutdown: gracefulShutdown,
+    isRetryableNetworkError,
+    logger,
+    sendStatus: data => sendToMaster({ type: 'status', data }),
+    getStatus: () => ({
+        pid: process.pid,
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage()
+    })
 });
+
+startupPromise = startServer();
+startupPromise.catch(shutdownHandlers.onStartFailure);
 
 // 导出用于外部调用
 export { gracefulShutdown, sendToMaster };

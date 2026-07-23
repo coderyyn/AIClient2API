@@ -56,6 +56,7 @@ describe('provider pool balance on enable', () => {
         const paused = getProvider(manager, 'paused');
         expect(paused.config.usageCount).toBe(50);
         expect(manager._getProviderSelectionLoad('openai-codex-oauth', paused, 60 * 60 * 1000)).toBe(50);
+        clearTimeout(manager.saveTimer);
     });
 
     test('prefers recent 60m load over stale lifetime usageCount when balancing equal weights', async () => {
@@ -70,5 +71,6 @@ describe('provider pool balance on enable', () => {
 
         const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5');
         expect(selected.uuid).toBe('recent-low');
+        clearTimeout(manager.saveTimer);
     });
 });

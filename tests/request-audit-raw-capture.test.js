@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
-import { RequestAuditRawCaptureStore, shouldCaptureRawRequest } from '../src/plugins/request-audit/raw-capture-store.js';
+import { buildBoundedRawCaptureEvent, RequestAuditRawCaptureStore, shouldCaptureRawRequest } from '../src/plugins/request-audit/raw-capture-store.js';
 
 describe('request audit raw capture', () => {
   test('is disabled by default and only allows configured key hashes', () => {
@@ -49,6 +49,55 @@ describe('request audit raw capture', () => {
     const files = listFiles(dir);
     expect(files.some(file => file.endsWith('old.json.gz'))).toBe(false);
     expect(files.some(file => file.endsWith('new.json.gz'))).toBe(true);
+  });
+
+  test('bounded snapshot stops reading object properties after its entry limit', () => {
+    let propertyReads = 0;
+    const originalRequestBody = {};
+    for (let index = 0; index < 100; index += 1) {
+      Object.defineProperty(originalRequestBody, `field-${index}`, {
+        enumerable: true,
+        get() {
+          propertyReads += 1;
+          return 'x'.repeat(100);
+        }
+      });
+    }
+
+    const snapshot = buildBoundedRawCaptureEvent({
+      requestId: 'bounded-properties',
+      timestamp: '2026-07-23T00:00:00.000Z',
+      request: { model: 'gpt-5.5' }
+    }, { originalRequestBody }, 4096);
+
+    expect(propertyReads).toBeLessThanOrEqual(50);
+    expect(Buffer.byteLength(JSON.stringify(snapshot), 'utf8')).toBeLessThanOrEqual(4096);
+  });
+
+  test('bounded snapshot uses one global traversal budget across deeply branching getters', () => {
+    let propertyReads = 0;
+    const branchingObject = depth => {
+      const value = {};
+      for (let index = 0; index < 20; index += 1) {
+        Object.defineProperty(value, `branch-${depth}-${index}`, {
+          enumerable: true,
+          get() {
+            propertyReads += 1;
+            return depth === 1 ? 'x'.repeat(64) : branchingObject(depth - 1);
+          }
+        });
+      }
+      return value;
+    };
+
+    const snapshot = buildBoundedRawCaptureEvent({
+      requestId: 'global-budget',
+      timestamp: '2026-07-23T00:00:00.000Z',
+      request: { model: 'gpt-5.5' }
+    }, { originalRequestBody: branchingObject(4) }, 1024);
+
+    expect(propertyReads).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(JSON.stringify(snapshot), 'utf8')).toBeLessThanOrEqual(1024);
   });
 });
 

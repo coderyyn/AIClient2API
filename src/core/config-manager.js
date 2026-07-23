@@ -125,6 +125,11 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         PROMPT_LOG_MODE: "none",
         REQUEST_MAX_RETRIES: 3,
         REQUEST_BASE_DELAY: 1000,
+        API_POTLUCK_PERSIST_INTERVAL: 30_000,
+        API_POTLUCK_MAX_DIRTY_AGE: 60_000,
+        API_POTLUCK_DEFAULT_DAILY_LIMIT: 500,
+        MODEL_USAGE_STATS_PERSIST_DEBOUNCE_MS: 30_000,
+        MODEL_USAGE_STATS_MAX_DIRTY_AGE_MS: 60_000,
         MODEL_FALLBACK_ENABLED: true, // 模型不存在时是否自动 fallback 到默认/映射模型
         REQUEST_BODY_MAX_BYTES: DEFAULT_REQUEST_BODY_MAX_BYTES,
         CREDENTIAL_SWITCH_MAX_RETRIES: 5, // 坏凭证切换最大重试次数（用于认证错误后切换凭证）
@@ -193,6 +198,12 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         const configData = fs.readFileSync(configFilePath, 'utf8');
         const loadedConfig = JSON.parse(configData);
         Object.assign(currentConfig, loadedConfig);
+        if (
+            loadedConfig.MODEL_USAGE_STATS_PERSIST_DEBOUNCE_MS === undefined
+            && loadedConfig.MODEL_USAGE_STATS_PERSIST_INTERVAL !== undefined
+        ) {
+            currentConfig.MODEL_USAGE_STATS_PERSIST_DEBOUNCE_MS = loadedConfig.MODEL_USAGE_STATS_PERSIST_INTERVAL;
+        }
         logger.info('[Config] Loaded configuration from configs/config.json');
     } catch (error) {
         if (error.code !== 'ENOENT') {

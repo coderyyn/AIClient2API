@@ -8,7 +8,7 @@ import {
     resetStats,
     resetTokenStats,
     setConfigGetter,
-    syncWriteToFile
+    shutdownStatsPersistence
 } from './stats-manager.js';
 
 const modelUsageStatsPlugin = {
@@ -21,13 +21,18 @@ const modelUsageStatsPlugin = {
 
     async init(config) {
         setConfigGetter(() => ({
-            persistInterval: config.MODEL_USAGE_STATS_PERSIST_INTERVAL || 5000
+            persistDebounceMs: config.MODEL_USAGE_STATS_PERSIST_DEBOUNCE_MS,
+            persistInterval: config.MODEL_USAGE_STATS_PERSIST_INTERVAL,
+            maxDirtyAgeMs: config.MODEL_USAGE_STATS_MAX_DIRTY_AGE_MS
         }));
         logger.info('[Model Usage Stats] Initialized');
     },
 
     async destroy() {
-        syncWriteToFile();
+        const persisted = await shutdownStatsPersistence();
+        if (!persisted) {
+            throw new Error('Failed to flush model usage stats during shutdown');
+        }
         logger.info('[Model Usage Stats] Destroyed');
     },
 

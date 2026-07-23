@@ -505,6 +505,12 @@
       color: var(--success-text);
     }
 
+    .status.warning {
+      background: var(--warning-bg-alt);
+      border-color: var(--warning-border);
+      color: var(--warning-text);
+    }
+
     .status.error {
       background: var(--danger-10);
       border-color: var(--danger-30);
@@ -984,7 +990,7 @@
     }
 
     function status(msg, type = 'info') {
-      const icon = type === 'error' ? 'fa-triangle-exclamation' : type === 'success' ? 'fa-circle-check' : 'fa-circle-info';
+      const icon = type === 'error' || type === 'warning' ? 'fa-triangle-exclamation' : type === 'success' ? 'fa-circle-check' : 'fa-circle-info';
       el('status').className = `status ${type} show`;
       el('status').innerHTML = `<i class="fas ${icon}"></i><span>${msg}</span>`
     }
@@ -1309,6 +1315,15 @@
       }
     }
 
+    function renderResetResult(payload, successMessage) {
+      render(payload.data || payload);
+      if (payload.persistencePending) {
+        status(payload.message || '变更已在内存生效，后台将继续重试持久化；重启服务前请先确认写入状态。', 'warning');
+        return
+      }
+      status(successMessage, 'success')
+    }
+
     async function resetData() {
       if (!confirm('确认重置全部模型统计吗？此操作会清空已落库的累计数据。')) return;
       try {
@@ -1316,8 +1331,7 @@
         const payload = await request(`${API_BASE}/reset`, {
           method: 'POST'
         });
-        render(payload.data || payload);
-        status('统计数据已重置。', 'success')
+        renderResetResult(payload, '统计数据已重置。')
       } catch (error) {
         console.error(error);
         status(error.message, 'error')
@@ -1331,8 +1345,7 @@
         const payload = await request(`${API_BASE}/reset-tokens`, {
           method: 'POST'
         });
-        render(payload.data || payload);
-        status('模型 Token 统计已重置。', 'success')
+        renderResetResult(payload, '模型 Token 统计已重置。')
       } catch (error) {
         console.error(error);
         status(error.message, 'error')

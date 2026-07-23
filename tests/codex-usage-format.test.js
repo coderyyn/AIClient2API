@@ -301,23 +301,28 @@ describe('Codex usage formatting', () => {
     });
 
     test('shows delayed daily profile telemetry as unavailable instead of exact zero', () => {
-        const formatted = formatCodexUsage(weeklyOnlyFixture);
-        const daily = formatted.items.find(item => item.id === 'daily_token_usage');
-        const weekly = formatted.items.find(item => item.id === 'weekly_token_usage');
+        jest.useFakeTimers().setSystemTime(new Date('2026-07-13T12:00:00Z'));
+        try {
+            const formatted = formatCodexUsage(weeklyOnlyFixture);
+            const daily = formatted.items.find(item => item.id === 'daily_token_usage');
+            const weekly = formatted.items.find(item => item.id === 'weekly_token_usage');
 
-        expect(daily).toMatchObject({
-            displayValue: '—',
-            available: false,
-            asOf: '2026-07-12',
-            delayDays: 1,
-            category: 'telemetry'
-        });
-        expect(weekly).toMatchObject({
-            label: 'Weekly Tokens',
-            used: 3382115315,
-            displayValue: '3.38B',
-            category: 'telemetry'
-        });
+            expect(daily).toMatchObject({
+                displayValue: '—',
+                available: false,
+                asOf: '2026-07-12',
+                delayDays: 1,
+                category: 'telemetry'
+            });
+            expect(weekly).toMatchObject({
+                label: 'Weekly Tokens',
+                used: 3382115315,
+                displayValue: '3.38B',
+                category: 'telemetry'
+            });
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     test('propagates the OpenAI profile generation timestamp to all token telemetry items', () => {

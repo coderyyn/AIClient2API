@@ -30,18 +30,20 @@ export function createRequestAuditAnalyzerRunner({
     runOnInit = false
 } = {}) {
     let timer = null;
-    let inFlight = false;
+    let activeRun = null;
+    let failureCount = 0;
 
-    const run = async () => {
-        if (inFlight) return;
-        inFlight = true;
-        try {
-            await runRequestAuditAnalyzer({ auditStore, analysisStore, lookbackMinutes, maxEvents });
-        } catch (error) {
-            logger.warn('[Request Audit] Analyzer failed:', error.message);
-        } finally {
-            inFlight = false;
-        }
+    const run = () => {
+        if (activeRun) return activeRun;
+        activeRun = runRequestAuditAnalyzer({ auditStore, analysisStore, lookbackMinutes, maxEvents })
+            .catch(() => {
+                failureCount += 1;
+                logger.warn('[Request Audit] analyzer failure');
+            })
+            .finally(() => {
+                activeRun = null;
+            });
+        return activeRun;
     };
 
     const start = () => {
@@ -51,11 +53,14 @@ export function createRequestAuditAnalyzerRunner({
         if (runOnInit) setImmediate(run);
     };
 
-    const stop = () => {
+    const stop = async () => {
         if (timer) {
             clearInterval(timer);
             timer = null;
         }
+        const drain = activeRun;
+        if (drain) await drain;
+        return { failureCount };
     };
 
     return { start, stop, run };

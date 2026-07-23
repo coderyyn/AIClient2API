@@ -2,23 +2,70 @@ import logger from '../../utils/logger.js';
 import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
 import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore, setRawCaptureController } from './api-routes.js';
 import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
-import { RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
+import { buildBoundedRawCaptureEvent, RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
 
 const pendingUsage = new Map();
 const auditQueue = [];
+let auditQueueBytes = 0;
 let enabled = true;
 let store = null;
 let flushPromise = null;
 let lastCleanupAt = 0;
 let cleanupTimer = null;
 let cleanupInFlight = false;
+let cleanupPromise = null;
 let analyzerRunner = null;
+let analyzerRunOnInitHandle = null;
 let rawCaptureStore = null;
 let rawCaptureOptions = { enabled: false, keyHashes: [] };
+let acceptingAuditContext = false;
+let destroyPromise = null;
+let auditLossCounts = new Map();
+let backgroundFailureCounts = new Map();
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_AUDIT_QUEUE_EVENTS = 1000;
 const AUDIT_FLUSH_BATCH_SIZE = 5;
+const MAX_PENDING_USAGE_ENTRIES = 10000;
+const MAX_AUDIT_QUEUE_BYTES = 8 * 1024 * 1024;
+
+function recordAuditLoss(reason, count = 1) {
+    const nextCount = (auditLossCounts.get(reason) || 0) + Math.max(1, Number(count) || 1);
+    auditLossCounts.set(reason, nextCount);
+    return nextCount;
+}
+
+function buildAuditLossError() {
+    const losses = [...auditLossCounts.entries()];
+    const total = losses.reduce((sum, [, count]) => sum + count, 0);
+    if (total === 0) return null;
+
+    const message = `Request audit lost ${total} audit event${total === 1 ? '' : 's'} (${losses.map(([reason, count]) => `${reason}: ${count}`).join(', ')})`;
+    if (losses.length === 1) {
+        return new Error(message);
+    }
+
+    return new AggregateError(
+        losses.map(([reason, count]) => new Error(`${reason}: ${count}`)),
+        message
+    );
+}
+
+function recordBackgroundFailure(reason) {
+    backgroundFailureCounts.set(reason, (backgroundFailureCounts.get(reason) || 0) + 1);
+}
+
+function buildShutdownError() {
+    const errors = [];
+    const auditLossError = buildAuditLossError();
+    if (auditLossError) errors.push(auditLossError);
+    for (const [reason, count] of backgroundFailureCounts.entries()) {
+        errors.push(new Error(`Request audit background failure (${reason}: ${count})`));
+    }
+    if (errors.length === 0) return null;
+    if (errors.length === 1) return errors[0];
+    return new AggregateError(errors, `Request audit shutdown failed (${errors.map(error => error.message).join('; ')})`);
+}
 
 function nextTick() {
     return new Promise(resolve => setImmediate(resolve));
@@ -57,6 +104,13 @@ function getRequestId(context = {}) {
 
 function setPendingUsage(requestId, usage) {
     if (!requestId) return;
+    if (!pendingUsage.has(requestId) && pendingUsage.size >= MAX_PENDING_USAGE_ENTRIES) {
+        const oldestRequestId = pendingUsage.keys().next().value;
+        if (oldestRequestId !== undefined) {
+            pendingUsage.delete(oldestRequestId);
+            recordAuditLoss('pending usage overflow');
+        }
+    }
     pendingUsage.set(requestId, {
         usage: mergeUsage(pendingUsage.get(requestId)?.usage, usage),
         updatedAt: Date.now()
@@ -72,13 +126,26 @@ function cleanupPendingUsage() {
     }
 }
 
-function enqueueAuditContext(context) {
-    if (!store) return;
+function enqueueAuditContext(work) {
+    if (!store || !acceptingAuditContext) return;
     if (auditQueue.length >= MAX_AUDIT_QUEUE_EVENTS) {
-        logger.warn('[Request Audit] Dropping audit event because queue is full');
+        const droppedCount = recordAuditLoss('queue overflow');
+        if (droppedCount === 1 || droppedCount % 100 === 0) {
+            logger.warn(`[Request Audit] Dropping audit event because queue is full (dropped=${droppedCount})`);
+        }
         return;
     }
-    auditQueue.push(context);
+    const workBytes = Buffer.byteLength(JSON.stringify(work), 'utf8');
+    if (workBytes > MAX_AUDIT_QUEUE_BYTES || auditQueueBytes + workBytes > MAX_AUDIT_QUEUE_BYTES) {
+        const droppedCount = recordAuditLoss('queue byte overflow');
+        if (droppedCount === 1 || droppedCount % 100 === 0) {
+            logger.warn(`[Request Audit] Dropping audit event because queue byte budget is full (dropped=${droppedCount})`);
+        }
+        return;
+    }
+    Object.defineProperty(work, '_queueBytes', { value: workBytes, enumerable: false });
+    auditQueue.push(work);
+    auditQueueBytes += workBytes;
     scheduleAuditFlush();
 }
 
@@ -97,44 +164,76 @@ async function flushAuditQueue() {
     while (auditQueue.length > 0) {
         const batchSize = Math.min(auditQueue.length, AUDIT_FLUSH_BATCH_SIZE);
         for (let i = 0; i < batchSize; i += 1) {
-            const context = auditQueue.shift();
-            if (!context) continue;
+            const work = auditQueue.shift();
+            if (!work) continue;
+            auditQueueBytes = Math.max(0, auditQueueBytes - (work._queueBytes || 0));
 
             try {
-                const event = buildRequestAuditEvent(context);
+                const { event, rawCaptureEvent } = work;
                 await store.append(event);
-                if (shouldCaptureRawRequest(rawCaptureOptions, event) && rawCaptureStore) {
-                    await rawCaptureStore.capture({
-                        ...event,
-                        originalRequestBody: context.originalRequestBody,
-                        processedRequestBody: context.processedRequestBody
-                    });
-                }
             } catch (error) {
-                logger.warn('[Request Audit] Failed to write audit event:', error.message);
+                recordAuditLoss('persistence failure');
+                logger.warn(`[Request Audit] Failed to write audit event (${error?.code || error?.name || 'Error'})`);
+                continue;
+            }
+            const { rawCaptureEvent } = work;
+            if (rawCaptureEvent && rawCaptureStore) {
+                try {
+                    await rawCaptureStore.capture(rawCaptureEvent);
+                } catch (error) {
+                    recordAuditLoss('raw capture failure');
+                    logger.warn(`[Request Audit] Failed to capture raw request (${error?.code || error?.name || 'Error'})`);
+                }
             }
         }
         if (auditQueue.length > 0) await nextTick();
     }
 }
 
+async function drainAuditQueue() {
+    while (flushPromise || auditQueue.length > 0) {
+        if (!flushPromise && auditQueue.length > 0) {
+            scheduleAuditFlush();
+        }
+        const activeFlush = flushPromise;
+        if (activeFlush) {
+            await activeFlush;
+        }
+    }
+}
+
+function runCleanupTasks(tasks) {
+    cleanupInFlight = true;
+    cleanupPromise = Promise.allSettled(
+        tasks.map(task => Promise.resolve().then(task))
+    )
+        .then(results => {
+            const failures = results.filter(result => result.status === 'rejected');
+            for (const _failure of failures) {
+                recordBackgroundFailure('cleanup failure');
+            }
+            if (failures.length > 0) {
+                logger.warn('[Request Audit] cleanup failure');
+            }
+        })
+        .finally(() => {
+            cleanupInFlight = false;
+            cleanupPromise = null;
+        });
+    return cleanupPromise;
+}
+
 function scheduleAuditCleanup() {
+    cleanupPendingUsage();
     if (!store || cleanupInFlight) return;
     const now = Date.now();
     if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
 
     lastCleanupAt = now;
-    cleanupInFlight = true;
-    Promise.all([
-        store.cleanup(),
-        rawCaptureStore?.cleanup?.()
-    ])
-        .catch(error => {
-            logger.warn('[Request Audit] Failed to cleanup audit store:', error.message);
-        })
-        .finally(() => {
-            cleanupInFlight = false;
-        });
+    return runCleanupTasks([
+        () => store.cleanup(),
+        () => rawCaptureStore?.cleanup?.()
+    ]);
 }
 
 function createRawCaptureController() {
@@ -169,10 +268,9 @@ function startCleanupTimer() {
 }
 
 function cleanupRawCaptureOnInit() {
-    Promise.resolve(rawCaptureStore?.cleanup?.())
-        .catch(error => {
-            logger.warn('[Request Audit] Failed to cleanup raw capture store:', error.message);
-        });
+    return runCleanupTasks([
+        () => rawCaptureStore?.cleanup?.()
+    ]);
 }
 
 const requestAuditPlugin = {
@@ -193,6 +291,11 @@ const requestAuditPlugin = {
 
     async init(config = {}) {
         enabled = config.REQUEST_AUDIT_ENABLED !== false && config.REQUEST_AUDIT_ENABLED !== 'false';
+        acceptingAuditContext = enabled;
+        destroyPromise = null;
+        auditLossCounts = new Map();
+        backgroundFailureCounts = new Map();
+        auditQueueBytes = 0;
         store = config._requestAuditStore || getAuditStore(config);
         setAuditStore(store);
         const materializedStore = config._requestAuditAnalysisStore || getAnalysisStore(config);
@@ -211,61 +314,102 @@ const requestAuditPlugin = {
         startCleanupTimer();
         cleanupRawCaptureOnInit();
         if (config.REQUEST_AUDIT_ANALYZER_ENABLED !== false && config.REQUEST_AUDIT_ANALYZER_ENABLED !== 'false') {
+            const runAnalyzerOnInit = config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === true || config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === 'true';
             analyzerRunner = createRequestAuditAnalyzerRunner({
                 auditStore: store,
                 analysisStore: materializedStore,
                 intervalMs: config.REQUEST_AUDIT_ANALYZER_INTERVAL_MS || 60000,
                 lookbackMinutes: config.REQUEST_AUDIT_ANALYZER_LOOKBACK_MINUTES || 180,
                 maxEvents: config.REQUEST_AUDIT_ANALYZER_MAX_EVENTS || 5000,
-                runOnInit: config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === true || config.REQUEST_AUDIT_ANALYZER_RUN_ON_INIT === 'true'
+                runOnInit: false
             });
             analyzerRunner.start();
+            if (runAnalyzerOnInit) {
+                const scheduledRunner = analyzerRunner;
+                analyzerRunOnInitHandle = setImmediate(() => {
+                    analyzerRunOnInitHandle = null;
+                    if (acceptingAuditContext && analyzerRunner === scheduledRunner) {
+                        void scheduledRunner.run();
+                    }
+                });
+                analyzerRunOnInitHandle.unref?.();
+            }
         }
         logger.info(`[Request Audit] Initialized enabled=${enabled}`);
     },
 
-    async destroy() {
+    destroy() {
+        if (destroyPromise) return destroyPromise;
+
+        acceptingAuditContext = false;
+        enabled = false;
         pendingUsage.clear();
-        auditQueue.length = 0;
         if (cleanupTimer) {
             clearInterval(cleanupTimer);
             cleanupTimer = null;
         }
-        if (analyzerRunner) {
-            analyzerRunner.stop();
-            analyzerRunner = null;
+        if (analyzerRunOnInitHandle) {
+            clearImmediate(analyzerRunOnInitHandle);
+            analyzerRunOnInitHandle = null;
         }
-        rawCaptureStore = null;
-        rawCaptureOptions = { enabled: false, keyHashes: [] };
         setRawCaptureController(null);
-        logger.info('[Request Audit] Destroyed');
+
+        const analyzerDrain = analyzerRunner?.stop?.() || Promise.resolve({ failureCount: 0 });
+        analyzerRunner = null;
+        const cleanupDrain = cleanupPromise || Promise.resolve();
+
+        destroyPromise = (async () => {
+            const [analyzerResult] = await Promise.all([analyzerDrain, cleanupDrain, drainAuditQueue()]);
+            if (analyzerResult?.failureCount > 0) {
+                recordAuditLoss('analyzer failure', analyzerResult.failureCount);
+            }
+            rawCaptureStore = null;
+            rawCaptureOptions = { enabled: false, keyHashes: [] };
+            store = null;
+
+            const shutdownError = buildShutdownError();
+            logger.info('[Request Audit] Destroyed');
+            if (shutdownError) throw shutdownError;
+        })();
+
+        return destroyPromise;
     },
 
     hooks: {
         async onUnaryResponse({ requestId, nativeResponse, clientResponse }) {
-            if (!enabled || !requestId) return;
+            if (!enabled || !acceptingAuditContext || !requestId) return;
             setPendingUsage(requestId, extractUsage(nativeResponse, clientResponse));
         },
 
         async onStreamChunk({ requestId, nativeChunk, chunkToSend }) {
-            if (!enabled || !requestId) return;
+            if (!enabled || !acceptingAuditContext || !requestId) return;
             setPendingUsage(requestId, extractUsage(nativeChunk, chunkToSend));
         },
 
         async onContentGenerated(context = {}) {
-            if (!enabled) return;
+            if (!enabled || !acceptingAuditContext) return;
             const requestId = getRequestId(context);
             if (!requestId) return;
 
             try {
                 cleanupPendingUsage();
                 const usage = pendingUsage.get(requestId)?.usage || {};
-                enqueueAuditContext({
+                const event = buildRequestAuditEvent({
                     ...context,
                     requestId,
                     usage,
                     timestamp: new Date().toISOString()
                 });
+                let rawCaptureEvent = null;
+                if (shouldCaptureRawRequest(rawCaptureOptions, event) && rawCaptureStore) {
+                    try {
+                        rawCaptureEvent = buildBoundedRawCaptureEvent(event, context, rawCaptureStore.maxBytes);
+                    } catch {
+                        recordAuditLoss('raw snapshot failure');
+                        logger.warn('[Request Audit] raw snapshot failure');
+                    }
+                }
+                enqueueAuditContext({ event, rawCaptureEvent });
             } catch (error) {
                 logger.warn('[Request Audit] Failed to enqueue audit event:', error.message);
             } finally {

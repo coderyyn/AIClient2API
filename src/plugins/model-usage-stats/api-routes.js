@@ -8,6 +8,18 @@ function sendJson(res, statusCode, data) {
     res.end(JSON.stringify(data));
 }
 
+function sendResetResult(res, stats, successMessage) {
+    const persistencePending = stats?.persistencePending === true;
+    sendJson(res, persistencePending ? 202 : 200, {
+        success: true,
+        persistencePending,
+        message: persistencePending
+            ? '变更已在内存生效，后台将继续重试持久化；重启服务前请确认统计文件已成功写入。'
+            : successMessage,
+        data: stats
+    });
+}
+
 async function checkAdminAuth(req, config) {
     try {
         if (await checkAuth(req)) {
@@ -52,21 +64,13 @@ export async function handleModelUsageStatsRoutes(method, path, req, res, config
 
         if ((method === 'POST' || method === 'DELETE') && path === '/api/model-usage-stats/reset') {
             const stats = await resetStats();
-            sendJson(res, 200, {
-                success: true,
-                message: '模型统计已重置',
-                data: stats
-            });
+            sendResetResult(res, stats, '模型统计已重置');
             return true;
         }
 
         if ((method === 'POST' || method === 'DELETE') && path === '/api/model-usage-stats/reset-tokens') {
             const stats = await resetTokenStats();
-            sendJson(res, 200, {
-                success: true,
-                message: '模型 Token 统计已重置',
-                data: stats
-            });
+            sendResetResult(res, stats, '模型 Token 统计已重置');
             return true;
         }
     } catch (error) {

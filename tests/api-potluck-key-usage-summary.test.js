@@ -982,6 +982,34 @@ describe('api potluck key usage summary', () => {
         expect(compactDay).not.toHaveProperty('hours');
     });
 
+    test('compact user history keeps distribution data without account and hourly details', async () => {
+        jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
+        const { createKey, incrementUsage, getKey } = await loadKeyManager();
+
+        const key = await createKey('Compact User Client', 1000);
+        await incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 1000,
+            cachedTokens: 250,
+            completionTokens: 100,
+            totalTokens: 1100
+        }, 'req-compact-user', {
+            providerUuid: 'codex-account-a',
+            providerName: 'user@example.com',
+            accountEmail: 'user@example.com',
+            timestamp: '2026-06-22T02:15:30.000Z'
+        });
+
+        const compactKey = await getKey(key.id, { compactUserHistory: true, compactCosts: true });
+        const compactDay = compactKey.usageHistory['2026-06-22'];
+
+        expect(compactDay.summary.totalTokens).toBe(1100);
+        expect(compactDay.providers['openai-codex-oauth'].totalTokens).toBe(1100);
+        expect(compactDay.models['gpt-5.4-mini'].requestCount).toBe(1);
+        expect(compactDay).not.toHaveProperty('accounts');
+        expect(compactDay).not.toHaveProperty('hours');
+    });
+
     test('compact stats keeps summary provider and model totals without account details', async () => {
         jest.setSystemTime(new Date('2026-06-22T02:15:30.000Z'));
         const { createKey, incrementUsage, getStats } = await loadKeyManager();

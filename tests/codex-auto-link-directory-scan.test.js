@@ -40,6 +40,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    const providerPoolManager = getProviderPoolManager();
+    if (providerPoolManager?.saveTimer) {
+        clearTimeout(providerPoolManager.saveTimer);
+        providerPoolManager.saveTimer = null;
+    }
+    providerPoolManager?.pendingSaves?.clear();
     process.chdir(originalCwd);
     fs.rmSync(tempDir, { recursive: true, force: true });
 });

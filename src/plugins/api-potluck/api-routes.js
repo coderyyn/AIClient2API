@@ -106,6 +106,29 @@ function formatDailyLimitMessage(dailyLimit) {
     return dailyLimit === 0 ? '不限量' : dailyLimit;
 }
 
+const PERSISTENCE_PENDING_MESSAGE = '变更已在内存生效，持久化暂未完成，系统将在后台重试；服务重启前请稍后确认。';
+
+function sendManagementMutationResponse(res, {
+    result,
+    message,
+    data = result,
+    successStatusCode = 200
+}) {
+    const persistencePending = Boolean(result?.persistencePending);
+    const responseData = data && typeof data === 'object' && !Array.isArray(data)
+        ? { ...data }
+        : data;
+    if (responseData && typeof responseData === 'object') {
+        delete responseData.persistencePending;
+    }
+    sendJson(res, persistencePending ? 202 : successStatusCode, {
+        success: true,
+        persistencePending,
+        message: persistencePending ? `${message} ${PERSISTENCE_PENDING_MESSAGE}` : message,
+        data: responseData
+    });
+}
+
 function readProviderCredentialEmail(provider) {
     const credPath = provider?.CODEX_OAUTH_CREDS_FILE_PATH;
     if (!credPath) return '';
@@ -330,8 +353,8 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
             const result = await resetAllTokenStats();
             clearStatsCache();
             const stats = enrichPotluckStatsAccountEmails(await getStats(getRequestCostOptions(req)));
-            sendJson(res, 200, {
-                success: true,
+            sendManagementMutationResponse(res, {
+                result,
                 message: `已重置 ${result.updated}/${result.total} 个 Key 的 Token 统计`,
                 data: stats
             });
@@ -361,8 +384,8 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
             }
             
             const result = await applyDailyLimitToAllKeys(dailyLimit);
-            sendJson(res, 200, {
-                success: true,
+            sendManagementMutationResponse(res, {
+                result,
                 message: `已将每日限额 ${formatDailyLimitMessage(dailyLimit)} 应用到 ${result.updated}/${result.total} 个 Key`,
                 data: result
             });
@@ -374,10 +397,11 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
             const body = await getRequestBody(req, { maxBytes: 1024 * 1024 });
             const { name, dailyLimit } = body;
             const keyData = await createKey(name, dailyLimit);
-            sendJson(res, 201, {
-                success: true,
+            sendManagementMutationResponse(res, {
+                result: keyData,
                 message: 'API Key 创建成功',
-                data: keyData
+                data: keyData,
+                successStatusCode: 201
             });
             return true;
         }
@@ -406,7 +430,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { success: true, message: 'Key 删除成功' });
+                sendManagementMutationResponse(res, {
+                    result: deleted,
+                    message: 'Key 删除成功'
+                });
                 return true;
             }
 
@@ -428,10 +455,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { 
-                    success: true, 
+                sendManagementMutationResponse(res, {
+                    result: keyData,
                     message: '每日限额更新成功',
-                    data: keyData 
+                    data: keyData
                 });
                 return true;
             }
@@ -443,10 +470,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { 
-                    success: true, 
+                sendManagementMutationResponse(res, {
+                    result: keyData,
                     message: '使用量重置成功',
-                    data: keyData 
+                    data: keyData
                 });
                 return true;
             }
@@ -458,8 +485,8 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, {
-                    success: true,
+                sendManagementMutationResponse(res, {
+                    result: keyData,
                     message: 'Token 统计重置成功',
                     data: keyData
                 });
@@ -473,10 +500,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { 
-                    success: true, 
+                sendManagementMutationResponse(res, {
+                    result: keyData,
                     message: `Key 已成功${keyData.enabled ? '启用' : '禁用'}`,
-                    data: keyData 
+                    data: keyData
                 });
                 return true;
             }
@@ -499,10 +526,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { 
-                    success: true, 
+                sendManagementMutationResponse(res, {
+                    result: keyData,
                     message: '名称更新成功',
-                    data: keyData 
+                    data: keyData
                 });
                 return true;
             }
@@ -514,8 +541,8 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;
                 }
-                sendJson(res, 200, { 
-                    success: true, 
+                sendManagementMutationResponse(res, {
+                    result,
                     message: 'Key 重新生成成功',
                     data: {
                         oldKey: result.oldKey,
@@ -617,7 +644,7 @@ export async function handlePotluckUserApiRoutes(method, path, req, res) {
 
         // GET /api/potluckuser/usage - 获取当前用户的使用量信息
         if (method === 'GET' && path === '/api/potluckuser/usage') {
-            const keyData = await getKey(apiKey);
+            const keyData = await getKey(apiKey, { compactUserHistory: true, compactCosts: true });
             
             if (!keyData) {
                 sendJson(res, 404, {

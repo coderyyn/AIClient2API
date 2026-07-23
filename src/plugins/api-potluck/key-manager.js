@@ -6,7 +6,7 @@
 import { atomicWriteFile, atomicWriteFileSync } from '../../utils/file-lock.js';
 import { promises as fs } from 'fs';
 import logger from '../../utils/logger.js';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { RateManager } from '../../utils/rate-tracker.js';
@@ -27,9 +27,11 @@ const KEY_PREFIX = 'maki_';
 const USAGE_HISTORY_RETENTION_DAYS = 35;
 
 const DEFAULT_CONFIG = {
-    persistInterval: 5000,
+    persistInterval: 30_000,
+    maxDirtyAge: 60_000,
     defaultDailyLimit: 500
 };
+const PERSIST_RETRY_DELAY_MS = 5_000;
 
 let configGetter = null;
 
@@ -50,6 +52,23 @@ function getConfig() {
     return DEFAULT_CONFIG;
 }
 
+function normalizePersistenceDuration(value, fallback) {
+    const duration = Number(value);
+    return Number.isFinite(duration) && duration > 0 ? duration : fallback;
+}
+
+function refreshPersistenceConfig() {
+    const config = getConfig() || {};
+    currentPersistInterval = normalizePersistenceDuration(
+        config.persistInterval,
+        DEFAULT_CONFIG.persistInterval
+    );
+    currentMaxDirtyAge = normalizePersistenceDuration(
+        config.maxDirtyAge,
+        DEFAULT_CONFIG.maxDirtyAge
+    );
+}
+
 /**
  * 获取今日日期字符串
  */
@@ -62,7 +81,14 @@ let keyStore = null;
 let isDirty = false;
 let isWriting = false;
 let persistTimer = null;
+let maxDirtyTimer = null;
 let currentPersistInterval = DEFAULT_CONFIG.persistInterval;
+let currentMaxDirtyAge = DEFAULT_CONFIG.maxDirtyAge;
+let dirtySince = null;
+let mutationVersion = 0;
+let lastPersistedVersion = 0;
+let persistPromise = null;
+let retryNotBefore = 0;
 
 const rateManager = new RateManager(60);
 
@@ -949,6 +975,32 @@ function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAU
     return compact;
 }
 
+function cloneUsageMapForCompactHistory(usageMap = {}) {
+    const compact = {};
+    for (const [name, usage] of Object.entries(usageMap || {})) {
+        compact[name] = cloneUsageBucket(usage);
+        addCacheHitRatio(compact[name]);
+        delete compact[name].cost;
+    }
+    return compact;
+}
+
+function cloneUsageHistoryForUser(usageHistory = {}, conversionModel = DEFAULT_CONVERSION_MODEL, options = {}) {
+    const compact = {};
+    for (const [date, day] of Object.entries(usageHistory || {})) {
+        const summary = cloneUsageBucket(day?.summary || {});
+        addCacheHitRatio(summary);
+        const summaryCost = buildCost(summary, day?.models || {}, conversionModel);
+        summary.cost = options.compactCosts ? cloneCompactCostBucket(summaryCost) : summaryCost;
+        compact[date] = {
+            summary,
+            providers: cloneUsageMapForCompactHistory(day?.providers),
+            models: cloneUsageMapForCompactHistory(day?.models)
+        };
+    }
+    return compact;
+}
+
 function getCostOptions(options = {}) {
     return {
         conversionModel: normalizeConversionModel(options?.conversionModel)
@@ -957,15 +1009,19 @@ function getCostOptions(options = {}) {
 
 function enrichKeyUsage(keyData, options = {}) {
     const { conversionModel } = getCostOptions(options);
-    const usageHistory = options.summaryOnly
-        ? cloneUsageHistorySummaryOnly(keyData.usageHistory || {}, conversionModel, options)
-        : addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
-    if (!options.summaryOnly) {
+    const usageHistory = options.compactUserHistory
+        ? cloneUsageHistoryForUser(keyData.usageHistory || {}, conversionModel, options)
+        : options.summaryOnly
+            ? cloneUsageHistorySummaryOnly(keyData.usageHistory || {}, conversionModel, options)
+            : addUsageHistoryRatios(JSON.parse(JSON.stringify(keyData.usageHistory || {})));
+    if (!options.summaryOnly && !options.compactUserHistory) {
         addCostToUsageHistory(usageHistory, conversionModel);
     }
     const weeklySummary = getRecentHistorySummary(usageHistory, 7);
     const keyHash = hashSecret(keyData.id);
-    const relatedAccountHistory = options.summaryOnly ? keyData.usageHistory || {} : usageHistory;
+    const relatedAccountHistory = options.summaryOnly || options.compactUserHistory
+        ? keyData.usageHistory || {}
+        : usageHistory;
     const enriched = {
         ...keyData,
         usageHistory,
@@ -1020,22 +1076,57 @@ function ensureLoaded() {
         logger.error('[API Potluck] Failed to load key store:', error.message);
         keyStore = { keys: {} };
     }
-    
-    // 获取配置的持久化间隔
-    const config = getConfig();
-    currentPersistInterval = config.persistInterval || DEFAULT_CONFIG.persistInterval;
-    
-    // 启动定期持久化
-    if (!persistTimer) {
-        persistTimer = setInterval(persistIfDirty, currentPersistInterval);
-        if (persistTimer.unref) {
-            persistTimer.unref();
-        }
-        // 进程退出时保存
-        process.on('beforeExit', () => persistIfDirty());
-        process.on('SIGINT', () => { persistIfDirty(); process.exit(0); });
-        process.on('SIGTERM', () => { persistIfDirty(); process.exit(0); });
+
+    refreshPersistenceConfig();
+}
+
+function unrefTimer(timer) {
+    if (timer?.unref) timer.unref();
+    return timer;
+}
+
+function clearScheduledPersistence() {
+    if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
     }
+    if (maxDirtyTimer) {
+        clearTimeout(maxDirtyTimer);
+        maxDirtyTimer = null;
+    }
+}
+
+function schedulePersistence({ resetDebounce = false } = {}) {
+    if (!isDirty || keyStore === null) return;
+
+    const now = Date.now();
+    const retryDelay = Math.max(0, retryNotBefore - now);
+    const debounceDelay = retryDelay > 0 ? retryDelay : currentPersistInterval;
+
+    if (resetDebounce && persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+    }
+    if (!persistTimer) {
+        persistTimer = unrefTimer(setTimeout(async () => {
+            persistTimer = null;
+            await persistIfDirty();
+            if (isDirty) schedulePersistence();
+        }, debounceDelay));
+    }
+
+    if (maxDirtyTimer) {
+        clearTimeout(maxDirtyTimer);
+        maxDirtyTimer = null;
+    }
+    const dirtyAge = dirtySince === null ? 0 : Math.max(0, now - dirtySince);
+    const remainingDirtyAge = Math.max(0, currentMaxDirtyAge - dirtyAge);
+    const maxDirtyDelay = Math.max(remainingDirtyAge, retryDelay);
+    maxDirtyTimer = unrefTimer(setTimeout(async () => {
+        maxDirtyTimer = null;
+        await persistIfDirty();
+        if (isDirty) schedulePersistence();
+    }, maxDirtyDelay));
 }
 
 /**
@@ -1047,38 +1138,135 @@ function syncWriteToFile() {
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
-        atomicWriteFileSync(KEYS_STORE_FILE, JSON.stringify(keyStore, null, 2), { encoding: 'utf8', mode: 0o600 });
+        atomicWriteFileSync(KEYS_STORE_FILE, JSON.stringify(keyStore), { encoding: 'utf8', mode: 0o600 });
     } catch (error) {
         logger.error('[API Potluck] Sync write failed:', error.message);
     }
 }
 
 /**
- * 异步持久化（带写锁）
+ * 异步持久化。每次调度最多写一个快照，避免持续流量下形成无界全量写循环。
  */
 async function persistIfDirty() {
-    if (!isDirty || isWriting || keyStore === null) return;
-    isWriting = true;
+    if (persistPromise) return persistPromise;
+    if (!isDirty || keyStore === null) return true;
+
+    clearScheduledPersistence();
+
+    const versionAtStart = mutationVersion;
+    const dirtySinceAtStart = dirtySince;
+    const serializeStartedAt = performance.now();
+    let snapshot;
     try {
-        const dir = path.dirname(KEYS_STORE_FILE);
-        if (!existsSync(dir)) {
-            await fs.mkdir(dir, { recursive: true });
-        }
-        // 写入临时文件再重命名，并确保刷盘
-        await atomicWriteFile(KEYS_STORE_FILE, JSON.stringify(keyStore, null, 2), { encoding: 'utf8', mode: 0o600 });
-        isDirty = false;
+        snapshot = JSON.stringify(keyStore);
     } catch (error) {
-        logger.error('[API Potluck] Persist failed:', error.message);
-    } finally {
-        isWriting = false;
+        retryNotBefore = Date.now() + PERSIST_RETRY_DELAY_MS;
+        logger.error('[API Potluck] Snapshot serialization failed:', error.message);
+        schedulePersistence({ resetDebounce: true });
+        return false;
     }
+    const serializeMs = performance.now() - serializeStartedAt;
+    const snapshotBytes = Buffer.byteLength(snapshot, 'utf8');
+
+    // 当前快照已接管现有 dirty 状态；写入期间的新 mutation 会重新标脏。
+    isDirty = false;
+    dirtySince = null;
+
+    persistPromise = (async () => {
+        isWriting = true;
+        const writeStartedAt = performance.now();
+        try {
+            const dir = path.dirname(KEYS_STORE_FILE);
+            if (!existsSync(dir)) {
+                await fs.mkdir(dir, { recursive: true });
+            }
+            await atomicWriteFile(KEYS_STORE_FILE, snapshot, { encoding: 'utf8', mode: 0o600 });
+
+            lastPersistedVersion = Math.max(lastPersistedVersion, versionAtStart);
+            retryNotBefore = 0;
+            const writeMs = performance.now() - writeStartedAt;
+            const memory = process.memoryUsage();
+            const toMiB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
+            logger.info(
+                `[API Potluck] Persisted key store: version=${versionAtStart}, bytes=${snapshotBytes}, ` +
+                `serializeMs=${serializeMs.toFixed(1)}, writeMs=${writeMs.toFixed(1)}, ` +
+                `heapUsedMiB=${toMiB(memory.heapUsed)}, externalMiB=${toMiB(memory.external)}, rssMiB=${toMiB(memory.rss)}, ` +
+                `dirtyAfterWrite=${mutationVersion !== versionAtStart}`
+            );
+            return true;
+        } catch (error) {
+            isDirty = true;
+            dirtySince = dirtySince === null
+                ? (dirtySinceAtStart ?? Date.now())
+                : Math.min(dirtySince, dirtySinceAtStart ?? dirtySince);
+            retryNotBefore = Date.now() + PERSIST_RETRY_DELAY_MS;
+            logger.error('[API Potluck] Persist failed:', error.message);
+            return false;
+        } finally {
+            isWriting = false;
+            persistPromise = null;
+            if (isDirty) schedulePersistence();
+        }
+    })();
+
+    return persistPromise;
+}
+
+/**
+ * 关闭插件前排空所有已知 mutation，并等待正在进行的写入完成。
+ */
+export async function flushPendingChanges({ targetVersion = mutationVersion, shutdown = false } = {}) {
+    if (keyStore === null) return true;
+    let remainingFailureRetries = shutdown ? 1 : 0;
+
+    while (lastPersistedVersion < targetVersion) {
+        clearScheduledPersistence();
+        if (!persistPromise && !isDirty) {
+            logger.error(`[API Potluck] Persistence stalled before version ${targetVersion}`);
+            return false;
+        }
+        if (!shutdown && !persistPromise && retryNotBefore > Date.now()) {
+            schedulePersistence();
+            return false;
+        }
+        try {
+            const succeeded = await (persistPromise || persistIfDirty());
+            if (!succeeded) {
+                if (remainingFailureRetries <= 0) return false;
+                remainingFailureRetries -= 1;
+            }
+        } catch (error) {
+            logger.error(`[API Potluck] Failed to flush key store through version ${targetVersion}:`, error.message);
+            if (remainingFailureRetries <= 0) return false;
+            remainingFailureRetries -= 1;
+        }
+    }
+    return true;
+}
+
+function attachPersistenceStatus(result, persistencePending) {
+    const response = { ...result };
+    Object.defineProperty(response, 'persistencePending', {
+        value: persistencePending,
+        enumerable: false
+    });
+    return response;
+}
+
+async function buildManagementMutationResult(targetVersion, result) {
+    const persisted = await flushPendingChanges({ targetVersion });
+    return attachPersistenceStatus(result, !persisted);
 }
 
 /**
  * 标记数据已修改
  */
 function markDirty() {
+    mutationVersion += 1;
+    if (!isDirty) dirtySince = Date.now();
     isDirty = true;
+    schedulePersistence({ resetDebounce: true });
+    return mutationVersion;
 }
 
 /**
@@ -1157,12 +1345,11 @@ export async function createKey(name = '', dailyLimit = null) {
     };
 
     keyStore.keys[apiKey] = keyData;
-    markDirty();
-
-    await persistIfDirty(); // 创建操作立即持久化
+    const targetVersion = markDirty();
+    const result = await buildManagementMutationResult(targetVersion, keyData);
 
     logger.info(`[API Potluck] Created key: ${apiKey.substring(0, 12)}...`);
-    return keyData;
+    return result;
 }
 
 /**
@@ -1213,16 +1400,19 @@ export async function getKey(keyId, options = {}) {
  */
 export async function deleteKey(keyId) {
     ensureLoaded();
-    if (!keyStore.keys[keyId]) return false;
+    if (!keyStore.keys[keyId]) return null;
     delete keyStore.keys[keyId];
     
     // 清理速率追踪器，防止内存泄漏
     rateManager.remove(`key:${keyId}`);
 
-    markDirty();
-    await persistIfDirty(); // 删除操作立即持久化
+    const targetVersion = markDirty();
+    const result = await buildManagementMutationResult(targetVersion, {
+        deleted: true,
+        keyId
+    });
     logger.info(`[API Potluck] Deleted key: ${keyId.substring(0, 12)}...`);
-    return true;
+    return result;
 }
 
 /**
@@ -1232,8 +1422,8 @@ export async function updateKeyLimit(keyId, newLimit) {
     ensureLoaded();
     if (!keyStore.keys[keyId]) return null;
     keyStore.keys[keyId].dailyLimit = newLimit;
-    markDirty();
-    return keyStore.keys[keyId];
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, keyStore.keys[keyId]);
 }
 
 /**
@@ -1251,8 +1441,8 @@ export async function resetKeyUsage(keyId) {
     keyStore.keys[keyId].lastResetDate = getTodayDateString();
     if (!keyStore.keys[keyId].usageHistory) keyStore.keys[keyId].usageHistory = {};
     keyStore.keys[keyId].usageHistory[getTodayDateString()] = normalizeUsageHistoryDay();
-    markDirty();
-    return keyStore.keys[keyId];
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, keyStore.keys[keyId]);
 }
 
 /**
@@ -1279,10 +1469,10 @@ export async function resetKeyTokenStats(keyId) {
     // 重置该 Key 的速率追踪器
     rateManager.remove(`key:${keyId}`);
 
-    markDirty();
-    await persistIfDirty();
+    const targetVersion = markDirty();
+    const result = await buildManagementMutationResult(targetVersion, keyData);
     logger.info(`[API Potluck] Reset token stats for key: ${keyId.substring(0, 12)}...`);
-    return keyData;
+    return result;
 }
 
 /**
@@ -1311,14 +1501,16 @@ export async function resetAllTokenStats() {
     // 重置所有 Key 的速率追踪器
     rateManager.clear();
 
-    if (updated > 0) {
-
-        markDirty();
-        await persistIfDirty();
-    }
+    const targetVersion = updated > 0 ? markDirty() : null;
+    const result = targetVersion === null
+        ? attachPersistenceStatus({ total: Object.keys(keyStore.keys).length, updated }, false)
+        : await buildManagementMutationResult(targetVersion, {
+            total: Object.keys(keyStore.keys).length,
+            updated
+        });
 
     logger.info(`[API Potluck] Reset token stats for all keys: ${updated}`);
-    return { total: Object.keys(keyStore.keys).length, updated };
+    return result;
 }
 
 /**
@@ -1328,8 +1520,8 @@ export async function toggleKey(keyId) {
     ensureLoaded();
     if (!keyStore.keys[keyId]) return null;
     keyStore.keys[keyId].enabled = !keyStore.keys[keyId].enabled;
-    markDirty();
-    return keyStore.keys[keyId];
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, keyStore.keys[keyId]);
 }
 
 /**
@@ -1339,8 +1531,8 @@ export async function updateKeyName(keyId, newName) {
     ensureLoaded();
     if (!keyStore.keys[keyId]) return null;
     keyStore.keys[keyId].name = newName;
-    markDirty();
-    return keyStore.keys[keyId];
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, keyStore.keys[keyId]);
 }
 
 // 用于防止同一 Key 下同一请求重复入账，保留短窗口覆盖 stream/fallback 重复 finalize。
@@ -1785,13 +1977,13 @@ export async function applyDailyLimitToAllKeys(newLimit) {
         }
     }
     
-    if (updated > 0) {
-        markDirty();
-        await persistIfDirty();
-    }
+    const targetVersion = updated > 0 ? markDirty() : null;
+    const result = targetVersion === null
+        ? attachPersistenceStatus({ total: keys.length, updated }, false)
+        : await buildManagementMutationResult(targetVersion, { total: keys.length, updated });
     
     logger.info(`[API Potluck] Applied daily limit ${newLimit} to ${updated}/${keys.length} keys`);
-    return { total: keys.length, updated };
+    return result;
 }
 
 /**
@@ -1821,10 +2013,18 @@ export async function validateKey(apiKey) {
         return { valid: false, reason: 'disabled' };
     }
     const updated = checkAndResetDailyCount(keyData);
+    const validationKeyData = {
+        id: updated.id,
+        name: updated.name,
+        dailyLimit: updated.dailyLimit,
+        todayUsage: updated.todayUsage,
+        lastResetDate: updated.lastResetDate,
+        enabled: updated.enabled
+    };
     if (updated.dailyLimit > 0 && updated.todayUsage >= updated.dailyLimit) {
-        return { valid: false, reason: 'quota_exceeded', keyData: updated };
+        return { valid: false, reason: 'quota_exceeded', keyData: validationKeyData };
     }
-    return { valid: true, keyData: updated };
+    return { valid: true, keyData: validationKeyData };
 }
 
 /**
@@ -1855,14 +2055,14 @@ export async function regenerateKey(oldKeyId) {
     // 清理旧 Key 的速率追踪器
     rateManager.remove(`key:${oldKeyId}`);
 
-    markDirty();
-    await persistIfDirty();
+    const targetVersion = markDirty();
+    const persistence = await buildManagementMutationResult(targetVersion, {});
     
-    return {
+    return attachPersistenceStatus({
         oldKey: oldKeyId,
         newKey: newKeyId,
         keyData: newKeyData
-    };
+    }, persistence.persistencePending);
 }
 
 // 导出常量

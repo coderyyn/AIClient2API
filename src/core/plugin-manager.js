@@ -33,6 +33,18 @@ const DEFAULT_DISABLED_PLUGINS = ['api-potluck', 'ai-monitor', 'model-usage-stat
 const PLUGIN_OPERATION_TIMEOUT_MS = 10000;
 const PLUGIN_MAX_ERROR_COUNT = 3;
 
+function normalizePluginFailure(pluginName, reason) {
+    const message = reason instanceof Error
+        ? reason.message
+        : `Non-Error plugin rejection (${reason === null ? 'null' : reason === undefined ? 'undefined' : typeof reason})`;
+
+    return Object.assign(new Error(message || 'Unknown plugin failure'), {
+        pluginName,
+        cause: reason,
+        reason
+    });
+}
+
 /**
  * 插件类型常量
  */
@@ -275,20 +287,34 @@ class PluginManager {
     /**
      * 销毁所有插件
      */
-    async destroyAll() {
-        for (const [name, plugin] of this.plugins) {
-            if (!plugin._enabled) continue;
-            
-            try {
-                if (typeof plugin.destroy === 'function') {
-                    await this.executePluginOperation(plugin, 'destroy', () => plugin.destroy());
-                    logger.info(`[PluginManager] Destroyed plugin: ${name}`);
+    async destroyAll({ operationTimeoutMs = PLUGIN_OPERATION_TIMEOUT_MS } = {}) {
+        const failures = [];
+
+        try {
+            for (const [name, plugin] of this.plugins) {
+                if (!plugin._enabled) continue;
+
+                try {
+                    if (typeof plugin.destroy === 'function') {
+                        await this.executePluginOperation(plugin, 'destroy', () => plugin.destroy(), operationTimeoutMs);
+                        logger.info(`[PluginManager] Destroyed plugin: ${name}`);
+                    }
+                } catch (reason) {
+                    const failure = normalizePluginFailure(name, reason);
+                    this.recordPluginError(plugin, 'destroy', failure);
+                    failures.push(failure);
                 }
-            } catch (error) {
-                this.recordPluginError(plugin, 'destroy', error);
             }
+        } finally {
+            this.initialized = false;
         }
-        this.initialized = false;
+
+        if (failures.length > 0) {
+            throw new AggregateError(
+                failures,
+                `Failed to destroy plugins: ${failures.map(error => `${error.pluginName}: ${error.message}`).join('; ')}`
+            );
+        }
     }
 
     /**
@@ -561,17 +587,28 @@ class PluginManager {
         }
     }
 
-    executePluginOperation(plugin, operationName, fn) {
+    executePluginOperation(plugin, operationName, fn, operationTimeoutMs = PLUGIN_OPERATION_TIMEOUT_MS) {
+        const operationPromise = Promise.resolve().then(fn);
+        if (operationTimeoutMs === null) {
+            return operationPromise.then(result => {
+                plugin._errorCount = 0;
+                return result;
+            });
+        }
+
+        const timeoutMs = Number.isFinite(Number(operationTimeoutMs))
+            ? Math.max(0, Number(operationTimeoutMs))
+            : PLUGIN_OPERATION_TIMEOUT_MS;
         let timeoutId;
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => {
-                reject(new Error(`Plugin operation timed out after ${PLUGIN_OPERATION_TIMEOUT_MS}ms`));
-            }, PLUGIN_OPERATION_TIMEOUT_MS);
+                reject(new Error(`Plugin operation timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
             if (timeoutId.unref) timeoutId.unref();
         });
 
         return Promise.race([
-            Promise.resolve().then(fn),
+            operationPromise,
             timeoutPromise
         ]).then(result => {
             plugin._errorCount = 0;

@@ -53,6 +53,38 @@ afterEach(() => {
 });
 
 describe('codex prewarm service', () => {
+    test('stop clears scheduling and waits for an active prewarm job to settle', async () => {
+        writeUsageCache([
+            { uuid: 'codex-a', success: true, usage: { summary: { plan: 'Pro' } } },
+            { uuid: 'codex-b', success: true, usage: { summary: { plan: 'FREE' } } }
+        ]);
+        const { CodexPrewarmService, normalizePrewarmConfig } = await loadPrewarmService();
+        let releasePrewarm;
+        const prewarmBarrier = new Promise(resolve => {
+            releasePrewarm = resolve;
+        });
+        const service = new CodexPrewarmService({
+            config: normalizePrewarmConfig({ CODEX_PREWARM_ENABLED: true }),
+            providerPoolManager: createPoolManager(),
+            prewarmAccount: jest.fn(() => prewarmBarrier)
+        });
+        service.timer = setInterval(() => {}, 60_000);
+        const runPromise = service.runDuePrewarm(new Date('2026-06-15T22:31:00.000Z'));
+        await new Promise(resolve => setImmediate(resolve));
+
+        let stopped = false;
+        const stopPromise = service.stop().then(() => { stopped = true; });
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(service.timer).toBeNull();
+        expect(stopped).toBe(false);
+
+        releasePrewarm({ ok: true });
+        await runPromise;
+        await stopPromise;
+        expect(stopped).toBe(true);
+    });
+
     test('defaults to 06:30 and 11:30 Asia/Shanghai with two attempts per enabled Codex account', async () => {
         writeUsageCache([
             { uuid: 'codex-a', success: true, usage: { summary: { plan: 'Pro' } } },

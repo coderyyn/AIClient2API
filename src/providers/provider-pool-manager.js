@@ -464,6 +464,10 @@ export class ProviderPoolManager {
         this.refreshBufferTimers = {}; // 按 providerType 分组的定时器
         this.bufferDelay = options.globalConfig?.REFRESH_BUFFER_DELAY ?? 5000; // 默认5秒缓冲延迟
         this.refreshTaskTimeoutMs = options.globalConfig?.REFRESH_TASK_TIMEOUT_MS ?? 60000; // 默认60秒刷新超时
+        this.refreshShutdownRequested = false;
+        this.refreshShutdownPromise = null;
+        this.activeRefreshTasks = new Set();
+        this.activeRefreshOperations = new Set();
         
         // 用于并发选点时的原子排序辅助（自增序列）
         this._selectionSequence = 0;
@@ -832,6 +836,10 @@ export class ProviderPoolManager {
      * @private
      */
     _enqueueRefresh(providerType, providerStatus, force = false) {
+        if (this.refreshShutdownRequested) {
+            this._log('debug', `Ignoring refresh enqueue for ${providerType} during shutdown.`);
+            return;
+        }
         const uuid = providerStatus.uuid;
         
         // 如果节点被禁用，不进行刷新
@@ -898,6 +906,11 @@ export class ProviderPoolManager {
      * @private
      */
     _flushRefreshBuffer(providerType) {
+        if (this.refreshShutdownRequested) {
+            delete this.refreshBufferQueues[providerType];
+            delete this.refreshBufferTimers[providerType];
+            return;
+        }
         const bufferQueue = this.refreshBufferQueues[providerType];
         if (!bufferQueue || bufferQueue.size === 0) {
             return;
@@ -923,6 +936,10 @@ export class ProviderPoolManager {
      * @private
      */
     _enqueueRefreshImmediate(providerType, providerStatus, force = false) {
+        if (this.refreshShutdownRequested) {
+            this._log('debug', `Ignoring immediate refresh enqueue for ${providerType} during shutdown.`);
+            return;
+        }
         const uuid = providerStatus.uuid;
         
         // 再次检查是否已经在刷新中（防止并发问题）
@@ -960,13 +977,10 @@ export class ProviderPoolManager {
                 currentQueue.activeCount--;
 
                 // 1. 尝试从当前提供商队列中取下一个任务
-                if (currentQueue.waitingTasks.length > 0) {
+                if (!this.refreshShutdownRequested && currentQueue.waitingTasks.length > 0) {
                     const nextTask = currentQueue.waitingTasks.shift();
                     currentQueue.activeCount++;
-                    // 使用 Promise.resolve().then 避免过深的递归
-                    Promise.resolve().then(nextTask).catch(err => {
-                        this._log('error', `Failed to execute next task for ${providerType}: ${err.message}`);
-                    });
+                    this._startTrackedRefreshTask(nextTask, providerType);
                 } else if (currentQueue.activeCount === 0) {
                     // 清理空队列：无论是否持有全局槽位，都应删除已无任务的队列对象
                     if (currentQueue.waitingTasks.length === 0 &&
@@ -980,22 +994,20 @@ export class ProviderPoolManager {
                     }
 
                     // 3. 尝试启动下一个等待中的提供商队列
-                    if (this.globalRefreshWaiters.length > 0) {
+                    if (!this.refreshShutdownRequested && this.globalRefreshWaiters.length > 0) {
                         const nextProviderStart = this.globalRefreshWaiters.shift();
-                        Promise.resolve().then(nextProviderStart).catch(err => {
-                            this._log('error', `Failed to start next provider queue: ${err.message}`);
-                        });
+                        nextProviderStart();
                     }
                 }
             }
         };
+        runTask.refreshUuid = uuid;
+        runTask.providerType = providerType;
 
         const tryStartProviderQueue = () => {
             if (queue.activeCount < this.refreshConcurrency.perProvider) {
                 queue.activeCount++;
-                runTask().catch(err => {
-                    this._log('error', `Critical error in runTask for ${providerType}: ${err.message}`);
-                });
+                this._startTrackedRefreshTask(runTask, providerType);
             } else {
                 queue.waitingTasks.push(runTask);
             }
@@ -1015,7 +1027,7 @@ export class ProviderPoolManager {
         }
         // 情况3: 全局槽位已满，进入等待队列，由等待回调负责标记持槽
         else {
-            this.globalRefreshWaiters.push(() => {
+            const startWaitingProvider = () => {
                 // 重新获取最新的队列引用
                 if (!this.refreshQueues[providerType]) {
                     this.refreshQueues[providerType] = {
@@ -1027,8 +1039,81 @@ export class ProviderPoolManager {
                 ownsGlobalSlot = true;
                 this.activeProviderRefreshes++;
                 tryStartProviderQueue();
-            });
+            };
+            startWaitingProvider.refreshUuid = uuid;
+            startWaitingProvider.providerType = providerType;
+            this.globalRefreshWaiters.push(startWaitingProvider);
         }
+    }
+
+    _startTrackedRefreshTask(task, providerType) {
+        if (this.refreshShutdownRequested) {
+            if (task.refreshUuid) this.refreshingUuids.delete(task.refreshUuid);
+            return null;
+        }
+
+        const taskPromise = Promise.resolve().then(task);
+        this.activeRefreshTasks.add(taskPromise);
+        taskPromise.then(
+            () => this.activeRefreshTasks.delete(taskPromise),
+            error => {
+                this.activeRefreshTasks.delete(taskPromise);
+                this._log('error', `Failed to execute refresh task for ${providerType}: ${error.message}`);
+            }
+        );
+        return taskPromise;
+    }
+
+    _trackRefreshOperation(operation) {
+        const operationPromise = Promise.resolve(operation);
+        this.activeRefreshOperations.add(operationPromise);
+        operationPromise.then(
+            () => this.activeRefreshOperations.delete(operationPromise),
+            () => this.activeRefreshOperations.delete(operationPromise)
+        );
+        return operationPromise;
+    }
+
+    shutdownRefreshQueue() {
+        if (this.refreshShutdownPromise) {
+            return this.refreshShutdownPromise;
+        }
+
+        this.refreshShutdownRequested = true;
+
+        for (const timer of Object.values(this.refreshBufferTimers)) {
+            clearTimeout(timer);
+        }
+        this.refreshBufferTimers = {};
+        this.refreshBufferQueues = {};
+
+        for (const [providerType, queue] of Object.entries(this.refreshQueues)) {
+            for (const task of queue.waitingTasks.splice(0)) {
+                if (task.refreshUuid) this.refreshingUuids.delete(task.refreshUuid);
+            }
+            if (queue.activeCount === 0) {
+                delete this.refreshQueues[providerType];
+            }
+        }
+
+        for (const waiter of this.globalRefreshWaiters.splice(0)) {
+            if (waiter.refreshUuid) this.refreshingUuids.delete(waiter.refreshUuid);
+            const queue = this.refreshQueues[waiter.providerType];
+            if (queue?.activeCount === 0 && queue.waitingTasks.length === 0) {
+                delete this.refreshQueues[waiter.providerType];
+            }
+        }
+
+        const drainActiveTasks = async () => {
+            while (this.activeRefreshTasks.size > 0 || this.activeRefreshOperations.size > 0) {
+                await Promise.allSettled([
+                    ...this.activeRefreshTasks,
+                    ...this.activeRefreshOperations
+                ]);
+            }
+        };
+        this.refreshShutdownPromise = drainActiveTasks();
+        return this.refreshShutdownPromise;
     }
 
     /**
@@ -1079,7 +1164,8 @@ export class ProviderPoolManager {
                 } else {
                     refreshOperation = serviceAdapter.refreshToken();
                 }
-                const refreshResult = await this._awaitRefreshWithTimeout(refreshOperation, providerType, this._getDisplayName(config));
+                const trackedRefreshOperation = this._trackRefreshOperation(refreshOperation);
+                const refreshResult = await this._awaitRefreshWithTimeout(trackedRefreshOperation, providerType, this._getDisplayName(config));
 
                 const duration = Date.now() - startTime;
                 

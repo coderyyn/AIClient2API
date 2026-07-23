@@ -10,23 +10,32 @@ import { normalizeCodexRateLimitWindows } from '../../utils/codex-rate-limit.js'
 const STATS_STORE_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
 const DEFAULT_CONFIG = {
-    persistInterval: 5000
+    persistDebounceMs: 30_000,
+    maxDirtyAgeMs: 60_000
 };
 const ACCOUNT_EVENT_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const ROLLING_5H_MS = 5 * 60 * 60 * 1000;
 const USAGE_CACHE_SNAPSHOT_TTL_MS = 1000;
+const PENDING_REQUEST_CLEANUP_INTERVAL_MS = 60_000;
+const PERSIST_RETRY_DELAY_MS = 5_000;
 
 let configGetter = null;
 let statsStore = null;
 let isDirty = false;
-let isWriting = false;
-let persistTimer = null;
-let currentPersistInterval = DEFAULT_CONFIG.persistInterval;
+let dirtySince = null;
+let debounceTimer = null;
+let maxDirtyTimer = null;
+let currentPersistDebounceMs = DEFAULT_CONFIG.persistDebounceMs;
+let currentMaxDirtyAgeMs = DEFAULT_CONFIG.maxDirtyAgeMs;
 let mutationVersion = 0;
+let lastPersistedVersion = 0;
 let persistPromise = null;
+let persistenceStopped = false;
+let retryNotBefore = 0;
 
 const rateManager = new RateManager(60); // 使用 60 秒滑动窗口，更平滑
 const pendingRequests = new Map();
+let lastPendingCleanupAt = 0;
 let usageCacheSnapshot = null;
 let usageCacheSnapshotLoadedAt = 0;
 
@@ -238,6 +247,22 @@ function getConfig() {
     return DEFAULT_CONFIG;
 }
 
+function normalizeDurationMs(value, fallback) {
+    const normalized = Number(value);
+    return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback;
+}
+
+function applyPersistenceConfig(config = {}) {
+    currentPersistDebounceMs = normalizeDurationMs(
+        config.persistDebounceMs ?? config.persistInterval,
+        DEFAULT_CONFIG.persistDebounceMs
+    );
+    currentMaxDirtyAgeMs = normalizeDurationMs(
+        config.maxDirtyAgeMs,
+        DEFAULT_CONFIG.maxDirtyAgeMs
+    );
+}
+
 function ensureProviderStore(provider) {
     ensureLoaded();
     if (!statsStore.providers[provider]) {
@@ -382,86 +407,189 @@ function ensureLoaded() {
         statsStore = createDefaultStore();
     }
 
-    const config = getConfig();
-    currentPersistInterval = config.persistInterval || DEFAULT_CONFIG.persistInterval;
-
-    if (!persistTimer) {
-        persistTimer = setInterval(() => {
-            persistIfDirty();
-            cleanupPendingRequests();
-        }, currentPersistInterval);
-        if (persistTimer.unref) {
-            persistTimer.unref();
-        }
-        process.on('beforeExit', () => syncWriteToFile());
-        process.on('SIGINT', () => { syncWriteToFile(); process.exit(0); });
-        process.on('SIGTERM', () => { syncWriteToFile(); process.exit(0); });
-    }
+    applyPersistenceConfig(getConfig());
 }
 
 export function syncWriteToFile() {
     try {
         if (!statsStore || !isDirty) return;
+        clearPersistenceTimers();
         const dir = path.dirname(STATS_STORE_FILE);
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
-        atomicWriteFileSync(STATS_STORE_FILE, JSON.stringify(statsStore, null, 2), { encoding: 'utf8', mode: 0o600 });
+        const heapUsedBefore = process.memoryUsage().heapUsed;
+        const startedAt = process.hrtime.bigint();
+        const snapshot = JSON.stringify(statsStore);
+        const snapshotBytes = Buffer.byteLength(snapshot, 'utf8');
+        atomicWriteFileSync(STATS_STORE_FILE, snapshot, { encoding: 'utf8', mode: 0o600 });
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+        const heapUsedAfter = process.memoryUsage().heapUsed;
         isDirty = false;
-        logger.info('[Model Usage Stats] Sync persisted stats store');
+        dirtySince = null;
+        lastPersistedVersion = mutationVersion;
+        retryNotBefore = 0;
+        logger.info(`[Model Usage Stats] Sync persisted stats store: snapshotBytes=${snapshotBytes}, durationMs=${durationMs.toFixed(2)}, heapUsedBefore=${heapUsedBefore}, heapUsedAfter=${heapUsedAfter}`);
     } catch (error) {
         logger.error('[Model Usage Stats] Sync write failed:', error.message);
     }
 }
 
-async function persistIfDirty() {
-    ensureLoaded();
-    if (!isDirty || statsStore === null) return;
-    if (persistPromise) {
-        await persistPromise;
-        return;
+function clearPersistenceTimers() {
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
     }
+    if (maxDirtyTimer) {
+        clearTimeout(maxDirtyTimer);
+        maxDirtyTimer = null;
+    }
+}
+
+function unrefTimer(timer) {
+    if (timer?.unref) {
+        timer.unref();
+    }
+}
+
+function schedulePersistenceTimers() {
+    if (persistenceStopped || !isDirty || statsStore === null) return;
+
+    const now = Date.now();
+    const retryDelay = Math.max(0, retryNotBefore - now);
+    const debounceDelay = retryDelay > 0 ? retryDelay : currentPersistDebounceMs;
+
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+    }
+    debounceTimer = setTimeout(async () => {
+        debounceTimer = null;
+        cleanupPendingRequests();
+        await flushStatsPersistence();
+    }, debounceDelay);
+    unrefTimer(debounceTimer);
+
+    if (!maxDirtyTimer) {
+        const elapsedDirtyMs = dirtySince === null ? 0 : Math.max(0, now - dirtySince);
+        const remainingDirtyMs = Math.max(0, currentMaxDirtyAgeMs - elapsedDirtyMs);
+        const maxDirtyDelay = Math.max(remainingDirtyMs, retryDelay);
+        maxDirtyTimer = setTimeout(async () => {
+            maxDirtyTimer = null;
+            if (debounceTimer) {
+                clearTimeout(debounceTimer);
+                debounceTimer = null;
+            }
+            cleanupPendingRequests();
+            await flushStatsPersistence();
+        }, maxDirtyDelay);
+        unrefTimer(maxDirtyTimer);
+    }
+}
+
+function getPersistRetryDelayMs() {
+    return Math.max(PERSIST_RETRY_DELAY_MS, currentPersistDebounceMs);
+}
+
+async function persistStatsSnapshot({ rescheduleOnFailure = true } = {}) {
+    if (persistPromise) return persistPromise;
+    if (!isDirty || statsStore === null) return true;
+
+    clearPersistenceTimers();
+
+    const versionAtStart = mutationVersion;
+    const dirtySinceAtStart = dirtySince;
+    const heapUsedBefore = process.memoryUsage().heapUsed;
+    const startedAt = process.hrtime.bigint();
+    let snapshot;
+    try {
+        snapshot = JSON.stringify(statsStore);
+    } catch (error) {
+        retryNotBefore = Date.now() + getPersistRetryDelayMs();
+        logger.error('[Model Usage Stats] Snapshot serialization failed:', error.message);
+        if (!persistenceStopped && rescheduleOnFailure) schedulePersistenceTimers();
+        return false;
+    }
+    const snapshotBytes = Buffer.byteLength(snapshot, 'utf8');
+
+    // 当前快照接管已有 dirty；写入期间的新 mutation 会重新标脏并延后处理。
+    isDirty = false;
+    dirtySince = null;
 
     persistPromise = (async () => {
-        isWriting = true;
-
         try {
             const dir = path.dirname(STATS_STORE_FILE);
             if (!existsSync(dir)) {
                 await fs.mkdir(dir, { recursive: true });
             }
 
-            while (isDirty) {
-                const versionAtStart = mutationVersion;
-                const snapshot = JSON.stringify(statsStore, null, 2);
-                
-                await atomicWriteFile(STATS_STORE_FILE, snapshot, { encoding: 'utf8', mode: 0o600 });
+            await atomicWriteFile(STATS_STORE_FILE, snapshot, { encoding: 'utf8', mode: 0o600 });
 
-                if (mutationVersion === versionAtStart) {
-                    isDirty = false;
-                    logger.info(`[Model Usage Stats] Persisted stats store: version=${versionAtStart}, requests=${statsStore.summary.requestCount}, totalTokens=${statsStore.summary.totalTokens}`);
-                }
-            }
+            lastPersistedVersion = Math.max(lastPersistedVersion, versionAtStart);
+            retryNotBefore = 0;
+            const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+            const heapUsedAfter = process.memoryUsage().heapUsed;
+            const versionAfterWrite = mutationVersion;
+            logger.info(`[Model Usage Stats] Persisted stats store: version=${versionAtStart}, versionAfterWrite=${versionAfterWrite}, snapshotBytes=${snapshotBytes}, durationMs=${durationMs.toFixed(2)}, heapUsedBefore=${heapUsedBefore}, heapUsedAfter=${heapUsedAfter}, requests=${statsStore.summary.requestCount}, totalTokens=${statsStore.summary.totalTokens}`);
+            return true;
         } catch (error) {
+            isDirty = true;
+            dirtySince = dirtySince === null
+                ? (dirtySinceAtStart ?? Date.now())
+                : Math.min(dirtySince, dirtySinceAtStart ?? dirtySince);
+            retryNotBefore = Date.now() + getPersistRetryDelayMs();
             logger.error('[Model Usage Stats] Persist failed:', error.message);
+            return false;
         } finally {
-            isWriting = false;
             persistPromise = null;
+            if (isDirty && !persistenceStopped && rescheduleOnFailure) {
+                schedulePersistenceTimers();
+            }
         }
     })();
 
-    await persistPromise;
+    return await persistPromise;
+}
+
+export async function flushStatsPersistence({ targetVersion = mutationVersion, rescheduleOnFailure = true } = {}) {
+    ensureLoaded();
+    while (lastPersistedVersion < targetVersion) {
+        clearPersistenceTimers();
+        if (!persistPromise && !isDirty) {
+            logger.error(`[Model Usage Stats] Persistence stalled before version ${targetVersion}`);
+            return false;
+        }
+        const persisted = await (persistPromise || persistStatsSnapshot({ rescheduleOnFailure }));
+        if (!persisted) return false;
+    }
+    return true;
+}
+
+export async function shutdownStatsPersistence() {
+    const targetVersion = mutationVersion;
+    persistenceStopped = true;
+    clearPersistenceTimers();
+    let persisted = await flushStatsPersistence({ targetVersion, rescheduleOnFailure: false });
+    if (!persisted) {
+        retryNotBefore = 0;
+        persisted = await flushStatsPersistence({ targetVersion, rescheduleOnFailure: false });
+    }
+    clearPersistenceTimers();
+    return persisted;
 }
 
 function markDirty() {
     ensureLoaded();
     statsStore.updatedAt = new Date().toISOString();
     mutationVersion += 1;
+    if (!isDirty || dirtySince === null) {
+        dirtySince = Date.now();
+    }
     isDirty = true;
+    schedulePersistenceTimers();
+    return mutationVersion;
 }
 
-function cleanupPendingRequests() {
-    const now = Date.now();
+function cleanupPendingRequests(now = Date.now()) {
     let removedCount = 0;
     for (const [requestId, state] of pendingRequests.entries()) {
         if (now - state.updatedAt > 10 * 60 * 1000) {
@@ -473,6 +601,13 @@ function cleanupPendingRequests() {
     if (removedCount > 0) {
         logger.warn(`[Model Usage Stats] Cleaned stale pending requests: count=${removedCount}`);
     }
+}
+
+function maybeCleanupPendingRequests() {
+    const now = Date.now();
+    if (now - lastPendingCleanupAt < PENDING_REQUEST_CLEANUP_INTERVAL_MS) return;
+    lastPendingCleanupAt = now;
+    cleanupPendingRequests(now);
 }
 
 function toNumber(value) {
@@ -685,6 +820,7 @@ function extractUsage(...candidates) {
 
 function getPendingRequest(requestId, meta = {}) {
     ensureLoaded();
+    maybeCleanupPendingRequests();
 
     if (!pendingRequests.has(requestId)) {
         pendingRequests.set(requestId, {
@@ -876,6 +1012,14 @@ function resetUsageTokensInTree(value) {
 
 export function setConfigGetter(getter) {
     configGetter = getter;
+    persistenceStopped = false;
+    if (statsStore !== null) {
+        applyPersistenceConfig(getConfig());
+        if (isDirty) {
+            clearPersistenceTimers();
+            schedulePersistenceTimers();
+        }
+    }
 }
 
 export function recordUnaryUsage({ requestId, model, provider, providerUuid, providerName, accountIdentity, accountEmail, fromProvider, nativeResponse, clientResponse }) {
@@ -996,7 +1140,6 @@ export async function finalizeRequest({ requestId, model, provider, providerUuid
     logger.info(`[Request Audit][${requestId}] Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | ${formatUsageWindow('5h', usageSnapshot.fiveHourPercent)} | ${formatUsageWindow('Weekly', usageSnapshot.weeklyPercent)} | UsageCacheAgeMs: ${usageSnapshot.cacheAgeMs ?? 'unavailable'} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Reasoning: ${usage.reasoningTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)}`);
     logger.info(`${getTracePrefix(requestId)} >>> Request Finalized: Provider: ${normalizedProvider} | Account: ${normalizedProviderName || 'unknown'} | UUID: ${normalizedProviderUuid || 'unknown'} | Model: ${normalizedModel} | Prompt: ${usage.promptTokens} | Completion: ${usage.completionTokens} | Reasoning: ${usage.reasoningTokens} | Total: ${usage.totalTokens} | Cached: ${usage.cachedTokens} | Stream: ${Boolean(state.isStream)} | QPS: ${globalRates.qps}`);
     markDirty();
-    await persistIfDirty();
     return true;
 }
 
@@ -1109,10 +1252,12 @@ export async function resetStats() {
     statsStore = createDefaultStore();
     pendingRequests.clear();
     rateManager.clear(); // 同时重置速率统计
-    markDirty();
-    await persistIfDirty();
-    logger.warn('[Model Usage Stats] Stats store reset');
-    return getStats();
+    const targetVersion = markDirty();
+    const persisted = await flushStatsPersistence({ targetVersion });
+    logger.warn(persisted
+        ? '[Model Usage Stats] Stats store reset'
+        : '[Model Usage Stats] Stats store reset in memory; persistence pending');
+    return attachPersistencePending(await getStats(), !persisted);
 }
 
 export async function resetTokenStats() {
@@ -1122,8 +1267,19 @@ export async function resetTokenStats() {
 
     pendingRequests.clear();
     rateManager.clear(); // 同时重置速率统计
-    markDirty();
-    await persistIfDirty();
-    logger.warn('[Model Usage Stats] Token stats reset');
-    return getStats();
+    const targetVersion = markDirty();
+    const persisted = await flushStatsPersistence({ targetVersion });
+    logger.warn(persisted
+        ? '[Model Usage Stats] Token stats reset'
+        : '[Model Usage Stats] Token stats reset in memory; persistence pending');
+    return attachPersistencePending(await getStats(), !persisted);
+}
+
+function attachPersistencePending(stats, persistencePending) {
+    Object.defineProperty(stats, 'persistencePending', {
+        value: persistencePending,
+        enumerable: false,
+        configurable: true
+    });
+    return stats;
 }
