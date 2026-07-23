@@ -185,6 +185,52 @@ test('scanRepairAuditFiles streams, deduplicates by quality, counts zero-token s
   assert.match(result.sourceFiles[0].sha256, /^[a-f0-9]{64}$/);
 });
 
+test('scanRepairAuditFiles emits deduplicated events without retaining them when collectEvents is disabled', async () => {
+  const root = makeTempDir();
+  const first = path.join(root, 'audit-2026-07-20.jsonl');
+  const second = path.join(root, 'audit-2026-07-21.jsonl');
+  const baseEvent = {
+    timestamp: '2026-07-20T16:10:00.000Z',
+    beijingDate: '2026-07-21',
+    request: { toProvider: 'openai-codex-oauth', actualModel: 'gpt-5.6' },
+    potluckKey: { present: false },
+    account: { providerUuid: 'provider-1' },
+    status: { outcome: 'success' },
+  };
+  fs.writeFileSync(first, `${JSON.stringify({
+    ...baseEvent,
+    requestId: 'request-1',
+    usage: { promptTokens: 10, totalTokens: 10 },
+  })}\n`);
+  fs.writeFileSync(second, [
+    JSON.stringify({
+      ...baseEvent,
+      requestId: 'request-1',
+      account: { providerUuid: 'provider-1', accountEmail: 'best@example.com' },
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    }),
+    JSON.stringify({ ...baseEvent, requestId: 'request-2', usage: {} }),
+    '',
+  ].join('\n'));
+
+  const emitted = [];
+  const result = await scanRepairAuditFiles({
+    files: [first, second],
+    from: '2026-07-21',
+    to: '2026-07-21',
+    collectEvents: false,
+    onEvent: event => emitted.push(event),
+  });
+
+  assert.equal(result.events, undefined);
+  assert.equal(result.includedEventCount, 2);
+  assert.deepEqual(emitted.map(event => [event.requestId, event.usage.totalTokens]), [
+    ['request-1', 15],
+    ['request-2', 0],
+  ]);
+  assert.match(result.sourceEventDigest, /^[a-f0-9]{64}$/);
+});
+
 test('createRepairBundle builds an eligible synchronized repair without exposing raw key or email in report', async () => {
   const base = makeTempDir();
   const auditDir = path.join(base, 'request-audit');

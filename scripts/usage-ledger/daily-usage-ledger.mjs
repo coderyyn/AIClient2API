@@ -776,7 +776,7 @@ function repairEventQuality(rawEvent, compactEvent) {
     Math.min(compactEvent.usage.totalTokens, 9);
 }
 
-export async function scanRepairAuditFiles({ files = [], from, to }) {
+export async function scanRepairAuditFiles({ files = [], from, to, collectEvents = true, onEvent = null }) {
   if (!from) throw new Error('from is required');
   const end = to || from;
   const selected = new Map();
@@ -787,7 +787,7 @@ export async function scanRepairAuditFiles({ files = [], from, to }) {
   let outsideRangeCount = 0;
   let invalidEventCount = 0;
 
-  for (const filePath of files) {
+  for (const [fileIndex, filePath] of files.entries()) {
     const stat = await fsp.stat(filePath);
     const source = {
       path: filePath,
@@ -833,19 +833,14 @@ export async function scanRepairAuditFiles({ files = [], from, to }) {
         const dedupeKey = event.requestId
           ? `request:${event.requestId}`
           : `fingerprint:${repairEventFingerprint(event)}`;
-        const candidate = {
-          event,
-          quality: repairEventQuality(rawEvent, event),
-          sourcePath: filePath,
-          lineNumber,
-        };
+        const candidate = [repairEventQuality(rawEvent, event), fileIndex, lineNumber];
         const current = selected.get(dedupeKey);
         if (current) {
           duplicateCount += 1;
-          const candidateOrder = `${candidate.sourcePath}:${String(candidate.lineNumber).padStart(12, '0')}`;
-          const currentOrder = `${current.sourcePath}:${String(current.lineNumber).padStart(12, '0')}`;
-          if (candidate.quality > current.quality ||
-              (candidate.quality === current.quality && candidateOrder < currentOrder)) {
+          const candidateComesFirst = candidate[1] < current[1] ||
+            (candidate[1] === current[1] && candidate[2] < current[2]);
+          if (candidate[0] > current[0] ||
+              (candidate[0] === current[0] && candidateComesFirst)) {
             selected.set(dedupeKey, candidate);
           }
         } else {
@@ -859,13 +854,54 @@ export async function scanRepairAuditFiles({ files = [], from, to }) {
     sourceFiles.push(source);
   }
 
-  const events = [...selected.values()]
-    .map(item => item.event)
-    .sort((left, right) => `${left.timestamp || ''}:${left.requestId || ''}`.localeCompare(`${right.timestamp || ''}:${right.requestId || ''}`));
-  const zeroTokenSuccessCount = events.filter(event => event.usage.totalTokens <= 0 &&
-    event.usage.promptTokens <= 0 && event.usage.completionTokens <= 0).length;
+  const events = collectEvents ? [] : null;
+  const sourceEventHash = crypto.createHash('sha256');
+  let includedEventCount = 0;
+  let zeroTokenSuccessCount = 0;
+  for (const [fileIndex, filePath] of files.entries()) {
+    const input = fs.createReadStream(filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    let lineNumber = 0;
+    try {
+      for await (const line of lines) {
+        lineNumber += 1;
+        if (!line.trim()) continue;
+        let rawEvent;
+        try {
+          rawEvent = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const event = compactRepairEvent(rawEvent);
+        if (!event.beijingDate || !inDateRange(event.beijingDate, { from, to: end }) || event.status.outcome !== 'success') continue;
+        const dedupeKey = event.requestId
+          ? `request:${event.requestId}`
+          : `fingerprint:${repairEventFingerprint(event)}`;
+        const chosen = selected.get(dedupeKey);
+        if (!chosen || chosen[1] !== fileIndex || chosen[2] !== lineNumber) continue;
+        selected.delete(dedupeKey);
+        includedEventCount += 1;
+        if (event.usage.totalTokens <= 0 && event.usage.promptTokens <= 0 && event.usage.completionTokens <= 0) {
+          zeroTokenSuccessCount += 1;
+        }
+        sourceEventHash.update(stableJson(event));
+        sourceEventHash.update('\n');
+        if (events) events.push(event);
+        if (onEvent) await onEvent(event);
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+  }
+  if (selected.size > 0) throw new Error('repair audit files changed while replaying selected events');
+  if (events) {
+    events.sort((left, right) => `${left.timestamp || ''}:${left.requestId || ''}`.localeCompare(`${right.timestamp || ''}:${right.requestId || ''}`));
+  }
   return {
-    events,
+    ...(events ? { events } : {}),
+    includedEventCount,
+    sourceEventDigest: sourceEventHash.digest('hex'),
     duplicateCount,
     nonSuccessCount,
     outsideRangeCount,
@@ -1023,16 +1059,41 @@ function buildRepairKeyLookup(store = {}) {
   return byHash;
 }
 
-function buildRepairCandidates(events, potluckStore) {
+function addRepairRowsToGroup(grouped, rows) {
+  for (const row of rows) {
+    const key = rowGroupKey(row);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        ...row,
+        usage: emptyUsage(),
+        cost: { actualUsd: 0, missingPriceTokens: 0, pricingModel: row.cost?.pricingModel },
+        providerUuids: [...row.providerUuids],
+      });
+    }
+    const target = grouped.get(key);
+    addUsage(target.usage, row.usage);
+    target.providerUuids = [...new Set([...target.providerUuids, ...row.providerUuids])];
+    target.cost.actualUsd += row.cost.actualUsd;
+    target.cost.missingPriceTokens += row.cost.missingPriceTokens;
+  }
+}
+
+function finishRepairRows(grouped) {
+  return [...grouped.values()].sort((left, right) => rowGroupKey(left).localeCompare(rowGroupKey(right)));
+}
+
+function createRepairCandidateAccumulator(potluckStore) {
   const byHash = buildRepairKeyLookup(potluckStore);
+  const ledgerKeyLookup = buildKeyLookup(potluckStore);
   const potluckDaysByKey = {};
   const modelDays = {};
   const modelProviderDays = {};
   const modelAccountEvents = {};
-  const knownPotluckEvents = [];
   const unknownPotluckByDate = {};
+  const dailyRows = new Map();
+  const hourlyRows = new Map();
 
-  for (const event of events) {
+  function add(event) {
     const date = event.beijingDate;
     const modelDay = ensureRepairDay(modelDays, date);
     addRepairEventToDay(modelDay, event);
@@ -1053,36 +1114,34 @@ function buildRepairCandidates(events, potluckStore) {
       modelAccountEvents[account.key].push({ timestamp: event.timestamp, totalTokens: toNumber(event.usage?.totalTokens) });
     }
 
-    if (!event.potluckKey?.present) continue;
+    if (!event.potluckKey?.present) return;
     const matches = event.potluckKey.hash ? byHash.get(event.potluckKey.hash) || [] : [];
     if (matches.length !== 1) {
       unknownPotluckByDate[date] = (unknownPotluckByDate[date] || 0) + 1;
-      continue;
+      return;
     }
     const keyRef = matches[0];
     if (!potluckDaysByKey[keyRef.rawKey]) potluckDaysByKey[keyRef.rawKey] = {};
     const potluckDay = ensureRepairDay(potluckDaysByKey[keyRef.rawKey], date);
     addRepairEventToDay(potluckDay, event);
-    knownPotluckEvents.push(event);
+    const rows = auditEventToRows(event, { keyLookup: ledgerKeyLookup });
+    addRepairRowsToGroup(dailyRows, rows.daily);
+    addRepairRowsToGroup(hourlyRows, rows.hourly);
   }
 
-  const ledgerKeyLookup = buildKeyLookup(potluckStore);
-  const dailyRows = [];
-  const hourlyRows = [];
-  for (const event of knownPotluckEvents) {
-    const rows = auditEventToRows(event, { keyLookup: ledgerKeyLookup });
-    dailyRows.push(...rows.daily);
-    hourlyRows.push(...rows.hourly);
+  function finish() {
+    return {
+      potluckDaysByKey,
+      modelDays,
+      modelProviderDays,
+      modelAccountEvents,
+      unknownPotluckByDate,
+      dailyRows: finishRepairRows(dailyRows),
+      hourlyRows: finishRepairRows(hourlyRows),
+    };
   }
-  return {
-    potluckDaysByKey,
-    modelDays,
-    modelProviderDays,
-    modelAccountEvents,
-    unknownPotluckByDate,
-    dailyRows: mergeRows(dailyRows),
-    hourlyRows: mergeRows(hourlyRows),
-  };
+
+  return { add, finish };
 }
 
 function stableJson(value) {
@@ -1229,13 +1288,20 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
   const end = to || from;
   const auditDir = path.join(base, 'request-audit');
   const files = await discoverRepairAuditFiles({ auditDir, from, to: end });
-  const scan = await scanRepairAuditFiles({ files, from, to: end });
   const potluckPath = path.join(base, 'api-potluck-keys.json');
   const modelStatsPath = path.join(base, 'model-usage-stats.json');
   const ledgerRoot = path.join(base, 'permanent-usage-ledger');
   const potluckStore = await readJson(potluckPath);
+  const candidateAccumulator = createRepairCandidateAccumulator(potluckStore);
+  const scan = await scanRepairAuditFiles({
+    files,
+    from,
+    to: end,
+    collectEvents: false,
+    onEvent: event => candidateAccumulator.add(event),
+  });
   const modelStatsStore = await readJsonIfExists(modelStatsPath, { summary: {}, providers: {}, accounts: {}, accountUsageEvents: {}, daily: {} });
-  const candidates = buildRepairCandidates(scan.events, potluckStore);
+  const candidates = candidateAccumulator.finish();
   const today = beijingDateNow(now);
   const sourceDateSet = new Set(scan.sourceFiles.map(file => file.utcDate));
   const parseErrorDates = new Set(scan.parseErrors.map(error => repairAuditFileDate(error.file)));
@@ -1318,7 +1384,7 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
     from,
     to: end,
     eligibleDates,
-    sourceEventDigest: sha256Text(stableJson(scan.events)),
+    sourceEventDigest: scan.sourceEventDigest,
     sourceFiles: scan.sourceFiles.map(file => ({ utcDate: file.utcDate, sha256: file.sha256, size: file.size })),
     baselineDigest: sha256Text(stableJson(baseline)),
     baseline,
@@ -1341,7 +1407,7 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
         matchedLines: file.matchedLines,
         parseErrorCount: file.parseErrorCount,
       })),
-      includedEvents: scan.events.length,
+      includedEvents: scan.includedEventCount,
       duplicateCount: scan.duplicateCount,
       nonSuccessCount: scan.nonSuccessCount,
       zeroTokenSuccessCount: scan.zeroTokenSuccessCount,
@@ -1734,8 +1800,8 @@ export async function applyRepairBundle({
     from: patch.from,
     to: patch.to,
   });
-  const scan = await scanRepairAuditFiles({ files, from: patch.from, to: patch.to });
-  if (sha256Text(stableJson(scan.events)) !== patch.sourceEventDigest) throw new Error('repair source event digest changed');
+  const scan = await scanRepairAuditFiles({ files, from: patch.from, to: patch.to, collectEvents: false });
+  if (scan.sourceEventDigest !== patch.sourceEventDigest) throw new Error('repair source event digest changed');
   const currentSourceFiles = scan.sourceFiles.map(file => ({ utcDate: file.utcDate, sha256: file.sha256, size: file.size }));
   if (stableJson(currentSourceFiles) !== stableJson(patch.sourceFiles)) throw new Error('repair source file hashes changed');
 
