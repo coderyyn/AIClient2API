@@ -1232,13 +1232,14 @@ async function fetchBrowserExitIp() {
     }
 }
 
-function renderProxyTestLine(label, ip, expectedIp) {
-    const matched = expectedIp ? ip === expectedIp : null;
-    const badge = matched === null
-        ? t('oauth.codex.proxyExpectedIpMissing')
-        : (matched ? t('oauth.codex.proxyMatch') : t('oauth.codex.proxyMismatch'));
-    const color = matched === false ? '#b91c1c' : '#047857';
-    return `<div><strong>${label}：</strong>${escapeHtml(ip || t('oauth.codex.proxyTestFailed'))} <span style="color: ${color};">(${escapeHtml(badge)})</span></div>`;
+function renderProxyTestLine(label, ip, error, expectedIp) {
+    const matched = error ? null : (expectedIp ? ip === expectedIp : null);
+    const badge = error ? t('oauth.codex.proxyTestFailed')
+        : (matched === null
+            ? t('oauth.codex.proxyExpectedIpMissing')
+            : (matched ? t('oauth.codex.proxyMatch') : t('oauth.codex.proxyMismatch')));
+    const color = error ? '#b45309' : (matched === false ? '#b91c1c' : '#047857');
+    return `<div><strong>${label}：</strong>${escapeHtml(error || ip || t('oauth.codex.proxyTestFailed'))} <span style="color: ${color};">(${escapeHtml(badge)})</span></div>`;
 }
 
 async function testCodexAuthProxy(modal, proxies = []) {
@@ -1299,8 +1300,8 @@ async function testCodexAuthProxy(modal, proxies = []) {
     resultEl.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${t('oauth.codex.proxyTestTitle')}：${escapeHtml(proxyName)}</div>
         <div>${t('oauth.codex.proxyExpectedExit')}：${escapeHtml(expectedIp || t('oauth.codex.proxyNotConfigured'))}</div>
-        ${renderProxyTestLine(t('oauth.codex.proxyBrowserExit'), browserIp || browserError, expectedIp)}
-        ${renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp || serverError, expectedIp)}
+        ${renderProxyTestLine(t('oauth.codex.proxyBrowserExit'), browserIp, browserError, expectedIp)}
+        ${renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp, serverError, expectedIp)}
     `;
 
     button.innerHTML = originalHtml;

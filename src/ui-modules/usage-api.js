@@ -123,7 +123,22 @@ function getUsageItemMaxPercent(usage, predicate) {
     return values.length > 0 ? Math.max(...values) : null;
 }
 
-function mergeQuotaHealthState(existingState = {}, usedPercent, label) {
+function getLatestExhaustedResetTime(usage, predicate, now = Date.now()) {
+    const exhaustedItems = (Array.isArray(usage?.items) ? usage.items : [])
+        .filter(predicate)
+        .filter(item => Number(item.percent ?? item.used) >= 100);
+
+    if (exhaustedItems.length === 0) return null;
+
+    const recoveryTimes = exhaustedItems.map(item => Date.parse(item.resetAt || ''));
+    if (recoveryTimes.some(recoveryMs => !Number.isFinite(recoveryMs) || recoveryMs <= now)) {
+        return null;
+    }
+
+    return new Date(Math.max(...recoveryTimes)).toISOString();
+}
+
+function mergeQuotaHealthState(existingState = {}, usedPercent, label, options = {}) {
     if (!Number.isFinite(usedPercent)) {
         return existingState;
     }
@@ -131,9 +146,23 @@ function mergeQuotaHealthState(existingState = {}, usedPercent, label) {
     const usageState = usedPercent >= 100
         ? {
             isHealthy: false,
-            lastErrorMessage: `${label} 已用 ${usedPercent.toFixed(1)}%`
+            lastErrorTime: existingState?.lastErrorTime || new Date(options.now ?? Date.now()).toISOString(),
+            lastErrorMessage: `${label} 已用 ${usedPercent.toFixed(1)}%`,
+            scheduledRecoveryTime: options.scheduledRecoveryTime || null
         }
-        : { isHealthy: true };
+        : {
+            isHealthy: true,
+            lastErrorTime: null,
+            lastErrorMessage: null,
+            scheduledRecoveryTime: null
+        };
+
+    if (options.allowRecovery) {
+        return {
+            ...existingState,
+            ...usageState
+        };
+    }
 
     if (existingState?.isHealthy === false) {
         return {
@@ -148,7 +177,7 @@ function mergeQuotaHealthState(existingState = {}, usedPercent, label) {
     };
 }
 
-function deriveCodexQuotaHealthFromUsage(currentHealth, usage) {
+function deriveCodexQuotaHealthFromUsage(currentHealth, usage, now = Date.now()) {
     if (!usage) return currentHealth || null;
 
     const quotaHealth = currentHealth && typeof currentHealth === 'object'
@@ -163,7 +192,17 @@ function deriveCodexQuotaHealthFromUsage(currentHealth, usage) {
         return id.includes('gpt_5_3') || id.includes('codex_5_3') || label.includes('5.3');
     });
 
-    quotaHealth.general = mergeQuotaHealthState(quotaHealth.general, generalUsedPercent, '通用额度');
+    const generalRecoveryTime = getLatestExhaustedResetTime(
+        usage,
+        item => item.scope === 'general' || item.id === 'primary_window' || item.id === 'secondary_window',
+        now
+    );
+
+    quotaHealth.general = mergeQuotaHealthState(quotaHealth.general, generalUsedPercent, '通用额度', {
+        allowRecovery: true,
+        scheduledRecoveryTime: generalRecoveryTime,
+        now
+    });
     quotaHealth.codex53 = mergeQuotaHealthState(quotaHealth.codex53, codex53UsedPercent, '5.3 额度');
 
     return quotaHealth;
@@ -384,6 +423,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
                 instanceResult.success = true;
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
+                providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
                 result.successCount++;
             } catch (error) {
                 instanceResult.error = error.message;
@@ -702,6 +742,7 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
                 instanceResult.success = true;
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
+                providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
             } catch (error) {
                 instanceResult.error = error.message;
             }
@@ -761,6 +802,7 @@ export async function handleResetSingleInstanceUsage(req, res, currentConfig, pr
             codexQuotaHealth: deriveCodexQuotaHealthFromUsage(baseInstanceResult.codexQuotaHealth, usage),
             error: null
         };
+        providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, refreshedInstanceResult.codexQuotaHealth);
 
         await updateProviderUsageCache(providerType, await getProviderTypeUsage(providerType, currentConfig, providerPoolManager));
         await updateSingleInstanceInCache(providerType, uuid, refreshedInstanceResult);

@@ -322,6 +322,19 @@ function isCodexQuotaBucketCoolingDown(config = {}, bucket = CODEX_QUOTA_BUCKET.
     return Number.isFinite(recoveryMs) && now < recoveryMs;
 }
 
+function getCodexAutomaticHealthCheckCooldown(providerType, config = {}) {
+    if (!isCodexProviderType(providerType)) return null;
+
+    const quotaState = getCodexQuotaState(config, CODEX_QUOTA_BUCKET.GENERAL);
+    if (quotaState.isHealthy !== false) return null;
+
+    const recoveryMs = Date.parse(quotaState.scheduledRecoveryTime || '');
+    return {
+        recoveryTime: Number.isFinite(recoveryMs) ? new Date(recoveryMs).toISOString() : null,
+        reason: quotaState.lastErrorMessage || 'Codex general quota exhausted'
+    };
+}
+
 function getCodexTokenQuotaStatus(providerType, providerStatus, usageCache = null, bucket = CODEX_QUOTA_BUCKET.GENERAL) {
     const config = providerStatus?.config || {};
     const { max5hPercent, maxWeeklyPercent } = getCodexQuotaLimits(config, bucket);
@@ -2911,6 +2924,31 @@ export class ProviderPoolManager {
         this._debouncedSave(providerType);
     }
 
+    syncCodexQuotaHealth(providerType, providerConfig, quotaHealth) {
+        if (!providerConfig?.uuid || !isCodexProviderType(providerType) || !quotaHealth || typeof quotaHealth !== 'object') {
+            return null;
+        }
+
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        if (!provider) return null;
+
+        const nextQuotaHealth = {
+            ...quotaHealth,
+            general: quotaHealth.general ? { ...quotaHealth.general } : quotaHealth.general,
+            codex53: quotaHealth.codex53 ? { ...quotaHealth.codex53 } : quotaHealth.codex53
+        };
+        if (JSON.stringify(provider.config.codexQuotaHealth || null) === JSON.stringify(nextQuotaHealth)) {
+            return provider.config.codexQuotaHealth;
+        }
+
+        provider.config.codexQuotaHealth = nextQuotaHealth;
+        if (providerConfig !== provider.config) {
+            providerConfig.codexQuotaHealth = nextQuotaHealth;
+        }
+        this._debouncedSave(providerType);
+        return nextQuotaHealth;
+    }
+
     /**
      * Marks a provider as healthy.
      * @param {string} providerType - The type of the provider.
@@ -3213,6 +3251,13 @@ export class ProviderPoolManager {
             for (const providerStatus of this.providerStatus[providerType]) {
                 const providerConfig = providerStatus.config;
 
+                const quotaCooldown = getCodexAutomaticHealthCheckCooldown(providerType, providerConfig);
+                if (quotaCooldown) {
+                    const recoveryDescription = quotaCooldown.recoveryTime || 'usage refresh provides a valid recovery time';
+                    this._log('debug', `Skipping startup health check for ${this._getDisplayName(providerConfig)} (${providerType}): general quota exhausted; waiting until ${recoveryDescription}`);
+                    continue;
+                }
+
                 // 如果提供商有 scheduledRecoveryTime 且未到恢复时间，跳过健康检查
                 if (providerConfig.scheduledRecoveryTime && !providerConfig.isHealthy) {
                     const recoveryTime = new Date(providerConfig.scheduledRecoveryTime);
@@ -3295,9 +3340,12 @@ export class ProviderPoolManager {
             this._log('info', '[ScheduledHealthCheck] No provider types selected, skipping health check');
             return;
         }
+
+        this._checkAndRecoverScheduledProviders();
         
         // Count providers to be checked
         let totalProviders = 0;
+        let skippedCount = 0;
         let providersToCheck = [];
         
         for (const providerType in this.providerStatus) {
@@ -3310,7 +3358,16 @@ export class ProviderPoolManager {
             for (const provider of this.providerStatus[providerType]) {
                 // Skip manually disabled providers
                 if (provider.config.isDisabled === true) {
+                    skippedCount++;
                     this._log('debug', `[ScheduledHealthCheck] Skipping ${this._getDisplayName(provider.config)} (${providerType}): manually disabled`);
+                    continue;
+                }
+
+                const quotaCooldown = getCodexAutomaticHealthCheckCooldown(providerType, provider.config);
+                if (quotaCooldown) {
+                    skippedCount++;
+                    const recoveryDescription = quotaCooldown.recoveryTime || 'usage refresh provides a valid recovery time';
+                    this._log('info', `[ScheduledHealthCheck] Skipping ${this._getDisplayName(provider.config)} (${providerType}): general quota exhausted; waiting until ${recoveryDescription}`);
                     continue;
                 }
                 
@@ -3319,7 +3376,7 @@ export class ProviderPoolManager {
             }
         }
         
-        this._log('info', `[ScheduledHealthCheck] Starting scheduled health checks: ${totalProviders} provider(s) to check (interval: ${scheduledConfig.interval}ms, types: ${selectedProviderTypes.join(', ')})`);
+        this._log('info', `[ScheduledHealthCheck] Starting scheduled health checks: ${totalProviders} provider(s) to check, ${skippedCount} skipped (interval: ${scheduledConfig.interval}ms, types: ${selectedProviderTypes.join(', ')})`);
         
         let successCount = 0;
         let failCount = 0;
@@ -3358,7 +3415,7 @@ export class ProviderPoolManager {
         }
         
         const totalDuration = Date.now() - checkStartTime;
-        this._log('info', `[ScheduledHealthCheck] Completed: ${successCount} passed, ${failCount} failed, ${totalDuration}ms total`);
+        this._log('info', `[ScheduledHealthCheck] Completed: ${successCount} passed, ${failCount} failed, ${skippedCount} skipped, ${totalDuration}ms total`);
     }
 
     /**

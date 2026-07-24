@@ -40,6 +40,15 @@ describe('Codex auth proxy UI source', () => {
         expect(i18nSource.match(/'oauth\.codex\.proxyBrowserExitTimeout'/g)).toHaveLength(2);
     });
 
+    test('proxy preflight renders network failures as failed instead of mismatched', () => {
+        const source = readFileSync('static/app/provider-manager.js', 'utf8');
+
+        expect(source).toContain('function renderProxyTestLine(label, ip, error, expectedIp)');
+        expect(source).toContain("const badge = error ? t('oauth.codex.proxyTestFailed')");
+        expect(source).toContain("renderProxyTestLine(t('oauth.codex.proxyBrowserExit'), browserIp, browserError, expectedIp)");
+        expect(source).toContain("renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp, serverError, expectedIp)");
+    });
+
     test('Codex create and reauthorization modes reuse one proxy selector implementation', () => {
         const source = readFileSync('static/app/provider-manager.js', 'utf8');
 
