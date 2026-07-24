@@ -10,10 +10,16 @@ describe('API Potluck ledger range stats surface', () => {
         const source = loadSource('src/plugins/api-potluck/api-routes.js');
 
         expect(source).toContain("path === '/api/potluck/range-stats'");
-        expect(source).toContain('async function loadLedgerRangeStatsForRange(range, conversionModel)');
-        expect(source).toContain("readLedgerRangeStats({ ledgerDailyDir, dates, conversionModel })");
+        expect(source).toContain('async function loadLedgerRangeStatsForRange(range, conversionModel, options = {})');
+        expect(source).toContain('const stats = await readLedgerRangeStats({');
+        expect(source).toContain('keyHashToId,');
         expect(source).toContain("'permanent-usage-ledger', 'daily'");
         expect(source).toContain("source: 'ledger'");
+        expect(source).toContain("range === 'custom'");
+        expect(source).toContain("url.searchParams.get('from')");
+        expect(source).toContain("url.searchParams.get('to')");
+        expect(source).toContain('includeKeySummaries');
+        expect(source).toContain("subPath === '/range-stats'");
     });
 
     test('ledger range stats module aggregates without exposing key material', () => {
@@ -23,9 +29,8 @@ describe('API Potluck ledger range stats surface', () => {
         expect(source).toContain('export async function readLedgerRangeStats(');
         expect(source).toContain('export function resolveRangeDates(');
         expect(source).toContain('readline.createInterface');
-        expect(source).not.toContain('row.key');
-        expect(source).not.toContain('keyHash');
-        expect(source).not.toContain('keyPrefix');
+        expect(source).toContain('keyHashToId.get(row.keyHash)');
+        expect(source).not.toContain('keyPrefixToId');
     });
 
     test('admin dashboard prefers ledger range stats without verbose data-source title', () => {
@@ -36,8 +41,10 @@ describe('API Potluck ledger range stats surface', () => {
         expect(source).not.toContain('function formatRangeDataSourceLabel(rangeSummary)');
         expect(source).not.toContain('数据源: 账本');
         expect(source).not.toContain('数据源: 实时统计');
-        expect(source).toContain("apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}&${getCostQuery()}`)");
+        expect(source).toContain("apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}${customQuery}&${getCostQuery()}`)");
         expect(source).toContain("refreshLedgerRangeStats(currentUsageRange, { force: true });");
         expect(source).toContain('refreshLedgerRangeStats(currentUsageRange);');
+        expect(source).toContain('from=${encodeURIComponent(currentCustomRange.from)}');
+        expect(source).toContain('to=${encodeURIComponent(currentCustomRange.to)}');
     });
 });

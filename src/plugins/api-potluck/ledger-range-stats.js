@@ -46,6 +46,11 @@ function addRowToBucket(bucket, row) {
     bucket.cost.missingPriceTokens += currentCost.missingPriceTokens;
 }
 
+function ensureBucket(map, name) {
+    if (!map[name]) map[name] = createBucket();
+    return map[name];
+}
+
 function finalizeBucket(bucket, conversionModel) {
     bucket.cost.convertedUsd = estimateUsageCost({
         promptTokens: bucket.promptTokens,
@@ -55,6 +60,7 @@ function finalizeBucket(bucket, conversionModel) {
     }, conversionModel).usd;
     bucket.cost.conversionModel = conversionModel;
     bucket.cost.pricingVersion = PRICING_VERSION;
+    bucket.cacheHitRatio = bucket.promptTokens > 0 ? bucket.cachedTokens / bucket.promptTokens : 0;
     return bucket;
 }
 
@@ -81,12 +87,32 @@ function ensureAccount(accounts, row) {
     return account;
 }
 
-export function createLedgerRangeAggregator({ conversionModel = DEFAULT_CONVERSION_MODEL } = {}) {
+export function createLedgerRangeAggregator({
+    conversionModel = DEFAULT_CONVERSION_MODEL,
+    keyHashToId = null,
+    includeKeySummaries = false,
+    includeKeyModels = false,
+    keyDailyLimit = 35
+} = {}) {
     const normalizedConversionModel = normalizeConversionModel(conversionModel);
     const summary = createBucket();
     const providers = {};
     const models = {};
     const accounts = {};
+    const daily = {};
+    const keySummaries = {};
+
+    function ensureKeySummary(keyId) {
+        if (!keySummaries[keyId]) {
+            keySummaries[keyId] = {
+                summary: createBucket(),
+                providers: {},
+                models: {},
+                daily: {}
+            };
+        }
+        return keySummaries[keyId];
+    }
 
     return {
         addRow(row) {
@@ -94,31 +120,56 @@ export function createLedgerRangeAggregator({ conversionModel = DEFAULT_CONVERSI
             addRowToBucket(summary, row);
 
             const providerName = row.provider || 'unknown';
-            if (!providers[providerName]) providers[providerName] = createBucket();
-            addRowToBucket(providers[providerName], row);
+            addRowToBucket(ensureBucket(providers, providerName), row);
 
             const modelName = row.model || 'unknown';
-            if (!models[modelName]) models[modelName] = createBucket();
-            addRowToBucket(models[modelName], row);
+            addRowToBucket(ensureBucket(models, modelName), row);
+
+            if (row.date) addRowToBucket(ensureBucket(daily, row.date), row);
 
             const account = ensureAccount(accounts, row);
             addRowToBucket(account.summary, row);
             if (!account.models[modelName]) account.models[modelName] = createBucket();
             addRowToBucket(account.models[modelName], row);
+
+            if (includeKeySummaries && keyHashToId instanceof Map) {
+                const keyId = keyHashToId.get(row.keyHash);
+                if (keyId) {
+                    const keySummary = ensureKeySummary(keyId);
+                    addRowToBucket(keySummary.summary, row);
+                    addRowToBucket(ensureBucket(keySummary.providers, providerName), row);
+                    if (includeKeyModels) addRowToBucket(ensureBucket(keySummary.models, modelName), row);
+                    if (row.date) addRowToBucket(ensureBucket(keySummary.daily, row.date), row);
+                }
+            }
         },
         result() {
             finalizeBucket(summary, normalizedConversionModel);
             for (const bucket of Object.values(providers)) finalizeBucket(bucket, normalizedConversionModel);
             for (const bucket of Object.values(models)) finalizeBucket(bucket, normalizedConversionModel);
+            for (const bucket of Object.values(daily)) finalizeBucket(bucket, normalizedConversionModel);
             for (const account of Object.values(accounts)) {
                 finalizeBucket(account.summary, normalizedConversionModel);
                 for (const bucket of Object.values(account.models)) finalizeBucket(bucket, normalizedConversionModel);
+            }
+            for (const keySummary of Object.values(keySummaries)) {
+                finalizeBucket(keySummary.summary, normalizedConversionModel);
+                for (const bucket of Object.values(keySummary.providers)) finalizeBucket(bucket, normalizedConversionModel);
+                for (const bucket of Object.values(keySummary.models)) finalizeBucket(bucket, normalizedConversionModel);
+                for (const bucket of Object.values(keySummary.daily)) finalizeBucket(bucket, normalizedConversionModel);
+                const dates = Object.keys(keySummary.daily).sort();
+                if (Number.isFinite(keyDailyLimit) && dates.length > keyDailyLimit) {
+                    for (const date of dates.slice(0, dates.length - keyDailyLimit)) delete keySummary.daily[date];
+                }
+                if (!includeKeyModels) delete keySummary.models;
             }
             return {
                 summary,
                 providers,
                 models,
                 accounts,
+                daily,
+                ...(includeKeySummaries ? { keySummaries } : {}),
                 conversionModel: normalizedConversionModel,
                 pricingVersion: PRICING_VERSION
             };
@@ -156,8 +207,23 @@ export function listLedgerDates(ledgerDailyDir) {
  * 读取并聚合指定日期集合的 ledger 日文件。
  * @returns {{availableDates: string[], missingDates: string[], summary, providers, models, accounts, conversionModel, pricingVersion}}
  */
-export async function readLedgerRangeStats({ ledgerDailyDir, dates = [], conversionModel, now = new Date() } = {}) {
-    const aggregator = createLedgerRangeAggregator({ conversionModel });
+export async function readLedgerRangeStats({
+    ledgerDailyDir,
+    dates = [],
+    conversionModel,
+    now = new Date(),
+    keyHashToId = null,
+    includeKeySummaries = false,
+    includeKeyModels = false,
+    keyDailyLimit = 35
+} = {}) {
+    const aggregator = createLedgerRangeAggregator({
+        conversionModel,
+        keyHashToId,
+        includeKeySummaries,
+        includeKeyModels,
+        keyDailyLimit
+    });
     const availableDates = [];
     const missingDates = [];
     const todayKey = getBeijingDateKey(now);
@@ -202,12 +268,36 @@ function dateKeysBetween(from, to) {
     return keys;
 }
 
+function isValidDateKey(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function invalidDateRange(message) {
+    const error = new Error(message);
+    error.code = 'INVALID_DATE_RANGE';
+    return error;
+}
+
 /**
  * 将管理页的 range 参数换算为北京时间日期列表。
  * `total` 返回 ledger 目录里已有的全部日期加上今天。
  */
-export function resolveRangeDates(range, { ledgerDailyDir, now = new Date() } = {}) {
+export function resolveRangeDates(range, { ledgerDailyDir, now = new Date(), from, to } = {}) {
     const todayKey = getBeijingDateKey(now);
+    if (range === 'custom') {
+        if (!isValidDateKey(from) || !isValidDateKey(to)) {
+            throw invalidDateRange('自定义时间范围必须使用 YYYY-MM-DD 日期格式');
+        }
+        if (from > to) throw invalidDateRange('开始日期不能晚于结束日期');
+        if (to > todayKey) throw invalidDateRange('结束日期不能晚于北京时间今天');
+        if (ledgerDailyDir) {
+            const earliestDate = listLedgerDates(ledgerDailyDir)[0] || todayKey;
+            if (from < earliestDate) throw invalidDateRange(`最早可查询日期为 ${earliestDate}`);
+        }
+        return dateKeysBetween(from, to);
+    }
     if (range === 'today') return [todayKey];
     if (range === '7d') return dateKeysBetween(shiftDateKey(todayKey, -6), todayKey);
     if (range === '30d') return dateKeysBetween(shiftDateKey(todayKey, -29), todayKey);

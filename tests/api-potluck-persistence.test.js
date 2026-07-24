@@ -50,11 +50,11 @@ function writeAdminToken(token = 'admin-token') {
     return token;
 }
 
-async function callPotluckRoute(handler, method, routePath, body = null, token = 'admin-token') {
+async function callPotluckRoute(handler, method, routePath, body = null, token = 'admin-token', requestUrl = routePath) {
     let statusCode = null;
     let responseBody = '';
     const req = {
-        url: routePath,
+        url: requestUrl,
         headers: { authorization: `Bearer ${token}`, host: 'localhost' },
         on(event, callback) {
             if (event === 'data' && body !== null) {
@@ -352,6 +352,85 @@ describe('api potluck persistence', () => {
 
         const persisted = readStore();
         expect(JSON.stringify(persisted)).not.toContain('persistencePending');
+    });
+
+    test('regenerated keys retain the previous ledger hash as a long-term usage alias', async () => {
+        const { plugin, keyManager } = await loadPotluckModules();
+        const { hashSecret } = await import('../src/plugins/request-audit/audit-event.js');
+        await plugin.init({
+            API_POTLUCK_PERSIST_INTERVAL: 60_000,
+            API_POTLUCK_MAX_DIRTY_AGE: 60_000
+        });
+
+        const created = await keyManager.createKey('Ledger Alias', 1000);
+        const regenerated = await keyManager.regenerateKey(created.id);
+        const identity = keyManager.getLedgerKeyIdentities().find(item => item.keyId === regenerated.newKey);
+
+        expect(identity.hashes).toContain(hashSecret(created.id));
+        expect(identity.hashes).toContain(hashSecret(regenerated.newKey));
+        expect(readStore().keys[regenerated.newKey].ledgerKeyHashes).toEqual([hashSecret(created.id)]);
+    });
+
+    test('serves inclusive custom ledger ranges and rejects invalid dates through the admin route', async () => {
+        const { plugin, apiRoutes } = await loadPotluckModules();
+        await plugin.init({
+            API_POTLUCK_PERSIST_INTERVAL: 60_000,
+            API_POTLUCK_MAX_DIRTY_AGE: 60_000
+        });
+        const token = writeAdminToken();
+        const dailyDir = path.join(tempDir, 'configs', 'permanent-usage-ledger', 'daily');
+        fs.mkdirSync(dailyDir, { recursive: true });
+        const ledgerRow = (date, totalTokens) => JSON.stringify({
+            date,
+            provider: 'openai-codex-oauth',
+            accountKey: 'openai-codex-oauth:test@example.com',
+            accountEmail: 'test@example.com',
+            model: 'gpt-5.5',
+            usage: {
+                requestCount: 1,
+                promptTokens: totalTokens - 20,
+                cachedTokens: 10,
+                completionTokens: 20,
+                totalTokens
+            },
+            cost: { actualUsd: 0.01, missingPriceTokens: 0 }
+        });
+        fs.writeFileSync(path.join(dailyDir, 'usage-2026-01-01.jsonl'), `${ledgerRow('2026-01-01', 100)}\n`);
+        fs.writeFileSync(path.join(dailyDir, 'usage-2026-01-15.jsonl'), `${ledgerRow('2026-01-15', 50)}\n`);
+
+        const valid = await callPotluckRoute(
+            apiRoutes.handlePotluckApiRoutes,
+            'GET',
+            '/api/potluck/range-stats',
+            null,
+            token,
+            '/api/potluck/range-stats?range=custom&from=2026-01-01&to=2026-01-15'
+        );
+
+        expect(valid.statusCode).toBe(200);
+        expect(valid.body.data).toMatchObject({
+            range: 'custom',
+            from: '2026-01-01',
+            to: '2026-01-15',
+            summary: { requestCount: 2, totalTokens: 150 },
+            availableDates: ['2026-01-01', '2026-01-15']
+        });
+        expect(valid.body.data.dates).toHaveLength(15);
+
+        const invalid = await callPotluckRoute(
+            apiRoutes.handlePotluckApiRoutes,
+            'GET',
+            '/api/potluck/range-stats',
+            null,
+            token,
+            '/api/potluck/range-stats?range=custom&from=2025-12-31&to=2026-01-15'
+        );
+
+        expect(invalid.statusCode).toBe(400);
+        expect(invalid.body).toMatchObject({
+            success: false,
+            error: { code: 'INVALID_DATE_RANGE' }
+        });
     });
 
     test('returns HTTP 202 when an accepted key mutation is waiting for persistence and retries later', async () => {

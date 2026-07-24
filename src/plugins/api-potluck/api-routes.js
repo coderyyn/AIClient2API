@@ -20,11 +20,12 @@ import {
     KEY_PREFIX,
     applyDailyLimitToAllKeys,
     getAllKeyIds,
+    getLedgerKeyIdentities,
     resetAllTokenStats
 } from './key-manager.js';
 import { getRequestBody } from '../../utils/common.js';
 import { extractCodexCredentialIdentity } from '../../utils/codex-utils.js';
-import { readLedgerRangeStats, resolveRangeDates } from './ledger-range-stats.js';
+import { getBeijingDateKey, listLedgerDates, readLedgerRangeStats, resolveRangeDates } from './ledger-range-stats.js';
 import logger from '../../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
@@ -215,11 +216,47 @@ function enrichPotluckStatsAccountEmails(stats) {
     return stats;
 }
 
-async function loadLedgerRangeStatsForRange(range, conversionModel) {
+function buildLedgerKeyHashLookup(targetKeyId = null) {
+    const lookup = new Map();
+    for (const identity of getLedgerKeyIdentities()) {
+        if (targetKeyId && identity.keyId !== targetKeyId) continue;
+        for (const hash of identity.hashes || []) lookup.set(hash, identity.keyId);
+    }
+    return lookup;
+}
+
+async function loadLedgerRangeStatsForRange(range, conversionModel, options = {}) {
     const ledgerDailyDir = path.join(process.cwd(), 'configs', 'permanent-usage-ledger', 'daily');
-    const dates = resolveRangeDates(range, { ledgerDailyDir });
-    const stats = await readLedgerRangeStats({ ledgerDailyDir, dates, conversionModel });
-    return { range, dates, source: 'ledger', ...stats };
+    const dates = resolveRangeDates(range, {
+        ledgerDailyDir,
+        from: options.from,
+        to: options.to
+    });
+    const includeKeySummaries = Boolean(options.includeKeySummaries || options.targetKeyId);
+    const keyHashToId = includeKeySummaries ? buildLedgerKeyHashLookup(options.targetKeyId) : null;
+    const stats = await readLedgerRangeStats({
+        ledgerDailyDir,
+        dates,
+        conversionModel,
+        keyHashToId,
+        includeKeySummaries,
+        includeKeyModels: Boolean(options.targetKeyId),
+        keyDailyLimit: options.targetKeyId ? Number.POSITIVE_INFINITY : 35
+    });
+    const ledgerDates = listLedgerDates(ledgerDailyDir);
+    const today = getBeijingDateKey();
+    return {
+        range,
+        from: dates[0] || today,
+        to: dates[dates.length - 1] || today,
+        bounds: {
+            from: ledgerDates[0] || today,
+            to: today
+        },
+        dates,
+        source: 'ledger',
+        ...stats
+    };
 }
 
 function readReconciliationLatest() {
@@ -322,11 +359,15 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         // GET /api/potluck/range-stats - 从 ledger 预聚合读取区间统计（管理页分布数据源）
         if (method === 'GET' && path === '/api/potluck/range-stats') {
             const url = new URL(req.url || '', 'http://localhost');
-            const range = ['total', '30d', '7d', 'today'].includes(url.searchParams.get('range'))
+            const range = ['total', '30d', '7d', 'today', 'custom'].includes(url.searchParams.get('range'))
                 ? url.searchParams.get('range')
                 : '7d';
             const conversionModel = url.searchParams.get('conversionModel') || undefined;
-            const data = await loadLedgerRangeStatsForRange(range, conversionModel);
+            const data = await loadLedgerRangeStatsForRange(range, conversionModel, {
+                from: range === 'custom' ? url.searchParams.get('from') : undefined,
+                to: range === 'custom' ? url.searchParams.get('to') : undefined,
+                includeKeySummaries: url.searchParams.get('includeKeys') === '1'
+            });
             sendJson(res, 200, { success: true, data });
             return true;
         }
@@ -411,6 +452,30 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         if (keyIdMatch) {
             const keyId = decodeURIComponent(keyIdMatch[1]);
             const subPath = keyIdMatch[2] || '';
+
+            if (method === 'GET' && subPath === '/range-stats') {
+                const existingKey = await getKey(keyId, { summaryOnly: true, compactCosts: true });
+                if (!existingKey) {
+                    sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
+                    return true;
+                }
+                const url = new URL(req.url || '', 'http://localhost');
+                const conversionModel = url.searchParams.get('conversionModel') || undefined;
+                const data = await loadLedgerRangeStatsForRange('custom', conversionModel, {
+                    from: url.searchParams.get('from'),
+                    to: url.searchParams.get('to'),
+                    targetKeyId: keyId
+                });
+                sendJson(res, 200, {
+                    success: true,
+                    data: {
+                        ...data,
+                        keySummary: data.keySummaries?.[keyId] || null,
+                        keySummaries: undefined
+                    }
+                });
+                return true;
+            }
 
             // GET /api/potluck/keys/:keyId - 获取单个 Key 详情
             if (method === 'GET' && !subPath) {
@@ -559,6 +624,13 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         return true;
 
     } catch (error) {
+        if (error?.code === 'INVALID_DATE_RANGE') {
+            sendJson(res, 400, {
+                success: false,
+                error: { message: error.message, code: error.code }
+            });
+            return true;
+        }
         logger.error('[API Potluck] API error:', error);
         sendJson(res, 500, {
             success: false,

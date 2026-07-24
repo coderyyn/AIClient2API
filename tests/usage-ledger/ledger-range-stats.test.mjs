@@ -11,7 +11,7 @@ import {
   resolveRangeDates,
 } from '../../src/plugins/api-potluck/ledger-range-stats.js';
 
-function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey, accountEmail = 'user@example.com', model = 'gpt-5.5', requestCount = 1, totalTokens = 100, promptTokens = 80, completionTokens = 20, cachedTokens = 10, actualUsd = 0.01, missingPriceTokens = 0 }) {
+function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey, accountEmail = 'user@example.com', model = 'gpt-5.5', requestCount = 1, totalTokens = 100, promptTokens = 80, completionTokens = 20, cachedTokens = 10, actualUsd = 0.01, missingPriceTokens = 0, keyHash = 'sha256:deadbeef' }) {
   return {
     date,
     provider,
@@ -21,7 +21,7 @@ function row({ date = '2026-07-05', provider = 'openai-codex-oauth', accountKey,
     providerName: 'User',
     providerUuids: ['uuid-1'],
     key: 'maki_secret_should_not_leak',
-    keyHash: 'sha256:deadbeef',
+    keyHash,
     keyPrefix: 'maki_secret...',
     model,
     usage: { requestCount, promptTokens, cachedTokens, completionTokens, reasoningTokens: 0, totalTokens },
@@ -160,6 +160,59 @@ test('resolveRangeDates maps ranges to beijing date lists', () => {
   const month = resolveRangeDates('30d', { now });
   assert.equal(month.length, 30);
   assert.equal(month[0], '2026-06-07');
+});
+
+test('resolveRangeDates includes both endpoints for a custom Beijing date range', () => {
+  const now = new Date('2026-07-24T08:00:00.000Z');
+  const dates = resolveRangeDates('custom', {
+    from: '2026-01-01',
+    to: '2026-01-15',
+    now,
+  });
+
+  assert.equal(dates.length, 15);
+  assert.equal(dates[0], '2026-01-01');
+  assert.equal(dates[14], '2026-01-15');
+});
+
+test('resolveRangeDates rejects a custom start before the earliest ledger date', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-range-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'usage-2026-01-10.jsonl'), '');
+    assert.throws(() => resolveRangeDates('custom', {
+      ledgerDailyDir: tmpDir,
+      from: '2026-01-01',
+      to: '2026-01-15',
+      now: new Date('2026-07-24T08:00:00.000Z'),
+    }), error => error?.code === 'INVALID_DATE_RANGE' && /2026-01-10/.test(error.message));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('aggregator returns lightweight current-key summaries through hash aliases', () => {
+  const aggregator = createLedgerRangeAggregator({
+    conversionModel: 'gemini-2.5-flash',
+    keyHashToId: new Map([
+      ['sha256:current', 'maki_current'],
+      ['sha256:previous', 'maki_current'],
+    ]),
+    includeKeySummaries: true,
+  });
+
+  aggregator.addRow(row({ date: '2026-01-01', keyHash: 'sha256:previous', totalTokens: 100, requestCount: 2 }));
+  aggregator.addRow(row({ date: '2026-01-15', keyHash: 'sha256:current', totalTokens: 50, requestCount: 1 }));
+  aggregator.addRow(row({ date: '2026-01-15', keyHash: 'sha256:deleted', totalTokens: 25, requestCount: 1 }));
+
+  const result = aggregator.result();
+
+  assert.equal(result.summary.totalTokens, 175);
+  assert.equal(result.daily['2026-01-01'].totalTokens, 100);
+  assert.equal(result.daily['2026-01-15'].totalTokens, 75);
+  assert.deepEqual(Object.keys(result.keySummaries), ['maki_current']);
+  assert.equal(result.keySummaries.maki_current.summary.totalTokens, 150);
+  assert.deepEqual(Object.keys(result.keySummaries.maki_current.daily), ['2026-01-01', '2026-01-15']);
+  assert.equal(JSON.stringify(result.keySummaries).includes('sha256:'), false);
 });
 
 test('resolveRangeDates total uses ledger directory contents plus today', () => {

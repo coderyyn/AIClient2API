@@ -25,6 +25,7 @@ const MODEL_USAGE_STATS_FILE = path.join(process.cwd(), 'configs', 'model-usage-
 
 const KEY_PREFIX = 'maki_';
 const USAGE_HISTORY_RETENTION_DAYS = 35;
+const LEDGER_KEY_HASH_PATTERN = /^sha256:[a-f0-9]{16}$/i;
 
 const DEFAULT_CONFIG = {
     persistInterval: 30_000,
@@ -246,6 +247,11 @@ function normalizeKeyData(keyData = {}) {
         totalTokens: toNumber(keyData.totalTokens),
         totalCachedTokens: toNumber(keyData.totalCachedTokens),
         totalModels: normalizeUsageMap(keyData.totalModels),
+        ledgerKeyHashes: [...new Set(
+            (Array.isArray(keyData.ledgerKeyHashes) ? keyData.ledgerKeyHashes : [])
+                .filter(value => LEDGER_KEY_HASH_PATTERN.test(String(value || '')))
+                .map(value => String(value).toLowerCase())
+        )],
         usageHistory: {}
     };
 
@@ -2027,6 +2033,17 @@ export async function validateKey(apiKey) {
     return { valid: true, keyData: validationKeyData };
 }
 
+export function getLedgerKeyIdentities() {
+    ensureLoaded();
+    return Object.entries(keyStore.keys).map(([keyId, keyData]) => ({
+        keyId,
+        hashes: [...new Set([
+            hashSecret(keyId),
+            ...(Array.isArray(keyData.ledgerKeyHashes) ? keyData.ledgerKeyHashes : [])
+        ].filter(Boolean))]
+    }));
+}
+
 /**
  * 重新生成 API Key（保留原有数据，更换 Key ID）
  * @param {string} oldKeyId - 原 Key ID
@@ -2045,7 +2062,11 @@ export async function regenerateKey(oldKeyId) {
         ...oldKeyData,
         id: newKeyId,
         regeneratedAt: new Date().toISOString(),
-        regeneratedFrom: oldKeyId.substring(0, 12) + '...'
+        regeneratedFrom: oldKeyId.substring(0, 12) + '...',
+        ledgerKeyHashes: [...new Set([
+            ...(Array.isArray(oldKeyData.ledgerKeyHashes) ? oldKeyData.ledgerKeyHashes : []),
+            hashSecret(oldKeyId)
+        ].filter(Boolean))]
     };
     
     // 删除旧 Key，添加新 Key

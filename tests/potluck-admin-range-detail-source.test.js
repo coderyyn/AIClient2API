@@ -18,6 +18,13 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain('function setUsageRange(range)');
         expect(source).toContain('function getUsageRangeDates(range, usageHistory = {})');
         expect(source).toContain('function summarizeUsageHistoryForRange(usageHistory = {}, range = currentUsageRange)');
+        expect(source).toContain('data-range="custom"');
+        expect(source).toContain('id="customRangePanel"');
+        expect(source).toContain('id="customRangeFrom"');
+        expect(source).toContain('id="customRangeTo"');
+        expect(source).toContain('function applyCustomRange()');
+        expect(source).toContain("currentUsageRange = 'custom'");
+        expect(source).toContain("timeZone: 'Asia/Shanghai'");
     });
 
     test('each admin key card has a detail modal entry for user-facing usage diagnostics', () => {

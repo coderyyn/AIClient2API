@@ -117,7 +117,9 @@ The apply command revalidates artifact hashes, request-audit event and file dige
 
 ## Admin Range Stats From Ledger
 
-`GET /api/potluck/range-stats?range=<total|30d|7d|today>&conversionModel=<model>` streams the daily ledger files for the requested Beijing-time date range and returns pre-aggregated `summary/providers/models/accounts` buckets (no key material). The potluck admin dashboard prefers this ledger source for the distribution panels and only adds live in-memory stats for dates missing from the ledger (normally today); the section title shows the data source, e.g. `数据源: 账本 6 天 + 实时 1 天 · official-2026-07-09`. When no ledger files exist the UI falls back to the previous full client-side aggregation.
+`GET /api/potluck/range-stats?range=<total|30d|7d|today|custom>&from=YYYY-MM-DD&to=YYYY-MM-DD&includeKeys=1&conversionModel=<model>` streams the daily ledger files for the requested Beijing-time date range. `from` / `to` are required only for `custom`; both endpoints are included, so `2026-01-01` through `2026-01-15` means Beijing time `[2026-01-01 00:00:00, 2026-01-16 00:00:00)`. The response includes global `summary/providers/models/accounts/daily` buckets and may include lightweight current-Key summaries when `includeKeys=1`; raw ledger keys, hashes, and prefixes are never returned. `GET /api/potluck/keys/:keyId/range-stats?from=...&to=...` provides the selected Key's full provider/model/daily detail on demand. Dates missing from the ledger are supplemented from the retained live history when available and otherwise reported as missing.
+
+Permanent ledger files remain historical facts. The Potluck "reset Token" actions clear the current Key store counters and retained 35-day Token history, but do not delete or rewrite permanent ledger history; custom historical queries can therefore still show records from before a reset.
 
 Example production cron wrapper:
 
