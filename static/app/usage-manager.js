@@ -1,6 +1,6 @@
 // 用量管理模块
 
-import { showToast, bindOnce, escapeHtml } from './utils.js';
+import { showToast, bindOnce, escapeHtml, getBaseProviderConfigs } from './utils.js';
 import { getAuthHeaders } from './auth.js';
 import { t, getCurrentLanguage } from './i18n.js';
 
@@ -1026,31 +1026,20 @@ function renderAccountUsageCost(usage = {}) {
 }
 
 function getProviderDisplayName(type) {
-    if (currentProviderConfigs) {
-        const config = currentProviderConfigs.find(c => c.id === type);
-        if (config?.name) return getCompactProviderDisplayName(type, config.name);
-    }
-    const names = { 'claude-kiro-oauth': 'Claude Kiro', 'gemini-cli-oauth': 'Gemini CLI', 'gemini-antigravity': 'Antigravity', 'openai-codex-oauth': 'Codex', 'grok-cli-oauth': 'Grok CLI', 'grok-web': 'Grok Web' };
-    return getCompactProviderDisplayName(type, names[type] || type);
-}
-
-function getCompactProviderDisplayName(type, label) {
-    if (type === 'openai-codex-oauth') return 'Codex';
-    if (type === 'claude-kiro-oauth') return 'Kiro';
-    if (type === 'gemini-antigravity') return 'Antigravity';
-    if (type === 'gemini-cli-oauth') return 'Gemini CLI';
-    if (type === 'grok-cli-oauth') return 'Grok CLI';
-    if (type === 'grok-web') return 'Grok Web';
-    return label;
+    return getProviderMeta(type).name;
 }
 
 function getProviderIcon(type) {
-    if (currentProviderConfigs) {
-        const config = currentProviderConfigs.find(c => c.id === type);
-        if (config?.icon) return config.icon.startsWith('fa-') ? `fas ${config.icon}` : config.icon;
-    }
-    const icons = { 'claude-kiro-oauth': 'fas fa-robot', 'gemini-cli-oauth': 'fas fa-gem', 'gemini-antigravity': 'fas fa-rocket', 'openai-codex-oauth': 'fas fa-terminal', 'grok-cli-oauth': 'fas fa-terminal', 'grok-web': 'fas fa-brain' };
-    return icons[type] || 'fas fa-server';
+    const icon = getProviderMeta(type).icon;
+    return icon.startsWith('fa-') ? `fas ${icon}` : icon;
+}
+
+function getProviderMeta(type) {
+    const config = currentProviderConfigs?.find(c => c.id === type) || getBaseProviderConfigs().find(c => c.id === type);
+    return {
+        name: config?.usageName || config?.shortName || config?.name || type,
+        icon: config?.icon || 'fa-server'
+    };
 }
 
 async function downloadConfigFile(path) {
