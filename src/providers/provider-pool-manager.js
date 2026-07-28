@@ -2057,7 +2057,15 @@ export class ProviderPoolManager {
         }
 
         let selected;
-        if (options.stickyProviderKey && isCodexProviderType(providerType)) {
+        if (options.preferredProviderUuid) {
+            selected = availableAndHealthyProviders.find(provider =>
+                (provider.uuid || provider.config?.uuid) === options.preferredProviderUuid
+            );
+            if (selected) {
+                this._log('debug', `Selected preferred provider for ${providerType}: ${this._getDisplayName(selected.config)}`);
+            }
+        }
+        if (!selected && options.stickyProviderKey && isCodexProviderType(providerType)) {
             selected = this._selectCodexHotShardProvider(
                 availableAndHealthyProviders,
                 providerType,
@@ -2069,7 +2077,7 @@ export class ProviderPoolManager {
                     `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
                 );
             this._log('debug', `Selected provider for ${providerType} by sticky affinity: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
-        } else if (hasCustomProviderWeights(availableAndHealthyProviders)) {
+        } else if (!selected && hasCustomProviderWeights(availableAndHealthyProviders)) {
             selected = [...availableAndHealthyProviders].sort((a, b) => {
                 const weightedUsageA = this._getProviderWeightedBalanceScore(providerType, a, now);
                 const weightedUsageB = this._getProviderWeightedBalanceScore(providerType, b, now);
@@ -2086,7 +2094,7 @@ export class ProviderPoolManager {
                 return (a.uuid || '').localeCompare(b.uuid || '');
             })[0];
             this._log('debug', `Selected provider for ${providerType} by weight: ${this._getDisplayName(selected.config)} (weight=${getProviderWeight(selected.config)})${requestedModel ? ` for model: ${requestedModel}` : ''}`);
-        } else {
+        } else if (!selected) {
             // 改进：使用统一的评分策略进行选择
             // 传入当前时间戳 now 确保一致性
             selected = availableAndHealthyProviders.sort((a, b) => {

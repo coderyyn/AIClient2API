@@ -18,6 +18,7 @@ import { readCodexCredentialDisplayName, readCodexCredentialIdentity } from '../
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 import { getProviderModels } from '../providers/provider-models.js';
+import { codexOverloadFailoverStore } from '../providers/openai/codex-overload-failover.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
@@ -782,22 +783,57 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         // 如果开启了并发限制，则使用 acquireSlot 进行选择和占位
         const useAcquire = options.acquireSlot === true;
         let selectedResult;
-        
-        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, requestedModel: actualModelName });
+        const failoverKey = isCodexProviderType(config.MODEL_PROVIDER)
+            ? config._codexOverloadFailoverKey
+            : null;
+        const pendingExcludedUuid = failoverKey
+            ? codexOverloadFailoverStore.getPendingExclusion(failoverKey)
+            : null;
+        const pinnedProviderUuid = failoverKey
+            ? codexOverloadFailoverStore.getPinnedProvider(failoverKey)
+            : null;
+        const originalExcludedUuids = options.excludeProviderUuids || [];
+        const preferredProviderUuid = pinnedProviderUuid === pendingExcludedUuid
+            ? null
+            : pinnedProviderUuid;
 
-        if (useAcquire) {
-             // 我们需要一个支持 Fallback 的 acquireSlot
-             selectedResult = await providerPoolManager.acquireSlotWithFallback(
-                config.MODEL_PROVIDER,
-                actualModelName,
-                selectionOptions
-            );
-        } else {
-            selectedResult = await providerPoolManager.selectProviderWithFallback(
+        const selectFromPool = async (selectionOptions) => {
+            if (useAcquire) {
+                return providerPoolManager.acquireSlotWithFallback(
+                    config.MODEL_PROVIDER,
+                    actualModelName,
+                    selectionOptions
+                );
+            }
+            return providerPoolManager.selectProviderWithFallback(
                 config.MODEL_PROVIDER,
                 actualModelName,
                 { ...selectionOptions, skipUsageCount: true }
             );
+        };
+
+        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+            ...options,
+            requestedModel: actualModelName,
+            preferredProviderUuid,
+            excludeProviderUuids: [...new Set([
+                ...originalExcludedUuids,
+                ...(pendingExcludedUuid ? [pendingExcludedUuid] : [])
+            ])]
+        });
+
+        selectedResult = await selectFromPool(selectionOptions);
+
+        // 过载 UUID 只是软排除；如果没有其他可用节点，撤销该排除并允许继续使用唯一/原凭证。
+        if (!selectedResult && pendingExcludedUuid) {
+            logger.info(`[Codex Overload] No alternative provider available; retrying selection with previous provider allowed: ${pendingExcludedUuid}`);
+            const fallbackSelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                ...options,
+                requestedModel: actualModelName,
+                preferredProviderUuid: null,
+                excludeProviderUuids: originalExcludedUuids
+            });
+            selectedResult = await selectFromPool(fallbackSelectionOptions);
         }
         
         if (selectedResult) {
@@ -811,6 +847,16 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             isFallback = fallbackUsed;
             selectedUuid = selectedProviderConfig.uuid;
             actualModel = fallbackModel || actualModelName;
+
+            if (failoverKey && pendingExcludedUuid) {
+                if (selectedUuid && selectedUuid !== pendingExcludedUuid) {
+                    codexOverloadFailoverStore.pinAlternative(failoverKey, selectedUuid);
+                    logger.info(`[Codex Overload] Switched session to alternative provider: ${selectedUuid}`);
+                } else {
+                    codexOverloadFailoverStore.consumePendingExclusion(failoverKey);
+                    logger.info(`[Codex Overload] Reusing previous provider because no alternative was available: ${pendingExcludedUuid}`);
+                }
+            }
             
             // mixed pool/fallback 可能跨 providerType 命中真实节点，需要切到真实 adapter。
             if (actualProviderType && actualProviderType !== config.MODEL_PROVIDER) {

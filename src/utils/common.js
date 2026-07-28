@@ -8,6 +8,10 @@ import { convertData, getOpenAIStreamChunkStop } from '../convert/convert.js';
 import { ProviderStrategyFactory } from './provider-strategies.js';
 import { getPluginManager } from '../core/plugin-manager.js';
 import { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER } from './constants.js';
+import {
+    codexOverloadFailoverStore,
+    resolveCodexOverloadFailoverKey
+} from '../providers/openai/codex-overload-failover.js';
 
 // ==================== 时间与时区 ====================
 
@@ -1255,6 +1259,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
 
     }  catch (error) {
         logger.error('\n[Server] Error during stream processing:', error.stack);
+
+        if (error.recordProviderForNextRequest && pooluuid && CONFIG?._codexOverloadFailoverKey) {
+            codexOverloadFailoverStore.recordFailure(CONFIG._codexOverloadFailoverKey, pooluuid);
+            logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
+        }
         
         // 如果客户端已断开，不需要发送错误响应
         if (clientDisconnected.value) {
@@ -1528,6 +1537,11 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         }
     } catch (error) {
         logger.error('\n[Server] Error during unary processing:', error.stack);
+
+        if (error.recordProviderForNextRequest && pooluuid && CONFIG?._codexOverloadFailoverKey) {
+            codexOverloadFailoverStore.recordFailure(CONFIG._codexOverloadFailoverKey, pooluuid);
+            logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
+        }
         
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = getErrorStatusCode(error);
@@ -1819,6 +1833,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     }
 
     CONFIG._codexCacheAffinityScope = extractCodexCacheAffinityScope(originalRequestBody);
+    CONFIG._codexOverloadFailoverKey = resolveCodexOverloadFailoverKey(CONFIG._codexCacheAffinityScope);
 
     const clientProviderMap = {
         [ENDPOINT_TYPE.OPENAI_CHAT]: MODEL_PROTOCOL_PREFIX.OPENAI,
@@ -2543,7 +2558,7 @@ function createErrorResponse(error, fromProvider) {
  * @param {string} fromProvider - 客户端期望的提供商格式
  * @returns {string} 格式化的流式错误响应字符串
  */
-function createStreamErrorResponse(error, fromProvider) {
+export function createStreamErrorResponse(error, fromProvider) {
     const protocolPrefix = getProtocolPrefix(fromProvider);
     const rawStatusCode = error.response?.status || error.status || error.statusCode || error.code || 500;
     const statusCode = ensureValidStatusCode(rawStatusCode);
@@ -2583,6 +2598,42 @@ function createStreamErrorResponse(error, fromProvider) {
             
         case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
             // OpenAI Responses API 流式错误格式（SSE event + data）
+            if (error.isCodexOverload) {
+                const upstreamError = error.response?.data?.error || {};
+                const responseSnapshot = error.responseSnapshot && typeof error.responseSnapshot === 'object'
+                    ? error.responseSnapshot
+                    : {};
+                const responseId = error.responseId || responseSnapshot.id || `resp_failed_${Date.now()}`;
+                const responseError = {
+                    code: upstreamError.code || 'server_is_overloaded',
+                    message: '上游 Codex 服务当前繁忙，请稍后重试'
+                };
+                const failedEvent = {
+                    type: 'response.failed',
+                    sequence_number: 0,
+                    response: {
+                        created_at: Math.floor(Date.now() / 1000),
+                        output_text: '',
+                        incomplete_details: null,
+                        instructions: null,
+                        metadata: {},
+                        model: error.responseModel || 'unknown',
+                        object: 'response',
+                        parallel_tool_calls: true,
+                        temperature: null,
+                        tool_choice: 'auto',
+                        tools: [],
+                        top_p: null,
+                        ...responseSnapshot,
+                        id: responseId,
+                        object: 'response',
+                        output: [],
+                        status: 'failed',
+                        error: responseError
+                    }
+                };
+                return `event: response.failed\ndata: ${JSON.stringify(failedEvent)}\n\n`;
+            }
             const responsesError = {
                 type: 'error',
                 sequence_number: 0,

@@ -12,6 +12,7 @@ jest.mock('../src/utils/logger.js', () => ({
 }));
 
 import { handleStreamRequest, handleUnaryRequest } from '../src/utils/common.js';
+import { codexOverloadFailoverStore } from '../src/providers/openai/codex-overload-failover.js';
 
 class FakeResponse extends EventEmitter {
     constructor() {
@@ -73,6 +74,24 @@ function createCodexUsageLimitError() {
     return error;
 }
 
+function createCodexOverloadError() {
+    const error = new Error('Our servers are currently overloaded. Please try again later.');
+    error.response = {
+        status: 503,
+        data: {
+            error: {
+                type: 'service_unavailable_error',
+                code: 'server_is_overloaded',
+                message: 'Our servers are currently overloaded. Please try again later.'
+            }
+        }
+    };
+    error.isCodexOverload = true;
+    error.recordProviderForNextRequest = true;
+    error.skipErrorCount = true;
+    return error;
+}
+
 function createProviderPoolManager() {
     return {
         markProviderHealthy: jest.fn(),
@@ -85,6 +104,85 @@ function createProviderPoolManager() {
 }
 
 describe('provider auth failure health marking', () => {
+    test('records Codex overload for the next request without marking the provider unhealthy', async () => {
+        const failoverKey = 'session:stream-overload-test';
+        codexOverloadFailoverStore.clear(failoverKey);
+        const error = createCodexOverloadError();
+        const service = {
+            async *generateContentStream() {
+                throw error;
+            }
+        };
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+
+        await handleStreamRequest(
+            res,
+            service,
+            'gpt-5.4-mini',
+            { input: [{ role: 'user', content: [{ type: 'input_text', text: 'ping' }] }] },
+            'openaiResponses',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-provider-overloaded',
+            'Codex Provider',
+            {
+                CONFIG: {
+                    _codexOverloadFailoverKey: failoverKey
+                }
+            }
+        );
+
+        expect(res.body).toContain('event: response.failed');
+        expect(res.body).toContain('server_is_overloaded');
+        expect(res.body).toContain('上游 Codex 服务当前繁忙，请稍后重试');
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
+        expect(codexOverloadFailoverStore.getPendingExclusion(failoverKey)).toBe('codex-provider-overloaded');
+        expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-overloaded');
+
+        codexOverloadFailoverStore.clear(failoverKey);
+    });
+
+    test('records unary Codex overload for the next request without marking the provider unhealthy', async () => {
+        const failoverKey = 'session:unary-overload-test';
+        codexOverloadFailoverStore.clear(failoverKey);
+        const error = createCodexOverloadError();
+        const service = {
+            generateContent: jest.fn().mockRejectedValue(error)
+        };
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+
+        await handleUnaryRequest(
+            res,
+            service,
+            'gpt-5.4-mini',
+            { input: [{ role: 'user', content: [{ type: 'input_text', text: 'ping' }] }] },
+            'openaiResponses',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-provider-overloaded',
+            'Codex Provider',
+            {
+                CONFIG: {
+                    _codexOverloadFailoverKey: failoverKey
+                }
+            }
+        );
+
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
+        expect(codexOverloadFailoverStore.getPendingExclusion(failoverKey)).toBe('codex-provider-overloaded');
+        expect(providerPoolManager.releaseSlot).toHaveBeenCalledWith('openai-codex-oauth', 'codex-provider-overloaded');
+
+        codexOverloadFailoverStore.clear(failoverKey);
+    });
+
     test('emits a terminal Responses API error event for an upstream 400 before the first stream chunk', async () => {
         const error = new Error("400 Bad Request (stream): Invalid Value: 'tools'. Function 'image_gen.imagegen' conflicts with a hosted tool in the same request.");
         error.response = {

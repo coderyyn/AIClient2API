@@ -164,6 +164,19 @@ describe('provider pool sticky affinity', () => {
         expect(retrySelection.isHealthy).toBe(true);
     });
 
+    test('honors an explicit preferred provider for a sticky session', async () => {
+        const manager = createCodexPoolManager();
+
+        const selected = await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+            stickyProviderKey: 'potluck-key-alpha',
+            preferredProviderUuid: 'codex-c',
+            skipUsageCount: true
+        });
+
+        clearTimeout(manager.saveTimer);
+        expect(selected.uuid).toBe('codex-c');
+    });
+
     test('distributes different affinity keys by Codex provider weight while keeping each key sticky', async () => {
         const manager = createWeightedCodexPoolManager();
         const firstSelections = new Map();

@@ -1,6 +1,21 @@
 import { Readable } from 'node:stream';
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import { CodexApiService } from '../src/providers/openai/codex-core.js';
+import axios from 'axios';
+
+jest.mock('axios', () => ({
+    request: jest.fn()
+}));
+
+jest.mock('../src/utils/logger.js', () => ({
+    __esModule: true,
+    default: {
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn()
+    }
+}));
 
 jest.mock('../src/auth/oauth-handlers.js', () => ({
     refreshCodexTokensWithRetry: jest.fn()
@@ -19,7 +34,7 @@ jest.mock('../src/utils/proxy-utils.js', () => ({
 const services = [];
 
 function createService() {
-    const service = new CodexApiService({ MODEL_PROVIDER: 'openai-codex-oauth' });
+    const service = new CodexApiService({ MODEL_PROVIDER: 'openai-codex-oauth', CODEX_OVERLOAD_RETRY_DELAY_MS: 0 });
     services.push(service);
     return service;
 }
@@ -40,6 +55,7 @@ async function consumeStream(generator) {
 }
 
 afterEach(() => {
+    axios.request.mockReset();
     while (services.length > 0) {
         services.pop().stopCacheCleanup();
     }
@@ -107,6 +123,28 @@ describe('Codex terminal Responses errors', () => {
         expect(thrown.skipErrorCount).toBe(true);
     });
 
+    test('maps server overload to transient same-credential retry metadata', () => {
+        const service = createService();
+
+        let thrown;
+        try {
+            service.parseNonStreamResponse(JSON.stringify(failedEvent({
+                type: 'service_unavailable_error',
+                code: 'server_is_overloaded',
+                message: 'Our servers are currently overloaded. Please try again later.'
+            })));
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown.response.status).toBe(503);
+        expect(thrown.isCodexOverload).toBe(true);
+        expect(thrown.retrySameCredential).toBe(true);
+        expect(thrown.recordProviderForNextRequest).toBe(true);
+        expect(thrown.shouldSwitchCredential).not.toBe(true);
+        expect(thrown.skipErrorCount).toBe(true);
+    });
+
     test('parses data without a space and throws the final response.failed buffer', async () => {
         const service = createService();
         const payload = failedEvent({
@@ -135,5 +173,136 @@ describe('Codex terminal Responses errors', () => {
         const stream = Readable.from([`${JSON.stringify(completed)}\n`]);
 
         await expect(consumeStream(service.parseSSEStream(stream))).resolves.toEqual([completed]);
+    });
+
+    test('retries once on the same credential before surfacing overload', async () => {
+        const service = createService();
+        service.isInitialized = true;
+        service.accessToken = 'token';
+        service.accountId = 'account';
+
+        const overload = failedEvent({
+            type: 'service_unavailable_error',
+            code: 'server_is_overloaded',
+            message: 'Our servers are currently overloaded. Please try again later.'
+        });
+        const completed = { type: 'response.completed', response: { id: 'resp_2', output: [] } };
+
+        axios.request
+            .mockResolvedValueOnce({
+                data: Readable.from([
+                    `data:${JSON.stringify({ type: 'response.created', response: { id: 'resp_1' } })}\n`,
+                    `data:${JSON.stringify(overload)}\n`
+                ])
+            })
+            .mockResolvedValueOnce({
+                data: Readable.from([
+                    `data:${JSON.stringify({ type: 'response.created', response: { id: 'resp_2' } })}\n`,
+                    `data:${JSON.stringify({ type: 'response.output_text.delta', delta: 'ok' })}\n`,
+                    `data:${JSON.stringify(completed)}\n`
+                ])
+            });
+
+        await expect(consumeStream(service.generateContentStream('gpt-5.5', { input: 'hello' })))
+            .resolves.toEqual(expect.arrayContaining([
+                expect.objectContaining({ type: 'response.output_text.delta', delta: 'ok' }),
+                completed
+            ]));
+        expect(axios.request).toHaveBeenCalledTimes(2);
+    });
+
+    test('surfaces overload after exactly one same-credential retry and preserves response metadata', async () => {
+        const service = createService();
+        service.isInitialized = true;
+        service.accessToken = 'token';
+        service.accountId = 'account';
+
+        const overload = failedEvent({
+            type: 'service_unavailable_error',
+            code: 'server_is_overloaded',
+            message: 'Our servers are currently overloaded. Please try again later.'
+        });
+        axios.request
+            .mockResolvedValueOnce({
+                data: Readable.from([
+                    `data:${JSON.stringify({ type: 'response.created', response: { id: 'resp_first', created_at: 100, model: 'gpt-5.4-mini' } })}\n`,
+                    `data:${JSON.stringify(overload)}\n`
+                ])
+            })
+            .mockResolvedValueOnce({
+                data: Readable.from([
+                    `data:${JSON.stringify({ type: 'response.created', response: { id: 'resp_second', created_at: 200, model: 'gpt-5.4-mini' } })}\n`,
+                    `data:${JSON.stringify(overload)}\n`
+                ])
+            });
+
+        await expect(consumeStream(service.generateContentStream('gpt-5.5', { input: 'hello' })))
+            .rejects.toMatchObject({
+                isCodexOverload: true,
+                responseId: 'resp_second',
+                responseSnapshot: expect.objectContaining({
+                    id: 'resp_second',
+                    created_at: 200,
+                    model: 'gpt-5.4-mini'
+                })
+            });
+        expect(axios.request).toHaveBeenCalledTimes(2);
+    });
+
+    test('retries a non-stream request once on the same credential after overload', async () => {
+        const service = createService();
+        service.isInitialized = true;
+        service.accessToken = 'token';
+        service.accountId = 'account';
+
+        const overload = failedEvent({
+            type: 'service_unavailable_error',
+            code: 'server_is_overloaded',
+            message: 'Our servers are currently overloaded. Please try again later.'
+        });
+        const completed = { type: 'response.completed', response: { id: 'resp_non_stream', output: [] } };
+
+        axios.request
+            .mockResolvedValueOnce({ data: `data:${JSON.stringify(overload)}` })
+            .mockResolvedValueOnce({ data: `data:${JSON.stringify(completed)}` });
+
+        await expect(service.generateContent('gpt-5.5', { input: 'hello' })).resolves.toEqual(completed);
+        expect(axios.request).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not retry the same credential after visible output was emitted', async () => {
+        const service = createService();
+        service.isInitialized = true;
+        service.accessToken = 'token';
+        service.accountId = 'account';
+
+        const overload = failedEvent({
+            type: 'service_unavailable_error',
+            code: 'server_is_overloaded',
+            message: 'Our servers are currently overloaded. Please try again later.'
+        });
+        axios.request.mockResolvedValueOnce({
+            data: Readable.from([
+                `data:${JSON.stringify({ type: 'response.created', response: { id: 'resp_partial' } })}\n`,
+                `data:${JSON.stringify({ type: 'response.output_text.delta', delta: 'partial' })}\n`,
+                `data:${JSON.stringify(overload)}\n`
+            ])
+        });
+
+        const events = [];
+        let thrown;
+        try {
+            for await (const event of service.generateContentStream('gpt-5.5', { input: 'hello' })) {
+                events.push(event);
+            }
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(events).toEqual(expect.arrayContaining([
+            expect.objectContaining({ type: 'response.output_text.delta', delta: 'partial' })
+        ]));
+        expect(thrown).toMatchObject({ isCodexOverload: true, responseId: 'resp_partial' });
+        expect(axios.request).toHaveBeenCalledTimes(1);
     });
 });

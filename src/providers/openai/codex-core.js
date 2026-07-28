@@ -67,6 +67,11 @@ function shouldSwitchCodexCredential(errorBody) {
         isCodexModelCapacityError(errorBody);
 }
 
+function isCodexOverloadErrorBody(errorBody) {
+    return String(errorBody?.code || '').trim().toLowerCase() === 'server_is_overloaded' ||
+        String(errorBody?.type || '').trim().toLowerCase() === 'service_unavailable_error';
+}
+
 function parseCodexRetryAfterMs(errorBody) {
     const resetsAt = Number(errorBody?.resets_at);
     if (Number.isFinite(resetsAt) && resetsAt > 0) {
@@ -86,11 +91,25 @@ function createCodexTerminalError(parsed) {
     if (!errorBody) return null;
 
     const isRetryableLimit = isCodexUsageLimitError(errorBody) || isCodexModelCapacityError(errorBody);
+    const isOverload = isCodexOverloadErrorBody(errorBody);
     const error = new Error(`Codex API error: ${errorBody.message}`);
     error.response = {
-        status: isRetryableLimit ? 429 : 400,
+        status: isOverload ? 503 : (isRetryableLimit ? 429 : 400),
         data: { error: errorBody }
     };
+    if (parsed.response && typeof parsed.response === 'object') {
+        error.responseSnapshot = { ...parsed.response };
+        if (parsed.response.id) {
+            error.responseId = parsed.response.id;
+        }
+    }
+
+    if (isOverload) {
+        error.isCodexOverload = true;
+        error.retrySameCredential = true;
+        error.recordProviderForNextRequest = true;
+        error.skipErrorCount = true;
+    }
 
     if (shouldSwitchCodexCredential(errorBody)) {
         error.shouldSwitchCredential = true;
@@ -116,6 +135,10 @@ function extractSSEData(line) {
         return trimmedLine.slice(5).trim();
     }
     return trimmedLine;
+}
+
+function isCodexPreludeEvent(event) {
+    return event?.type === 'response.created' || event?.type === 'response.in_progress';
 }
 
 function applyImageToolOptions(imageToolConfig, options) {
@@ -333,38 +356,54 @@ export class CodexApiService {
         const body = await this.prepareRequestBody(selectedModel, requestBody, true);
         const headers = this.buildHeaders(body.prompt_cache_key, true);
 
-        try {
-            const config = {
-                headers,
-                responseType: 'text', // 确保以文本形式接收 SSE 流
-                timeout: 300000 // 5 分钟超时，适应慢速模型
-            };
+        let overloadRetryCount = 0;
+        while (true) {
+            try {
+                const config = {
+                    headers,
+                    responseType: 'text', // 确保以文本形式接收 SSE 流
+                    timeout: 300000 // 5 分钟超时，适应慢速模型
+                };
 
-            const axiosRequestConfig = {
-                method: 'post',
-                url,
-                data: body,
-                ...config
-            };
-            this._applySidecar(axiosRequestConfig);
+                const axiosRequestConfig = {
+                    method: 'post',
+                    url,
+                    data: body,
+                    ...config
+                };
+                this._applySidecar(axiosRequestConfig);
 
-            const response = await axios.request(axiosRequestConfig);
+                const response = await axios.request(axiosRequestConfig);
 
-            return this.parseNonStreamResponse(response.data);
-        } catch (error) {
-            if (error.response?.status === 401) {
-                logger.info('[Codex] Received 401. Triggering background refresh...');
-                await normalizeProviderErrorMessage(error, { status: 401, context: 'non-stream' });
+                return this.parseNonStreamResponse(response.data);
+            } catch (error) {
+                if (error.isCodexOverload && !error.responseModel) {
+                    error.responseModel = selectedModel;
+                }
+                if (error.isCodexOverload && overloadRetryCount < 1) {
+                    overloadRetryCount += 1;
+                    const delayMs = Number(this.config.CODEX_OVERLOAD_RETRY_DELAY_MS ?? 800);
+                    logger.warn(`[Codex] Upstream overloaded; retrying same credential once after ${delayMs}ms`);
+                    if (delayMs > 0) {
+                        await new Promise(resolve => setTimeout(resolve, delayMs));
+                    }
+                    continue;
+                }
 
-                // 触发后台异步刷新
-                this.triggerBackgroundRefresh();
-                error.credentialMarkedUnhealthy = true;
+                if (error.response?.status === 401) {
+                    logger.info('[Codex] Received 401. Triggering background refresh...');
+                    await normalizeProviderErrorMessage(error, { status: 401, context: 'non-stream' });
 
-                // Mark error for credential switch without recording error count
-                error.shouldSwitchCredential = true;
-                error.skipErrorCount = true;
-                throw error;
-            } else {
+                    // 触发后台异步刷新
+                    this.triggerBackgroundRefresh();
+                    error.credentialMarkedUnhealthy = true;
+
+                    // Mark error for credential switch without recording error count
+                    error.shouldSwitchCredential = true;
+                    error.skipErrorCount = true;
+                    throw error;
+                }
+
                 if (error.response?.status) {
                     await normalizeProviderErrorMessage(error, { status: error.response.status, context: 'non-stream' });
                 }
@@ -409,38 +448,89 @@ export class CodexApiService {
         const body = await this.prepareRequestBody(selectedModel, requestBody, true);
         const headers = this.buildHeaders(body.prompt_cache_key, true);
 
-        try {
-            const config = {
-                headers,
-                responseType: 'stream',
-                timeout: 300000 // 5 分钟超时
-            };
+        let overloadRetryCount = 0;
+        while (true) {
+            const bufferedPrelude = [];
+            let responseId = null;
+            let responseSnapshot = null;
+            let hasVisibleOutput = false;
+            try {
+                const config = {
+                    headers,
+                    responseType: 'stream',
+                    timeout: 300000 // 5 分钟超时
+                };
 
-            const axiosRequestConfig = {
-                method: 'post',
-                url,
-                data: body,
-                ...config
-            };
-            this._applySidecar(axiosRequestConfig);
+                const axiosRequestConfig = {
+                    method: 'post',
+                    url,
+                    data: body,
+                    ...config
+                };
+                this._applySidecar(axiosRequestConfig);
 
-            const response = await axios.request(axiosRequestConfig);
+                const response = await axios.request(axiosRequestConfig);
 
-            yield* this.parseSSEStream(response.data);
-        } catch (error) {
-            if (error.response?.status === 401) {
-                logger.info('[Codex] Received 401 during stream. Triggering background refresh...');
-                await normalizeProviderErrorMessage(error, { status: 401, context: 'stream' });
+                for await (const event of this.parseSSEStream(response.data)) {
+                    if (event?.response?.id) {
+                        responseId = event.response.id;
+                    }
+                    if (event?.response && typeof event.response === 'object') {
+                        responseSnapshot = { ...event.response };
+                    }
+                    if (isCodexPreludeEvent(event)) {
+                        bufferedPrelude.push(event);
+                        continue;
+                    }
 
-                // 触发后台异步刷新
-                this.triggerBackgroundRefresh();
-                error.credentialMarkedUnhealthy = true;
+                    while (bufferedPrelude.length > 0) {
+                        yield bufferedPrelude.shift();
+                    }
+                    hasVisibleOutput = true;
+                    yield event;
+                }
 
-                // Mark error for credential switch without recording error count
-                error.shouldSwitchCredential = true;
-                error.skipErrorCount = true;
-                throw error;
-            } else {
+                while (bufferedPrelude.length > 0) {
+                    yield bufferedPrelude.shift();
+                }
+                return;
+            } catch (error) {
+                if (responseSnapshot) {
+                    error.responseSnapshot = {
+                        ...responseSnapshot,
+                        ...(error.responseSnapshot || {})
+                    };
+                }
+                if (responseId && !error.responseId) {
+                    error.responseId = responseId;
+                }
+                if (error.isCodexOverload && !error.responseModel) {
+                    error.responseModel = selectedModel;
+                }
+                if (error.isCodexOverload && !hasVisibleOutput && overloadRetryCount < 1) {
+                    overloadRetryCount += 1;
+                    const delayMs = Number(this.config.CODEX_OVERLOAD_RETRY_DELAY_MS ?? 800);
+                    logger.warn(`[Codex] Upstream overloaded; retrying same credential once after ${delayMs}ms`);
+                    if (delayMs > 0) {
+                        await new Promise(resolve => setTimeout(resolve, delayMs));
+                    }
+                    continue;
+                }
+
+                if (error.response?.status === 401) {
+                    logger.info('[Codex] Received 401 during stream. Triggering background refresh...');
+                    await normalizeProviderErrorMessage(error, { status: 401, context: 'stream' });
+
+                    // 触发后台异步刷新
+                    this.triggerBackgroundRefresh();
+                    error.credentialMarkedUnhealthy = true;
+
+                    // Mark error for credential switch without recording error count
+                    error.shouldSwitchCredential = true;
+                    error.skipErrorCount = true;
+                    throw error;
+                }
+
                 if (error.response?.status) {
                     await normalizeProviderErrorMessage(error, { status: error.response.status, context: 'stream' });
                 }
