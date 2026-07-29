@@ -121,6 +121,8 @@ describe('Codex terminal Responses errors', () => {
         expect(thrown.response.status).toBe(429);
         expect(thrown.shouldSwitchCredential).toBe(true);
         expect(thrown.skipErrorCount).toBe(true);
+        expect(thrown.isCodexModelCapacity).toBe(true);
+        expect(thrown.origin).toBe('upstream_codex');
     });
 
     test('maps server overload to transient same-credential retry metadata', () => {
@@ -141,8 +143,9 @@ describe('Codex terminal Responses errors', () => {
         expect(thrown.isCodexOverload).toBe(true);
         expect(thrown.retrySameCredential).toBe(true);
         expect(thrown.recordProviderForNextRequest).toBe(true);
-        expect(thrown.shouldSwitchCredential).not.toBe(true);
+        expect(thrown.shouldSwitchCredential).toBe(true);
         expect(thrown.skipErrorCount).toBe(true);
+        expect(thrown.origin).toBe('upstream_codex');
     });
 
     test('parses data without a space and throws the final response.failed buffer', async () => {

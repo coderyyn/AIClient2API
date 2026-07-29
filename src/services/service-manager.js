@@ -835,6 +835,20 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             });
             selectedResult = await selectFromPool(fallbackSelectionOptions);
         }
+
+        // 请求内瞬态错误重试会先排除已尝试的凭证以优先覆盖其他账号。
+        // 若全部已尝试凭证仍然满足标准号池调度条件，则允许重新进入选择器循环；
+        // 不直接指定凭证，因此健康、额度、冷却、模型支持和并发限制仍会完整生效。
+        if (!selectedResult && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
+            logger.info(`[Credential Retry] No untried provider available; retrying standard selection with previously tried providers eligible again`);
+            const retrySelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                ...options,
+                requestedModel: actualModelName,
+                preferredProviderUuid: null,
+                excludeProviderUuids: []
+            });
+            selectedResult = await selectFromPool(retrySelectionOptions);
+        }
         
         if (selectedResult) {
             const { config: selectedProviderConfig, actualProviderType: selectedType, isFallback: fallbackUsed, actualModel: fallbackModel } = selectedResult;

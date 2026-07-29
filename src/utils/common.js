@@ -12,6 +12,7 @@ import {
     codexOverloadFailoverStore,
     resolveCodexOverloadFailoverKey
 } from '../providers/openai/codex-overload-failover.js';
+import { codexTransientRetryObservability } from '../providers/openai/codex-transient-observability.js';
 
 // ==================== 时间与时区 ====================
 
@@ -77,6 +78,23 @@ export function ensureValidStatusCode(code) {
 
 function getErrorStatusCode(error) {
     return error?.response?.status || error?.status || error?.statusCode || error?.code || null;
+}
+
+function isCodexTransientCredentialError(error) {
+    return error?.isCodexOverload === true || error?.isCodexModelCapacity === true;
+}
+
+function getClientFacingErrorMessage(error, fallbackMessage) {
+    if (error?.isCodexModelCapacity === true) {
+        return '[上游 Codex] 所选模型当前容量不足，已自动重试可用凭证后仍不可用，请稍后重试';
+    }
+    if (error?.isCodexOverload === true) {
+        return '[上游 Codex] 服务当前繁忙，已自动重试可用凭证后仍不可用，请稍后重试';
+    }
+    if (error?.origin === 'upstream_codex') {
+        return fallbackMessage;
+    }
+    return '[2API 内部] 服务处理请求失败，请稍后重试';
 }
 
 function getHttpStatusLabel(status) {
@@ -1342,6 +1360,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 凭证已被标记为不健康后，尝试切换到新凭证重试
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
+            const isCodexTransient = isCodexTransientCredentialError(error);
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
@@ -1350,20 +1369,39 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 ...(retryContext?.failedProviderTypes || []),
                 toProvider
             ].filter(Boolean);
-            // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
-            const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
+            // Codex 上游容量/过载已由服务端进行受控轮转，避免额外等待；其他类型保留原有抖动。
+            const randomDelay = isCodexTransient ? 0 : Math.floor(Math.random() * 10000);
             logger.info(`[Stream Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
             
             try {
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
+                const selectionDiagnostics = {};
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
                     excludeProviderUuids: failedCredentialUuids,
-                    deprioritizeProviderTypes: failedProviderTypes
+                    deprioritizeProviderTypes: failedProviderTypes,
+                    allowExcludedProviderFallback: isCodexTransient,
+                    selectionDiagnostics
                 });
+                if (isCodexTransient) {
+                    codexTransientRetryObservability.record({
+                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        model,
+                        providerUuid: pooluuid,
+                        attempt: currentRetry + 1,
+                        maxRetries,
+                        eligibleCandidateCount: selectionDiagnostics.eligibleCandidateCount,
+                        outcome: result?.service ? 'switch' : 'exhausted',
+                        reused: Boolean(result?.uuid && failedCredentialUuids.includes(result.uuid)),
+                        noEligible: !result?.service,
+                        skipReasons: selectionDiagnostics.filterReasons,
+                        healthCooldownSkipped: selectionDiagnostics.healthCooldownSkipped,
+                        concurrencyLimitSkipped: selectionDiagnostics.concurrencyLimitSkipped
+                    });
+                }
                 
                 if (result && result.service) {
                     logger.info(`[Stream Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -1401,6 +1439,18 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     logger.info(`[Stream Retry] No healthy credential available for retry.`);
                 }
             } catch (retryError) {
+                if (isCodexTransient) {
+                    codexTransientRetryObservability.record({
+                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        model,
+                        providerUuid: pooluuid,
+                        attempt: currentRetry + 1,
+                        maxRetries,
+                        outcome: 'exhausted',
+                        noEligible: true,
+                        skipReasons: retryError.filterReasons
+                    });
+                }
                 logger.error(`[Stream Retry] Failed to get alternative service:`, retryError.message);
             }
         }
@@ -1596,6 +1646,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 凭证已被标记为不健康后，尝试切换到新凭证重试
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
+            const isCodexTransient = isCodexTransientCredentialError(error);
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
@@ -1604,20 +1655,39 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 ...(retryContext?.failedProviderTypes || []),
                 toProvider
             ].filter(Boolean);
-            // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
-            const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
+            // Codex 上游容量/过载已由服务端进行受控轮转，避免额外等待；其他类型保留原有抖动。
+            const randomDelay = isCodexTransient ? 0 : Math.floor(Math.random() * 10000);
             logger.info(`[Unary Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
             
             try {
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
+                const selectionDiagnostics = {};
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
                     excludeProviderUuids: failedCredentialUuids,
-                    deprioritizeProviderTypes: failedProviderTypes
+                    deprioritizeProviderTypes: failedProviderTypes,
+                    allowExcludedProviderFallback: isCodexTransient,
+                    selectionDiagnostics
                 });
+                if (isCodexTransient) {
+                    codexTransientRetryObservability.record({
+                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        model,
+                        providerUuid: pooluuid,
+                        attempt: currentRetry + 1,
+                        maxRetries,
+                        eligibleCandidateCount: selectionDiagnostics.eligibleCandidateCount,
+                        outcome: result?.service ? 'switch' : 'exhausted',
+                        reused: Boolean(result?.uuid && failedCredentialUuids.includes(result.uuid)),
+                        noEligible: !result?.service,
+                        skipReasons: selectionDiagnostics.filterReasons,
+                        healthCooldownSkipped: selectionDiagnostics.healthCooldownSkipped,
+                        concurrencyLimitSkipped: selectionDiagnostics.concurrencyLimitSkipped
+                    });
+                }
                 
                 if (result && result.service) {
                     logger.info(`[Unary Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -1653,6 +1723,18 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     logger.info(`[Unary Retry] No healthy credential available for retry.`);
                 }
             } catch (retryError) {
+                if (isCodexTransient) {
+                    codexTransientRetryObservability.record({
+                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        model,
+                        providerUuid: pooluuid,
+                        attempt: currentRetry + 1,
+                        maxRetries,
+                        outcome: 'exhausted',
+                        noEligible: true,
+                        skipReasons: retryError.filterReasons
+                    });
+                }
                 logger.error(`[Unary Retry] Failed to get alternative service:`, retryError.message);
             }
         }
@@ -2477,7 +2559,7 @@ function createErrorResponse(error, fromProvider) {
     const protocolPrefix = getProtocolPrefix(fromProvider);
     const rawStatusCode = error.status || error.code || 500;
     const statusCode = ensureValidStatusCode(rawStatusCode);
-    const errorMessage = error.message || "An error occurred during processing.";
+    const errorMessage = getClientFacingErrorMessage(error, error.message || "An error occurred during processing.");
     
     // 根据 HTTP 状态码映射错误类型
     const getErrorType = (code) => {
@@ -2562,7 +2644,7 @@ export function createStreamErrorResponse(error, fromProvider) {
     const protocolPrefix = getProtocolPrefix(fromProvider);
     const rawStatusCode = error.response?.status || error.status || error.statusCode || error.code || 500;
     const statusCode = ensureValidStatusCode(rawStatusCode);
-    const errorMessage = error.message || "An error occurred during streaming.";
+    const errorMessage = getClientFacingErrorMessage(error, error.message || "An error occurred during streaming.");
     
     // 根据 HTTP 状态码映射错误类型
     const getErrorType = (code) => {
@@ -2598,7 +2680,7 @@ export function createStreamErrorResponse(error, fromProvider) {
             
         case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
             // OpenAI Responses API 流式错误格式（SSE event + data）
-            if (error.isCodexOverload) {
+            if (error.isCodexOverload || error.isCodexModelCapacity) {
                 const upstreamError = error.response?.data?.error || {};
                 const responseSnapshot = error.responseSnapshot && typeof error.responseSnapshot === 'object'
                     ? error.responseSnapshot
@@ -2606,7 +2688,7 @@ export function createStreamErrorResponse(error, fromProvider) {
                 const responseId = error.responseId || responseSnapshot.id || `resp_failed_${Date.now()}`;
                 const responseError = {
                     code: upstreamError.code || 'server_is_overloaded',
-                    message: '上游 Codex 服务当前繁忙，请稍后重试'
+                    message: errorMessage
                 };
                 const failedEvent = {
                     type: 'response.failed',

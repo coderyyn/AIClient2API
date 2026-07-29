@@ -93,6 +93,7 @@ function createCodexTerminalError(parsed) {
     const isRetryableLimit = isCodexUsageLimitError(errorBody) || isCodexModelCapacityError(errorBody);
     const isOverload = isCodexOverloadErrorBody(errorBody);
     const error = new Error(`Codex API error: ${errorBody.message}`);
+    error.origin = 'upstream_codex';
     error.response = {
         status: isOverload ? 503 : (isRetryableLimit ? 429 : 400),
         data: { error: errorBody }
@@ -108,7 +109,12 @@ function createCodexTerminalError(parsed) {
         error.isCodexOverload = true;
         error.retrySameCredential = true;
         error.recordProviderForNextRequest = true;
+        error.shouldSwitchCredential = true;
         error.skipErrorCount = true;
+    }
+
+    if (isCodexModelCapacityError(errorBody)) {
+        error.isCodexModelCapacity = true;
     }
 
     if (shouldSwitchCodexCredential(errorBody)) {
@@ -377,6 +383,7 @@ export class CodexApiService {
 
                 return this.parseNonStreamResponse(response.data);
             } catch (error) {
+                error.origin = error.origin || 'upstream_codex';
                 if (error.isCodexOverload && !error.responseModel) {
                     error.responseModel = selectedModel;
                 }
@@ -495,6 +502,7 @@ export class CodexApiService {
                 }
                 return;
             } catch (error) {
+                error.origin = error.origin || 'upstream_codex';
                 if (responseSnapshot) {
                     error.responseSnapshot = {
                         ...responseSnapshot,

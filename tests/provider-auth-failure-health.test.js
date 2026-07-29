@@ -40,6 +40,7 @@ class FakeResponse extends EventEmitter {
 
 function createInvalidatedCodexTokenError() {
     const error = new Error('401 Unauthorized (non-stream): Your authentication token has been invalidated. Please try signing in again.');
+    error.origin = 'upstream_codex';
     error.response = {
         status: 401,
         data: {
@@ -137,7 +138,7 @@ describe('provider auth failure health marking', () => {
 
         expect(res.body).toContain('event: response.failed');
         expect(res.body).toContain('server_is_overloaded');
-        expect(res.body).toContain('上游 Codex 服务当前繁忙，请稍后重试');
+        expect(res.body).toContain('[上游 Codex] 服务当前繁忙，已自动重试可用凭证后仍不可用，请稍后重试');
         expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
         expect(providerPoolManager.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
         expect(codexOverloadFailoverStore.getPendingExclusion(failoverKey)).toBe('codex-provider-overloaded');
@@ -185,6 +186,7 @@ describe('provider auth failure health marking', () => {
 
     test('emits a terminal Responses API error event for an upstream 400 before the first stream chunk', async () => {
         const error = new Error("400 Bad Request (stream): Invalid Value: 'tools'. Function 'image_gen.imagegen' conflicts with a hosted tool in the same request.");
+        error.origin = 'upstream_codex';
         error.response = {
             status: 400,
             data: {

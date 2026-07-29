@@ -102,4 +102,52 @@ describe('Codex overload service routing', () => {
         expect(codexOverloadFailoverStore.getPendingExclusion(failoverKey)).toBeNull();
         manager.releaseSlot(providerType, result.uuid);
     });
+
+    test('cycles through normally schedulable credentials after every credential was tried once', async () => {
+        const config = createConfig(['codex-a', 'codex-b']);
+        await initApiService(config);
+        const manager = getProviderPoolManager();
+
+        const firstRetry = await getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            excludeProviderUuids: ['codex-a'],
+            allowExcludedProviderFallback: true
+        });
+        expect(firstRetry.uuid).toBe('codex-b');
+        manager.releaseSlot(providerType, firstRetry.uuid);
+
+        const secondRetry = await getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            excludeProviderUuids: ['codex-a', 'codex-b'],
+            allowExcludedProviderFallback: true
+        });
+        expect(secondRetry.uuid).toBe('codex-a');
+        manager.releaseSlot(providerType, secondRetry.uuid);
+
+        const thirdRetry = await getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            excludeProviderUuids: ['codex-a', 'codex-b'],
+            allowExcludedProviderFallback: true
+        });
+        expect(thirdRetry.uuid).toBe('codex-b');
+        manager.releaseSlot(providerType, thirdRetry.uuid);
+    });
+
+    test('does not reintroduce credentials that are unhealthy or have no concurrency capacity', async () => {
+        const config = createConfig(['codex-a', 'codex-b']);
+        config.providerPools[providerType][0].concurrencyLimit = 1;
+        config.providerPools[providerType][1].concurrencyLimit = 1;
+        await initApiService(config);
+        const manager = getProviderPoolManager();
+        const providerA = manager.providerStatus[providerType].find(provider => provider.uuid === 'codex-a');
+        const providerB = manager.providerStatus[providerType].find(provider => provider.uuid === 'codex-b');
+        providerA.config.isHealthy = false;
+        providerB.state.activeCount = 1;
+
+        await expect(getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            excludeProviderUuids: ['codex-a', 'codex-b'],
+            allowExcludedProviderFallback: true
+        })).rejects.toThrow('No healthy provider found');
+    });
 });

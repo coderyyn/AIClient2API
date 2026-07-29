@@ -76,7 +76,7 @@ describe('Codex overload cross-request failover', () => {
 
         expect(payload).toContain('event: response.failed');
         expect(payload).toContain('server_is_overloaded');
-        expect(payload).toContain('上游 Codex 服务当前繁忙，请稍后重试');
+        expect(payload).toContain('[上游 Codex] 服务当前繁忙，已自动重试可用凭证后仍不可用，请稍后重试');
         const failedEvent = JSON.parse(payload.split('\n').find(line => line.startsWith('data: ')).slice(6));
         expect(failedEvent.response).toEqual(expect.objectContaining({
             id: 'resp_upstream',
@@ -88,5 +88,27 @@ describe('Codex overload cross-request failover', () => {
             output: [],
             tools: []
         }));
+    });
+
+    test('formats upstream model capacity as a Responses response.failed event', () => {
+        const payload = createStreamErrorResponse({
+            isCodexModelCapacity: true,
+            origin: 'upstream_codex',
+            response: {
+                status: 429,
+                data: { error: { code: 'server_is_overloaded' } }
+            }
+        }, 'openaiResponses');
+
+        expect(payload).toContain('event: response.failed');
+        expect(payload).toContain('server_is_overloaded');
+        expect(payload).toContain('[上游 Codex] 所选模型当前容量不足，已自动重试可用凭证后仍不可用，请稍后重试');
+    });
+
+    test('labels unclassified streaming errors as 2API internal errors', () => {
+        const payload = createStreamErrorResponse(new Error('converter exploded'), 'openaiResponses');
+
+        expect(payload).toContain('[2API 内部] 服务处理请求失败，请稍后重试');
+        expect(payload).not.toContain('converter exploded');
     });
 });

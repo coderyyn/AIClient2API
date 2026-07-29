@@ -1390,7 +1390,7 @@ export class ProviderPoolManager {
         }
 
         if (isCodexProviderType(providerType) && candidates.length > 0) {
-            candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates, requestedModel);
+            candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates, requestedModel, options.selectionDiagnostics);
         }
 
         return candidates;
@@ -2001,6 +2001,10 @@ export class ProviderPoolManager {
      */
     _doSelectProvider(providerType, requestedModel, options) {
         const availableProviders = this.providerStatus[providerType] || [];
+        const selectionDiagnostics = options.selectionDiagnostics;
+        if (selectionDiagnostics) {
+            selectionDiagnostics.totalCandidateCount = availableProviders.length;
+        }
         
         // 检查并恢复已到恢复时间的提供商
         this._checkAndRecoverScheduledProviders(providerType);
@@ -2014,6 +2018,9 @@ export class ProviderPoolManager {
         let availableAndHealthyProviders = availableProviders.filter(p =>
             p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
         );
+        if (selectionDiagnostics) {
+            selectionDiagnostics.healthCooldownSkipped = availableProviders.length - availableAndHealthyProviders.length;
+        }
 
         const excludedProviderUuids = new Set(options.excludeProviderUuids || []);
         if (excludedProviderUuids.size > 0) {
@@ -2053,7 +2060,23 @@ export class ProviderPoolManager {
         }
 
         if (isCodexProviderType(providerType)) {
-            availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders, requestedModel);
+            availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders, requestedModel, selectionDiagnostics);
+        }
+
+        if (options.acquireSlot === true) {
+            const beforeConcurrencyFilter = availableAndHealthyProviders.length;
+            availableAndHealthyProviders = availableAndHealthyProviders.filter(provider => this._hasAcquireCapacity(provider));
+            if (selectionDiagnostics) {
+                selectionDiagnostics.concurrencyLimitSkipped = beforeConcurrencyFilter - availableAndHealthyProviders.length;
+            }
+        }
+        if (selectionDiagnostics) {
+            selectionDiagnostics.eligibleCandidateCount = availableAndHealthyProviders.length;
+        }
+
+        if (availableAndHealthyProviders.length === 0) {
+            this._log('warn', `No normally schedulable providers for type: ${providerType}`);
+            return null;
         }
 
         let selected;
@@ -2129,7 +2152,7 @@ export class ProviderPoolManager {
         return selected.config;
     }
 
-    _filterCodexProvidersByTokenQuota(providerType, providers, requestedModel = null) {
+    _filterCodexProvidersByTokenQuota(providerType, providers, requestedModel = null, selectionDiagnostics = null) {
         let limitedCount = 0;
         const allowed = [];
         const filterReasons = {};
@@ -2205,6 +2228,13 @@ export class ProviderPoolManager {
 
         if (updatedLastKnownPlan) {
             this._debouncedSave(providerType);
+        }
+
+        if (selectionDiagnostics) {
+            selectionDiagnostics.filterReasons = {
+                ...(selectionDiagnostics.filterReasons || {}),
+                ...filterReasons
+            };
         }
 
         return allowed;
