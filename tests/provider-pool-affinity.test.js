@@ -106,6 +106,17 @@ afterEach(() => {
 });
 
 describe('provider pool sticky affinity', () => {
+    test('uses a 60-minute, 100-request default threshold for hot Codex affinity keys', () => {
+        const manager = createCodexPoolManager();
+        const config = manager._getCodexStickyHotShardConfig();
+
+        clearTimeout(manager.saveTimer);
+        expect(config).toMatchObject({
+            windowMs: 60 * 60 * 1000,
+            minRequests: 100
+        });
+    });
+
     test('selects the same healthy Codex provider for the same affinity key', async () => {
         const manager = createCodexPoolManager();
 

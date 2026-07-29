@@ -47,6 +47,28 @@ describe('request audit event', () => {
     expect(event).not.toHaveProperty('contextBreakdown');
   });
 
+  test('records only one-way hashes for Codex cache affinity identifiers', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-cache-affinity',
+      model: 'gpt-5.5-codex',
+      _codexCacheAffinityScope: {
+        promptCacheKey: 'prompt-cache-private-value',
+        threadId: 'thread-private-value',
+        sessionId: 'session-private-value'
+      }
+    });
+
+    expect(event).toMatchObject({
+      prompt_cache_key_hash: expect.stringMatching(/^sha256:[a-f0-9]{32}$/),
+      thread_id_hash: expect.stringMatching(/^sha256:[a-f0-9]{32}$/),
+      session_id_hash: expect.stringMatching(/^sha256:[a-f0-9]{32}$/)
+    });
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain('prompt-cache-private-value');
+    expect(serialized).not.toContain('thread-private-value');
+    expect(serialized).not.toContain('session-private-value');
+  });
+
   test('keeps requested and actual model when server-side model fallback is used', () => {
     const event = buildRequestAuditEvent({
       requestId: 'req-model-fallback',

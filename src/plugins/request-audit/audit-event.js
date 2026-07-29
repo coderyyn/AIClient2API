@@ -93,6 +93,7 @@ export function buildRequestAuditEvent(context = {}) {
     const usage = normalizeUsage(context.usage);
     const actualModel = context.model || context.processedRequestBody?.model || context.originalRequestBody?.model || 'unknown';
     const requestedModel = context.originalRequestBody?.model || actualModel;
+    const cacheAffinityScope = context._codexCacheAffinityScope || {};
 
     return {
         schemaVersion: 1,
@@ -100,6 +101,9 @@ export function buildRequestAuditEvent(context = {}) {
         beijingDate: beijing.date,
         beijingHour: beijing.hour,
         requestId: context.requestId || context._monitorRequestId || null,
+        prompt_cache_key_hash: hashSecret(cacheAffinityScope.promptCacheKey, 32),
+        thread_id_hash: hashSecret(cacheAffinityScope.threadId, 32),
+        session_id_hash: hashSecret(cacheAffinityScope.sessionId, 32),
         request: {
             method: context.method || 'POST',
             path: context.path || context.requestPath || null,
