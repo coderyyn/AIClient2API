@@ -49,11 +49,15 @@ export const PROVIDER_MODELS = {
         'gemini-3.1-pro-preview',
         'gemini-3.1-flash-lite-preview',
         'gemini-3.5-flash',
+        'gemini-3.6-flash',
     ],
     'gemini-antigravity': [
         'gemini-3-flash',
         'gemini-3.5-flash-low',
         'gemini-3.5-flash-high',
+        'gemini-3.6-flash',
+        'gemini-3.6-flash-low',
+        'gemini-3.6-flash-high',
         'gemini-3.1-pro-low',
         'gemini-3.1-pro-high',
         'gemini-3.1-flash-image',
@@ -68,6 +72,7 @@ export const PROVIDER_MODELS = {
     'claude-kiro-oauth': [
         'claude-haiku-4-5',
         'claude-haiku-4-5-20251001',
+        'claude-opus-5',
         'claude-opus-4-8',
         'claude-opus-4-7',
         'claude-opus-4-6',
