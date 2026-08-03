@@ -968,6 +968,47 @@ function renderCodexAuthProxySection({ proxyOptionsHtml, loadError, currentProxy
     `;
 }
 
+function renderGeminiAuthProxySection(choices) {
+    return renderCodexAuthProxySection(choices)
+        .replaceAll('codexAuth', 'geminiAuth')
+        .replace(t('oauth.codex.proxyLabel'), t('oauth.gemini.proxyLabel'))
+        .replace(t('oauth.codex.proxyTest'), t('oauth.gemini.proxyTest'));
+}
+
+function bindGeminiAuthProxyControls(modal, proxies = [], options = {}) {
+    const select = modal.querySelector('#geminiAuthProxySelect');
+    const resultEl = modal.querySelector('#geminiAuthProxyTestResult');
+    const testButton = modal.querySelector('#geminiAuthProxyTestButton');
+    const startButton = options.startButton || null;
+    const methodButtons = Array.from(modal.querySelectorAll('.auth-method-btn'));
+    const preserveExistingProxy = options.preserveExistingProxy === true;
+    let busy = false;
+    let testing = false;
+    const update = () => {
+        const unavailable = select?.selectedOptions?.[0]?.disabled === true;
+        if (select) select.disabled = busy || testing || preserveExistingProxy;
+        if (testButton) testButton.disabled = busy || testing || preserveExistingProxy || !select?.value || unavailable;
+        if (startButton) startButton.disabled = busy || testing || unavailable;
+        methodButtons.forEach(button => { button.disabled = busy || testing; });
+    };
+    select?.addEventListener('change', () => {
+        if (resultEl) { resultEl.style.display = 'none'; resultEl.innerHTML = ''; }
+        update();
+    });
+    testButton?.addEventListener('click', async () => {
+        testing = true;
+        update();
+        try { await testGeminiAuthProxy(modal, proxies); }
+        finally { testing = false; update(); }
+    });
+    update();
+    return {
+        preserveExistingProxy,
+        getProxyId: () => select?.value || '',
+        setBusy: value => { busy = value === true; update(); }
+    };
+}
+
 function bindCodexAuthProxyControls(modal, proxies = [], options = {}) {
     const select = modal.querySelector('#codexAuthProxySelect');
     const resultEl = modal.querySelector('#codexAuthProxyTestResult');
@@ -1304,6 +1345,39 @@ async function testCodexAuthProxy(modal, proxies = []) {
         ${renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp, serverError, expectedIp)}
     `;
 
+    button.innerHTML = originalHtml;
+}
+
+async function testGeminiAuthProxy(modal, proxies = []) {
+    const select = modal.querySelector('#geminiAuthProxySelect');
+    const resultEl = modal.querySelector('#geminiAuthProxyTestResult');
+    const button = modal.querySelector('#geminiAuthProxyTestButton');
+    const proxyId = select?.value || '';
+    const selectedOption = select?.selectedOptions?.[0] || null;
+    const selectedProxy = proxies.find(proxy => proxy.id === proxyId) || {};
+    const expectedIp = selectedOption?.dataset?.expectedIp || selectedProxy.expectedIp || '';
+    if (!resultEl || !button || !proxyId) return;
+
+    resultEl.style.display = 'block';
+    const originalHtml = button.innerHTML;
+    button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('oauth.codex.proxyTesting')}`;
+    const [browserProbe, serverProbe] = await Promise.allSettled([
+        fetchBrowserExitIp(),
+        window.apiClient.post('/proxy-pools/test', { proxyId })
+    ]);
+    const browserIp = browserProbe.status === 'fulfilled' ? browserProbe.value : '';
+    const browserError = browserProbe.status === 'rejected' ? browserProbe.reason?.message : '';
+    const serverResult = serverProbe.status === 'fulfilled' ? serverProbe.value : null;
+    const serverIp = String(serverResult?.ip || '').trim();
+    const serverError = serverProbe.status === 'rejected'
+        ? serverProbe.reason?.message
+        : (serverResult?.ok === false ? serverResult?.error?.message : '');
+    resultEl.style.background = '#eff6ff';
+    resultEl.style.border = '1px solid #bfdbfe';
+    resultEl.innerHTML = `
+        ${renderProxyTestLine(t('oauth.codex.proxyBrowserExit'), browserIp, browserError, expectedIp)}
+        ${renderProxyTestLine(t('oauth.codex.proxyServerExit'), serverIp, serverError, expectedIp)}
+    `;
     button.innerHTML = originalHtml;
 }
 
@@ -2724,19 +2798,28 @@ function showKiroAuthMethodSelector(providerType) {
  * 显示 Gemini OAuth 认证方式选择对话框
  * @param {string} providerType - 提供商类型
  */
-function showGeminiAuthMethodSelector(providerType) {
+async function showGeminiAuthMethodSelector(providerType, context = {}) {
+    if (document.querySelector('.gemini-auth-selector-modal')) return;
+    const isReauthorize = context.mode === 'reauthorize';
+    const targetProviderUuid = String(context.targetProviderUuid || '').trim();
+    const initialProxyId = String(context.initialProxyId || '').trim();
+    const proxyChoices = await loadCodexAuthProxyChoices(initialProxyId);
+    const preserveExistingProxy = isReauthorize && Boolean(proxyChoices.loadError);
     const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
+    modal.className = 'modal-overlay gemini-auth-selector-modal';
     modal.style.display = 'flex';
     
     modal.innerHTML = `
         <div class="modal-content" style="max-width: 500px;">
             <div class="modal-header">
-                <h3><i class="fas fa-key"></i> <span data-i18n="oauth.gemini.selectMethod">${t('oauth.gemini.selectMethod')}</span></h3>
+                <h3><i class="fas fa-key"></i> ${isReauthorize ? t('oauth.gemini.reauthorizeTitle') : t('oauth.gemini.selectMethod')}</h3>
                 <button class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="auth-method-options" style="display: flex; flex-direction: column; gap: 12px;">
+                    ${isReauthorize ? `<div style="padding: 12px; background: #eff6ff; border-radius: 8px;"><code>${escapeHtml(targetProviderUuid)}</code></div>` : ''}
+                    ${renderGeminiAuthProxySection({ ...proxyChoices, isReauthorize })}
+                    ${isReauthorize ? '' : `
                     <button class="auth-method-btn" data-method="oauth" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
                         <i class="fab fa-google" style="font-size: 24px; color: #4285f4;"></i>
                         <div style="text-align: left;">
@@ -2744,6 +2827,7 @@ function showGeminiAuthMethodSelector(providerType) {
                             <div style="font-size: 12px; color: #666;" data-i18n="oauth.gemini.oauthDesc">${t('oauth.gemini.oauthDesc')}</div>
                         </div>
                     </button>
+                    `}
                     <button class="auth-method-btn" data-method="batch-import" style="display: flex; align-items: center; gap: 12px; padding: 16px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; transition: all 0.2s;">
                         <i class="fas fa-file-import" style="font-size: 24px; color: #10b981;"></i>
                         <div style="text-align: left;">
@@ -2755,6 +2839,7 @@ function showGeminiAuthMethodSelector(providerType) {
             </div>
             <div class="modal-footer">
                 <button class="modal-cancel" data-i18n="modal.provider.cancel">${t('modal.provider.cancel')}</button>
+                ${isReauthorize ? `<button id="geminiReauthorizeStartButton" class="btn btn-primary"><i class="fas fa-key"></i> ${t('oauth.gemini.reauthorizeStart')}</button>` : ''}
             </div>
         </div>
     `;
@@ -2770,6 +2855,24 @@ function showGeminiAuthMethodSelector(providerType) {
         });
     });
     
+    const reauthorizeStartButton = modal.querySelector('#geminiReauthorizeStartButton');
+    const proxyControls = bindGeminiAuthProxyControls(modal, proxyChoices.proxies, {
+        startButton: reauthorizeStartButton,
+        preserveExistingProxy
+    });
+    if (isReauthorize && reauthorizeStartButton) {
+        reauthorizeStartButton.addEventListener('click', async () => {
+            proxyControls.setBusy(true);
+            const proxyId = proxyControls.getProxyId();
+            const started = preserveExistingProxy
+                ? await executeGenerateAuthUrl(providerType, { targetProviderUuid })
+                : await executeGenerateAuthUrl(providerType, { targetProviderUuid, proxyId });
+            if (started) modal.remove();
+            else proxyControls.setBusy(false);
+        });
+        return;
+    }
+
     // 认证方式选择按钮事件
     const methodBtns = modal.querySelectorAll('.auth-method-btn');
     methodBtns.forEach(btn => {
@@ -2788,7 +2891,8 @@ function showGeminiAuthMethodSelector(providerType) {
             if (method === 'batch-import') {
                 showGeminiBatchImportModal(providerType);
             } else {
-                await executeGenerateAuthUrl(providerType, {});
+                const proxyId = proxyControls.getProxyId();
+                await executeGenerateAuthUrl(providerType, { proxyId });
             }
         });
     });
@@ -5320,7 +5424,11 @@ export {
     executeGenerateAuthUrl,
     handleGenerateAuthUrl,
     showCodexAuthMethodSelector,
+    showGeminiAuthMethodSelector,
     checkUpdate,
     performUpdate,
     showAddProviderGroupModal
 };
+
+window.showCodexAuthMethodSelector = showCodexAuthMethodSelector;
+window.showGeminiAuthMethodSelector = showGeminiAuthMethodSelector;

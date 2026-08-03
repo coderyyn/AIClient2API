@@ -1143,7 +1143,7 @@ function renderProviderDetailList(providers) {
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
         const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
-        const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+        const reauthorizeButtonHtml = ['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].includes(currentProviderType) ? `
                         <button class="btn-small btn-info btn-reauthorize-provider" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
                             <i class="fas fa-key"></i> <span data-i18n="modal.provider.reauthorize">${t('modal.provider.reauthorize')}</span>
                         </button>
@@ -1244,7 +1244,7 @@ function renderProviderCardList(providers) {
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
         const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
-        const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+        const reauthorizeButtonHtml = ['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].includes(currentProviderType) ? `
                     <button class="card-action-btn btn-info" onclick="window.reauthorizeProvider('${provider.uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
                         <i class="fas fa-key"></i>
                     </button>
@@ -1799,7 +1799,7 @@ function cancelEdit(uuid, event) {
     const toggleButtonText = isCurrentlyDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled');
     const toggleButtonIcon = isCurrentlyDisabled ? 'fas fa-play' : 'fas fa-ban';
     const toggleButtonClass = isCurrentlyDisabled ? 'btn-success' : 'btn-warning';
-    const reauthorizeButtonHtml = currentProviderType === 'openai-codex-oauth' ? `
+    const reauthorizeButtonHtml = ['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].includes(currentProviderType) ? `
         <button class="btn-small btn-info btn-reauthorize-provider" onclick="window.reauthorizeProvider('${uuid}', event)" title="${t('modal.provider.reauthorizeTitle')}">
             <i class="fas fa-key"></i> <span data-i18n="modal.provider.reauthorize">${t('modal.provider.reauthorize')}</span>
         </button>
@@ -1859,7 +1859,7 @@ async function reauthorizeProvider(uuid, event) {
 
     const providerDetail = event.target.closest('.provider-item-detail, .provider-item-card');
     const providerType = providerDetail?.closest('.provider-modal')?.getAttribute('data-provider-type');
-    if (providerType !== 'openai-codex-oauth') {
+    if (!['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].includes(providerType)) {
         showToast(t('common.error'), t('modal.provider.reauthorizeUnsupported'), 'error');
         return;
     }
@@ -1871,12 +1871,21 @@ async function reauthorizeProvider(uuid, event) {
     }
 
     try {
-        await window.showCodexAuthMethodSelector(providerType, {
-            mode: 'reauthorize',
-            targetProviderUuid: uuid,
-            initialProxyId: currentProvider.PROXY_ID || '',
-            providerName: currentProvider.customName || currentProvider.codexEmail || uuid
-        });
+        if (providerType === 'openai-codex-oauth') {
+            await window.showCodexAuthMethodSelector(providerType, {
+                mode: 'reauthorize',
+                targetProviderUuid: uuid,
+                initialProxyId: currentProvider.PROXY_ID || '',
+                providerName: currentProvider.customName || currentProvider.codexEmail || uuid
+            });
+        } else {
+            await window.showGeminiAuthMethodSelector(providerType, {
+                mode: 'reauthorize',
+                targetProviderUuid: uuid,
+                initialProxyId: currentProvider.PROXY_ID || '',
+                providerName: currentProvider.customName || uuid
+            });
+        }
     } catch (error) {
         console.error('Failed to reauthorize provider:', error);
         showToast(t('common.error'), t('modal.provider.reauthorizeFailed') + ': ' + error.message, 'error');

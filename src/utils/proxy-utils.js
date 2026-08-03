@@ -199,6 +199,25 @@ export function getProxyConfigForProvider(config, providerType) {
 }
 
 /**
+ * Resolve a provider proxy while enforcing account-level proxy bindings.
+ * An account with PROXY_ID must never silently fall back to direct access or
+ * a legacy global proxy when its selected pool entry is unavailable.
+ */
+export function getRequiredProxyConfigForProvider(config, providerType) {
+    const proxyId = String(config?.PROXY_ID || '').trim();
+    if (proxyId) {
+        const proxyEntry = resolveProxyPoolEntry(config);
+        const proxyConfig = proxyEntry ? parseProxyUrl(proxyEntry.url) : null;
+        if (!proxyEntry || !proxyConfig) {
+            throw new Error(`Configured proxy node is unavailable: ${proxyId}`);
+        }
+        return proxyConfig;
+    }
+
+    return getProxyConfigForProvider(config, providerType);
+}
+
+/**
  * 为 axios 配置代理
  * @param {Object} axiosConfig - axios 配置对象
  * @param {Object} config - 应用配置对象

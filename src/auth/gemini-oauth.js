@@ -4,10 +4,12 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import { broadcastEvent } from '../services/ui-manager.js';
-import { autoLinkProviderConfigs } from '../services/service-manager.js';
+import { autoLinkProviderConfigs, replaceProviderCredentialPath } from '../services/service-manager.js';
 import { CONFIG } from '../core/config-manager.js';
-import { getGoogleAuthProxyConfig } from '../utils/proxy-utils.js';
+import { getGoogleAuthProxyConfig, parseProxyUrl } from '../utils/proxy-utils.js';
+import { resolveProxyPoolEntry } from '../utils/proxy-pool-store.js';
 
 /**
  * OAuth 提供商配置
@@ -37,6 +39,52 @@ const OAUTH_PROVIDERS = {
  * 活动的服务器实例管理
  */
 const activeServers = new Map();
+const oauthSessions = new Map();
+const latestSessions = new Map();
+const transitionLocks = new Map();
+
+async function withProviderTransitionLock(provider, operation) {
+    const previous = transitionLocks.get(provider) || Promise.resolve();
+    let release;
+    const current = new Promise(resolve => { release = resolve; });
+    transitionLocks.set(provider, current);
+    await previous;
+    try {
+        return await operation();
+    } finally {
+        release();
+        if (transitionLocks.get(provider) === current) transitionLocks.delete(provider);
+    }
+}
+
+export function createGeminiPkce() {
+    const verifier = crypto.randomBytes(48).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    return { verifier, challenge };
+}
+
+export function assertGeminiOAuthProxyAvailable(config = {}, proxyId = '') {
+    const normalizedProxyId = String(proxyId || '').trim();
+    if (!normalizedProxyId) return null;
+
+    const proxyEntry = resolveProxyPoolEntry({ ...config, PROXY_ID: normalizedProxyId });
+    if (!proxyEntry || !parseProxyUrl(proxyEntry.url)) {
+        throw new Error(`Selected proxy node is unavailable: ${normalizedProxyId}`);
+    }
+    return proxyEntry;
+}
+
+export function createGeminiOAuthTransporterOptions(config = {}, providerKey, options = {}) {
+    if (options.forceDirect) return { proxy: false };
+    if (options.selectedProxyUrl) {
+        const selected = parseProxyUrl(options.selectedProxyUrl);
+        if (!selected) throw new Error('Selected proxy URL is invalid or unsupported');
+        return { proxy: false, agent: selected.httpsAgent };
+    }
+
+    const configured = getGoogleAuthProxyConfig(config, providerKey);
+    return configured ? { ...configured, proxy: false } : { proxy: false };
+}
 
 /**
  * 生成 HTML 响应页面
@@ -124,42 +172,28 @@ function generateResponsePage(isSuccess, message, provider = null) {
  * @returns {Promise<void>}
  */
 async function closeActiveServer(provider, port = null) {
-    // 1. 关闭该提供商之前的所有服务器
     const existing = activeServers.get(provider);
     if (existing) {
-        // 清理轮询定时器
         if (existing.pollTimer) {
             clearInterval(existing.pollTimer);
             existing.pollTimer = null;
         }
-
         try {
-            const closePromise = new Promise((resolve, reject) => {
-                existing.server.close((err) => {
-                    if (err) reject(err);
-                    else resolve();
-                });
-            });
-
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Server close timeout after 2s')), 2000);
-            });
-
-            await Promise.race([closePromise, timeoutPromise]);
-            logger.info(`[OAuth] 已关闭提供商 ${provider} 在端口 ${existing.port} 上的旧服务器`);
+            if (existing.server?.listening) {
+                await Promise.race([
+                    new Promise(resolve => existing.server.close(() => resolve())),
+                    new Promise(resolve => setTimeout(resolve, 2000))
+                ]);
+            }
         } catch (error) {
-            logger.warn(`[OAuth] 关闭提供商 ${provider} 服务器失败或超时: ${error.message}`);
+            logger.warn(`[OAuth] Failed to close ${provider} callback server: ${error.message}`);
         } finally {
             activeServers.delete(provider);
         }
     }
-
-    // 2. 如果指定了端口，检查是否有其他提供商占用了该端口
     if (port) {
         for (const [p, info] of activeServers.entries()) {
-            if (info.port === port) {
-                await closeActiveServer(p);
-            }
+            if (info.port === port) await closeActiveServer(p);
         }
     }
 }
@@ -173,158 +207,157 @@ async function closeActiveServer(provider, port = null) {
  * @param {string} provider - 提供商标识
  * @returns {Promise<http.Server>} HTTP 服务器实例
  */
-async function createOAuthCallbackServer(config, redirectUri, authClient, credPath, provider, options = {}) {
-    const port = parseInt(options.port) || config.port;
-    // 先关闭该提供商之前可能运行的所有服务器，或该端口上的旧服务器
-    await closeActiveServer(provider, port);
-    
+async function createOAuthCallbackServer(config, session) {
+    const { provider, port, redirectUri } = session;
     return new Promise((resolve, reject) => {
-        let pollCount = 0;
-        const maxPollCount = 100; // 约 5 分钟 (100 * 3s = 300s)
-        const pollInterval = 3000;
-        let pollTimer = null;
-
-        const clearPollTimer = () => {
-            if (pollTimer) {
-                clearInterval(pollTimer);
-                pollTimer = null;
-            }
-        };
-
         const server = http.createServer(async (req, res) => {
+            const callbackUrl = new URL(req.url, redirectUri);
+            const state = callbackUrl.searchParams.get('state');
+            const code = callbackUrl.searchParams.get('code');
+            const errorParam = callbackUrl.searchParams.get('error');
+
+            if (state !== session.sessionId) {
+                res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(generateResponsePage(false, 'OAuth state 无效或已过期', provider));
+                return;
+            }
+
             try {
-                const url = new URL(req.url, redirectUri);
-                const code = url.searchParams.get('code');
-                const errorParam = url.searchParams.get('error');
-                
-                if (code) {
-                    clearPollTimer();
-                    logger.info(`${config.logPrefix} 收到来自 Google 的成功回调: ${req.url}`);
-                    
-                    try {
-                        const { tokens } = await authClient.getToken(code);
-                        let finalCredPath = credPath;
-                        
-                        // 如果指定了保存到 configs 目录
-                        if (options.saveToConfigs) {
-                            const providerDir = options.providerDir;
-                            const targetDir = path.join(process.cwd(), 'configs', providerDir);
-                            await fs.promises.mkdir(targetDir, { recursive: true });
-                            const timestamp = Date.now();
-                            const filename = `${timestamp}_oauth_creds.json`;
-                            finalCredPath = path.join(targetDir, filename);
-                        }
-
-                        await fs.promises.mkdir(path.dirname(finalCredPath), { recursive: true });
-                        await fs.promises.writeFile(finalCredPath, JSON.stringify(tokens, null, 2));
-                        logger.info(`${config.logPrefix} 新令牌已接收并保存到文件: ${finalCredPath}`);
-                        
-                        const relativePath = path.relative(process.cwd(), finalCredPath);
-
-                        // 广播授权成功事件
-                        broadcastEvent('oauth_success', {
-                            provider: provider,
-                            credPath: finalCredPath,
-                            relativePath: relativePath,
-                            timestamp: new Date().toISOString()
-                        });
-                        
-                        // 自动关联新生成的凭据到 Pools
-                        await autoLinkProviderConfigs(CONFIG, {
-                            onlyCurrentCred: true,
-                            credPath: relativePath
-                        });
-                        
-                        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                        res.end(generateResponsePage(true, '您可以关闭此页面', provider));
-                    } catch (tokenError) {
-                        logger.error(`${config.logPrefix} 获取令牌失败:`, tokenError);
-                        
-                        // 广播授权失败事件
-                        broadcastEvent('oauth_error', {
-                            provider: provider,
-                            error: tokenError.message,
-                            timestamp: new Date().toISOString()
-                        });
-                        
-                        res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-                        res.end(generateResponsePage(false, `获取令牌失败: ${tokenError.message}`, provider));
-                    } finally {
-                        server.close(() => {
-                            activeServers.delete(provider);
-                        });
-                    }
-                } else if (errorParam) {
-                    clearPollTimer();
+                if (errorParam) {
                     const errorMessage = `授权失败。Google 返回错误: ${errorParam}`;
-                    logger.error(`${config.logPrefix}`, errorMessage);
-                    
-                    // 广播授权失败事件
-                    broadcastEvent('oauth_error', {
-                        provider: provider,
-                        error: errorMessage,
-                        timestamp: new Date().toISOString()
-                    });
-                    
+                    finishGeminiSession(session, errorMessage);
                     res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
                     res.end(generateResponsePage(false, errorMessage, provider));
-                    server.close(() => {
-                        activeServers.delete(provider);
-                    });
-                } else {
-                    logger.info(`${config.logPrefix} 忽略无关请求: ${req.url}`);
+                    return;
+                }
+                if (!code) {
                     res.writeHead(204);
                     res.end();
+                    return;
                 }
+
+                await completeGeminiOAuthSession(session, code);
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(generateResponsePage(true, '您可以关闭此页面', provider));
             } catch (error) {
-                clearPollTimer();
-                logger.error(`${config.logPrefix} 处理回调时出错:`, error);
+                logger.error(`${config.logPrefix} OAuth callback failed:`, error);
                 res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
                 res.end(generateResponsePage(false, `服务器错误: ${error.message}`, provider));
-                
-                if (server.listening) {
-                    server.close(() => {
-                        activeServers.delete(provider);
-                    });
-                }
+            } finally {
+                if (server.listening) server.close(() => activeServers.delete(provider));
             }
         });
-        
         server.on('error', (err) => {
-            clearPollTimer();
-            if (err.code === 'EADDRINUSE') {
-                logger.error(`${config.logPrefix} 端口 ${port} 已被占用`);
-                reject(new Error(`端口 ${port} 已被占用`));
-            } else {
-                logger.error(`${config.logPrefix} 服务器错误:`, err);
-                reject(err);
-            }
+            reject(err.code === 'EADDRINUSE' ? new Error(`端口 ${port} 已被占用`) : err);
         });
-        
-        const host = '0.0.0.0';
-        server.listen(port, host, () => {
-            logger.info(`${config.logPrefix} OAuth 回调服务器已启动于 ${host}:${port}`);
-            
-            // 启动轮询日志
-            pollTimer = setInterval(() => {
-                pollCount++;
-                if (pollCount <= maxPollCount) {
-                    logger.info(`${config.logPrefix} Waiting for callback... (${pollCount}/${maxPollCount})`);
-                } else {
-                    clearPollTimer();
-                    logger.warn(`${config.logPrefix} Polling timeout, closing server...`);
-                    if (server.listening) {
-                        server.close(() => {
-                            activeServers.delete(provider);
-                        });
-                    }
-                }
-            }, pollInterval);
-
-            activeServers.set(provider, { server, port, pollTimer });
+        server.listen(port, '0.0.0.0', () => {
+            session.server = server;
+            session.pollTimer = setTimeout(() => {
+                finishGeminiSession(session, 'OAuth authorization timed out');
+                if (server.listening) server.close(() => activeServers.delete(provider));
+            }, 5 * 60 * 1000);
+            activeServers.set(provider, session);
             resolve(server);
         });
     });
+}
+
+function resolveTargetProviderConfig(currentConfig, providerKey, targetProviderUuid) {
+    if (!targetProviderUuid) return {};
+    const providers = currentConfig.providerPools?.[providerKey];
+    return Array.isArray(providers)
+        ? (providers.find(provider => provider?.uuid === targetProviderUuid) || {})
+        : {};
+}
+
+async function removeGeneratedCredential(credPath) {
+    if (!credPath) return;
+    const root = path.resolve(process.cwd(), 'configs');
+    const absolute = path.resolve(credPath);
+    const relative = path.relative(root, absolute);
+    if (!relative || path.isAbsolute(relative) || relative.startsWith('..')) return;
+    try { await fs.promises.unlink(absolute); } catch (error) {
+        if (error.code !== 'ENOENT') logger.warn(`[Gemini Auth] Failed to remove credential: ${error.message}`);
+    }
+}
+
+async function persistGeminiCredentials(session, tokens) {
+    const providerDir = session.options.providerDir || session.config.credentialsDir.replace('.', '');
+    const finalCredPath = session.options.saveToConfigs
+        ? path.join(process.cwd(), 'configs', providerDir, `${Date.now()}_oauth_creds.json`)
+        : path.join(os.homedir(), session.config.credentialsDir, session.config.credentialsFile);
+    await fs.promises.mkdir(path.dirname(finalCredPath), { recursive: true });
+    await fs.promises.writeFile(finalCredPath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+    const relativePath = path.relative(process.cwd(), finalCredPath);
+
+    try {
+        if (session.targetProviderUuid) {
+            await replaceProviderCredentialPath(CONFIG, {
+                providerType: session.provider,
+                providerUuid: session.targetProviderUuid,
+                credPath: relativePath,
+                ...(session.proxyOverrideProvided ? { proxyId: session.proxyId } : {})
+            });
+        } else {
+            await autoLinkProviderConfigs(CONFIG, {
+                onlyCurrentCred: true,
+                credPath: relativePath,
+                providerDefaults: session.proxyId ? { PROXY_ID: session.proxyId } : {},
+                throwOnPersistError: true
+            });
+        }
+    } catch (error) {
+        await removeGeneratedCredential(finalCredPath);
+        throw error;
+    }
+    return { credPath: finalCredPath, relativePath };
+}
+
+function finishGeminiSession(session, errorMessage = '') {
+    if (!session) return;
+    oauthSessions.delete(session.sessionId);
+    if (latestSessions.get(session.provider) === session.sessionId) latestSessions.delete(session.provider);
+    if (session.pollTimer) clearTimeout(session.pollTimer);
+    if (errorMessage) {
+        broadcastEvent('oauth_error', {
+            provider: session.provider,
+            sessionId: session.sessionId,
+            targetProviderUuid: session.targetProviderUuid,
+            error: errorMessage,
+            timestamp: new Date().toISOString()
+        });
+    }
+}
+
+async function completeGeminiOAuthSession(session, code) {
+    if (!oauthSessions.has(session.sessionId)) throw new Error('Invalid or expired OAuth session');
+    oauthSessions.delete(session.sessionId);
+    try {
+        const { tokens } = await session.authClient.getToken({
+            code,
+            codeVerifier: session.pkce.verifier,
+            redirect_uri: session.redirectUri
+        });
+        await withProviderTransitionLock(session.provider, async () => {
+            if (latestSessions.get(session.provider) !== session.sessionId) {
+                throw new Error('OAuth authorization was replaced by a newer request');
+            }
+            const credentials = await persistGeminiCredentials(session, tokens);
+            broadcastEvent('oauth_success', {
+                provider: session.provider,
+                sessionId: session.sessionId,
+                targetProviderUuid: session.targetProviderUuid,
+                ...credentials,
+                timestamp: new Date().toISOString()
+            });
+            latestSessions.delete(session.provider);
+        });
+    } catch (error) {
+        finishGeminiSession(session, error.message);
+        throw error;
+    } finally {
+        if (session.pollTimer) clearTimeout(session.pollTimer);
+    }
 }
 
 /**
@@ -340,49 +373,85 @@ async function handleGoogleOAuth(providerKey, currentConfig, options = {}) {
         throw new Error(`未知的提供商: ${providerKey}`);
     }
     
+    const targetProviderUuid = typeof options.targetProviderUuid === 'string' ? options.targetProviderUuid.trim() : null;
+    const hasProxyOverride = Object.prototype.hasOwnProperty.call(options, 'proxyId');
+    if (hasProxyOverride && typeof options.proxyId !== 'string') throw new Error('proxyId must be a string when provided');
+    const targetProviderConfig = resolveTargetProviderConfig(currentConfig, providerKey, targetProviderUuid);
+    const selectedProxyId = targetProviderUuid
+        ? (hasProxyOverride ? options.proxyId.trim() : String(targetProviderConfig.PROXY_ID || '').trim())
+        : String(options.proxyId || options.PROXY_ID || '').trim();
+    const authConfig = { ...currentConfig, ...targetProviderConfig };
+    if (selectedProxyId) authConfig.PROXY_ID = selectedProxyId;
+    else if (hasProxyOverride) delete authConfig.PROXY_ID;
+
+    const selectedProxy = assertGeminiOAuthProxyAvailable(authConfig, selectedProxyId);
     const port = parseInt(options.port) || config.port;
     const host = 'localhost';
     const redirectUri = `http://${host}:${port}`;
 
-    // 获取代理配置
-    const proxyConfig = getGoogleAuthProxyConfig(currentConfig, providerKey);
-
-    // 构建 OAuth2Client 选项
     const oauth2Options = {
         clientId: config.clientId,
         clientSecret: config.clientSecret,
+        transporterOptions: createGeminiOAuthTransporterOptions(authConfig, providerKey, {
+            forceDirect: hasProxyOverride && !selectedProxyId,
+            selectedProxyUrl: selectedProxy?.url || null
+        })
     };
-
-    if (proxyConfig) {
-        oauth2Options.transporterOptions = proxyConfig;
-        logger.info(`${config.logPrefix} Using proxy for OAuth token exchange`);
-    }
-
     const authClient = new OAuth2Client(oauth2Options);
     authClient.redirectUri = redirectUri;
-    
+    const state = crypto.randomBytes(32).toString('base64url');
+    const pkce = createGeminiPkce();
     const authUrl = authClient.generateAuthUrl({
         access_type: 'offline',
         prompt: 'select_account',
-        scope: config.scope
+        scope: config.scope,
+        state,
+        code_challenge: pkce.challenge,
+        code_challenge_method: 'S256'
     });
-    
-    // 启动回调服务器
-    const credPath = path.join(os.homedir(), config.credentialsDir, config.credentialsFile);
-    
-    try {
-        await createOAuthCallbackServer(config, redirectUri, authClient, credPath, providerKey, options);
-    } catch (error) {
-        throw new Error(`启动回调服务器失败: ${error.message}`);
-    }
-    
+
+    await withProviderTransitionLock(providerKey, async () => {
+        const previousId = latestSessions.get(providerKey);
+        const previous = previousId ? oauthSessions.get(previousId) : null;
+        if (previous) finishGeminiSession(previous, 'OAuth authorization was replaced by a newer request');
+        await closeActiveServer(providerKey, port);
+        const session = {
+            provider: providerKey,
+            config,
+            authClient,
+            redirectUri,
+            port,
+            sessionId: state,
+            pkce,
+            targetProviderUuid,
+            proxyId: selectedProxyId,
+            proxyOverrideProvided: hasProxyOverride,
+            options,
+            server: null,
+            pollTimer: null
+        };
+        latestSessions.set(providerKey, state);
+        oauthSessions.set(state, session);
+        try {
+            await createOAuthCallbackServer(config, session);
+        } catch (error) {
+            finishGeminiSession(session);
+            throw new Error(`启动回调服务器失败: ${error.message}`);
+        }
+    });
+
     return {
+        success: true,
         authUrl,
         authInfo: {
             provider: providerKey,
-            redirectUri: redirectUri,
-            port: port,
-            ...options
+            method: 'oauth2-pkce',
+            sessionId: state,
+            redirectUri,
+            port,
+            targetProviderUuid,
+            proxyId: selectedProxyId || null,
+            proxyOverrideProvided: hasProxyOverride
         }
     };
 }

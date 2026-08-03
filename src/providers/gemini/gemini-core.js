@@ -12,7 +12,7 @@ import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { API_ACTIONS, formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage } from '../../utils/common.js';
 import { getProviderModels } from '../provider-models.js';
 import { handleGeminiCliOAuth } from '../../auth/oauth-handlers.js';
-import { getProxyConfigForProvider, getGoogleAuthProxyConfig, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
+import { getRequiredProxyConfigForProvider, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
 import { MODEL_PROVIDER } from '../../utils/common.js';
 
@@ -263,10 +263,10 @@ export class GeminiApiService {
         this.apiVersion = DEFAULT_CODE_ASSIST_API_VERSION;
         
         // 保存代理配置供后续使用
-        this.proxyConfig = getProxyConfigForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.GEMINI_CLI);
+        this.proxyConfig = getRequiredProxyConfigForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.GEMINI_CLI);
         
         // 检查是否需要使用代理
-        const proxyConfig = getGoogleAuthProxyConfig(config, config.MODEL_PROVIDER || MODEL_PROVIDER.GEMINI_CLI);
+        const proxyConfig = this.proxyConfig ? { agent: this.proxyConfig.httpsAgent } : null;
         
         // 检查是否启用了 TLS Sidecar
         const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.GEMINI_CLI);

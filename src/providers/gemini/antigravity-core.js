@@ -15,7 +15,7 @@ import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage } from '../../utils/common.js';
 import { getProviderModels } from '../provider-models.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
-import { getProxyConfigForProvider, getGoogleAuthProxyConfig, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
+import { getRequiredProxyConfigForProvider, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { cleanJsonSchemaProperties } from '../../converters/utils.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
 import { MODEL_PROVIDER } from '../../utils/common.js';
@@ -983,10 +983,10 @@ export class AntigravityApiService {
         this.baseURLs = this.getBaseURLFallbackOrder(config);
 
         // 保存代理配置供后续使用
-        this.proxyConfig = getProxyConfigForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.ANTIGRAVITY);
+        this.proxyConfig = getRequiredProxyConfigForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.ANTIGRAVITY);
 
         // 检查是否需要使用代理
-        const proxyConfig = getGoogleAuthProxyConfig(config, config.MODEL_PROVIDER || MODEL_PROVIDER.ANTIGRAVITY);
+        const proxyConfig = this.proxyConfig ? { agent: this.proxyConfig.httpsAgent } : null;
 
         // 检查是否启用了 TLS Sidecar
         const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(config, config.MODEL_PROVIDER || MODEL_PROVIDER.ANTIGRAVITY);
