@@ -20,7 +20,7 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBeCloseTo(1.065, 6);
         expect(cost.convertedUsd).toBeCloseTo(0.496, 6);
         expect(cost.conversionModel).toBe('gemini-2.5-flash');
-        expect(cost.pricingVersion).toBe('official-2026-07-12-r1');
+        expect(cost.pricingVersion).toBe('official-2026-08-04-r1');
         expect(cost.missingPriceTokens).toBe(0);
     });
 
@@ -198,5 +198,20 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBe(0);
         expect(cost.missingPriceTokens).toBe(1500);
         expect(cost.convertedUsd).toBeCloseTo(0.0003, 8);
+    });
+
+    test('prices every public non-Claude Antigravity model without missing tokens', () => {
+        const usage = { promptTokens: 1000, cachedTokens: 100, completionTokens: 500, totalTokens: 1500 };
+        const models = [
+            'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-thinking',
+            'gemini-3-flash', 'gemini-3-flash-agent', 'gemini-3.1-flash-image',
+            'gemini-3.1-pro-low', 'gemini-3.1-pro-high',
+            'gemini-3.5-flash-low', 'gemini-3.5-flash-high',
+            'gemini-3.6-flash', 'gemini-3.6-flash-low', 'gemini-3.6-flash-high'
+        ];
+
+        for (const model of models) {
+            expect(estimateUsageCost(usage, model)).toMatchObject({ missingPriceTokens: 0 });
+        }
     });
 });
