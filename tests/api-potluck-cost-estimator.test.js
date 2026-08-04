@@ -20,7 +20,7 @@ describe('api potluck cost estimator', () => {
         expect(cost.actualUsd).toBeCloseTo(1.065, 6);
         expect(cost.convertedUsd).toBeCloseTo(0.496, 6);
         expect(cost.conversionModel).toBe('gemini-2.5-flash');
-        expect(cost.pricingVersion).toBe('official-2026-08-04-r1');
+        expect(cost.pricingVersion).toBe('official-2026-08-01-r1');
         expect(cost.missingPriceTokens).toBe(0);
     });
 
@@ -52,6 +52,20 @@ describe('api potluck cost estimator', () => {
 
         expect(spark.usd).toBeCloseTo(mini.usd, 8);
         expect(spark.pricingSource).toBe('temporary:gpt-5.4-mini');
+    });
+
+    test('uses the August 1 GPT-5.6 Terra and Luna price reductions', () => {
+        const usage = {
+            promptTokens: 1000000,
+            cachedTokens: 200000,
+            completionTokens: 100000,
+            totalTokens: 1100000
+        };
+
+        expect(estimateUsageCost(usage, 'gpt-5.6-terra').usd)
+            .toBeCloseTo(((800000 * 2) + (200000 * 0.2) + (100000 * 12)) / 1000000, 8);
+        expect(estimateUsageCost(usage, 'gpt-5.6-luna').usd)
+            .toBeCloseTo(((800000 * 0.2) + (200000 * 0.02) + (100000 * 1.2)) / 1000000, 8);
     });
 
     test('prices gpt image 2 image tokens from the official image generation rates', () => {
@@ -205,7 +219,7 @@ describe('api potluck cost estimator', () => {
         const models = [
             'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-thinking',
             'gemini-3-flash', 'gemini-3-flash-agent', 'gemini-3.1-flash-image',
-            'gemini-3.1-pro-low', 'gemini-3.1-pro-high',
+            'gemini-3.1-pro-low', 'gemini-3.1-pro-high', 'gemini-pro-agent',
             'gemini-3.5-flash-low', 'gemini-3.5-flash-high',
             'gemini-3.6-flash', 'gemini-3.6-flash-low', 'gemini-3.6-flash-high'
         ];
