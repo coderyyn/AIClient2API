@@ -13,6 +13,8 @@ jest.mock('../src/services/service-manager.js', () => ({
     }))
 }));
 
+import { getApiServiceWithFallback } from '../src/services/service-manager.js';
+
 jest.mock('../src/utils/logger.js', () => ({
     __esModule: true,
     default: {
@@ -412,6 +414,48 @@ describe('/v1/images/generations request handling', () => {
             output_compression: 80,
             partial_images: 2
         });
+    });
+
+    test('forwards official image_config to the Gemini image request', async () => {
+        getApiServiceWithFallback.mockResolvedValueOnce({
+            service: { generateContent: mockGenerateContent },
+            actualProviderType: 'gemini-antigravity'
+        });
+        mockGenerateContent.mockResolvedValueOnce({
+            candidates: [{
+                content: {
+                    parts: [{ inlineData: { mimeType: 'image/png', data: 'generated-image-b64' } }]
+                }
+            }]
+        });
+        const req = makeJsonRequest({
+            model: 'gemini-3.1-flash-image',
+            prompt: 'draw a wide yellow banana',
+            image_config: { aspect_ratio: '3:2', image_size: '2K' },
+            n: 1,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        const handled = await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            { MODEL_PROVIDER: 'gemini-antigravity' },
+            null,
+            null,
+            null
+        );
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const [, requestBody] = mockGenerateContent.mock.calls[0];
+        expect(requestBody.generationConfig.imageConfig).toEqual({
+            aspectRatio: '3:2',
+            imageSize: '2K'
+        });
+        expect(requestBody.size).toBeUndefined();
     });
 
     test('uses configured request body limit for large image generation requests', async () => {
