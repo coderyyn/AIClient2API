@@ -154,6 +154,24 @@ function resolveAntigravityUpstreamModel(modelName) {
     return ANTIGRAVITY_CLIENT_TO_UPSTREAM_MODEL[baseModel] || baseModel;
 }
 
+function toAntigravityImageConfig(size) {
+    const match = String(size || '').trim().match(/^(\d+)x(\d+)$/i);
+    if (!match) return null;
+
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+
+    const divisor = (left, right) => right ? divisor(right, left % right) : left;
+    const gcd = divisor(width, height);
+    const longestEdge = Math.max(width, height);
+
+    return {
+        imageSize: longestEdge <= 1024 ? '1K' : (longestEdge <= 2048 ? '2K' : '4K'),
+        aspectRatio: `${width / gcd}:${height / gcd}`
+    };
+}
+
 function expandAntigravityClientModels(upstreamModel) {
     const baseModel = stripModelSuffix(upstreamModel);
     if (!baseModel) return [];
@@ -1681,10 +1699,24 @@ export class AntigravityApiService {
 
         applyAntigravityClientModelThinkingLevelToRequest(requestBody, selectedModel);
         const processedRequestBody = ensureRolesInContents(JSON.parse(JSON.stringify(requestBody)), selectedModel);
+        const requestedImageConfig = toAntigravityImageConfig(
+            processedRequestBody._imageToolOptions?.size || processedRequestBody._imageSize
+        );
+        delete processedRequestBody._imageSize;
+        delete processedRequestBody._imageQuality;
+        delete processedRequestBody._imageToolOptions;
         const payload = applyAntigravityClientModelThinkingLevel(
             geminiToAntigravity(actualModelName, { request: processedRequestBody }, this.projectId),
             selectedModel
         );
+
+        if (requestedImageConfig && isImageModel(actualModelName)) {
+            payload.request.generationConfig = payload.request.generationConfig || {};
+            payload.request.generationConfig.imageConfig = {
+                ...(payload.request.generationConfig.imageConfig || {}),
+                ...requestedImageConfig
+            };
+        }
 
         requestBody.model = actualModelName;
 
