@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globa
 import fs from 'fs';
 import path from 'path';
 import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
+import { getProviderMappingByDirName } from '../src/utils/provider-utils.js';
 
 jest.mock('../src/providers/adapter.js', () => ({
     getServiceAdapter: jest.fn(),
@@ -60,6 +61,12 @@ afterEach(() => {
 });
 
 describe('provider pool Antigravity subscription plan', () => {
+    test('uses the lowest public Flash model for new and scheduled Antigravity health checks', () => {
+        expect(getProviderMappingByDirName('antigravity').defaultCheckModel).toBe('gemini-2.5-flash-lite');
+        expect(ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS['gemini-antigravity'])
+            .toBe('gemini-2.5-flash-lite');
+    });
+
     test('skips explicitly free accounts and selects a non-free account', async () => {
         writeUsageCache([
             { uuid: 'aaa-free', success: true, usage: { summary: { plan: 'Quota(free)' } } },
@@ -77,7 +84,7 @@ describe('provider pool Antigravity subscription plan', () => {
 
     test('does not route when every Antigravity account is explicitly free', async () => {
         writeUsageCache([
-            { uuid: 'only-free', success: true, usage: { raw: { tierId: 'free-tier' } } }
+            { uuid: 'only-free', success: true, usage: { raw: { tierId: 'Antigravity Starter Quota(free)' } } }
         ]);
         const pool = createManager([
             { uuid: 'only-free', customName: 'Free', supportedModels: ['gemini-2.5-flash'] }
@@ -85,5 +92,20 @@ describe('provider pool Antigravity subscription plan', () => {
 
         await expect(pool.selectProvider('gemini-antigravity', 'gemini-2.5-flash'))
             .rejects.toMatchObject({ status: 429 });
+    });
+
+    test('routes Google AI Pro accounts even when Antigravity reports a free entitlement', async () => {
+        writeUsageCache([
+            { uuid: 'starter', success: true, usage: { summary: { plan: 'Quota(free)' } } },
+            { uuid: 'pro-member', success: true, usage: { summary: { plan: 'Google AI Pro(free)' } } }
+        ]);
+        const pool = createManager([
+            { uuid: 'starter', customName: 'Starter', supportedModels: ['gemini-2.5-flash'] },
+            { uuid: 'pro-member', customName: 'Pro member', supportedModels: ['gemini-2.5-flash'] }
+        ]);
+
+        const selected = await pool.selectProvider('gemini-antigravity', 'gemini-2.5-flash');
+
+        expect(selected.uuid).toBe('pro-member');
     });
 });

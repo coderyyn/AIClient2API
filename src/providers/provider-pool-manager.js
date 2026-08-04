@@ -67,7 +67,7 @@ function normalizeAntigravityPlan(plan) {
     if (!value) return { plan: 'unknown', isFree: false };
     return {
         plan: value,
-        isFree: /(^|[^a-z])free([^a-z]|$)/i.test(value) || value.toLowerCase() === 'free-tier'
+        isFree: /^(?:antigravity\s+)?(?:starter\s+)?quota\s*\(\s*free\s*\)$/i.test(value)
     };
 }
 
@@ -442,7 +442,7 @@ export class ProviderPoolManager {
     // 键名必须与 MODEL_PROVIDER 常量值一致
     static DEFAULT_HEALTH_CHECK_MODELS = {
         'gemini-cli-oauth': 'gemini-2.5-flash',
-        'gemini-antigravity': 'gemini-2.5-flash',
+        'gemini-antigravity': 'gemini-2.5-flash-lite',
         'openai-custom': 'gpt-4o-mini',
         'atlascloud': 'gpt-4o-mini',
         'claude-custom': 'claude-3-7-sonnet-20250219',
