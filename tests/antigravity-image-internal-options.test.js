@@ -21,7 +21,7 @@ jest.mock('../src/services/service-manager.js', () => ({
 import { AntigravityApiService } from '../src/providers/gemini/antigravity-core.js';
 
 describe('Antigravity image payloads', () => {
-    test('does not send gateway-only image options to the Google upstream payload', () => {
+    test('preserves explicit official image config without converting legacy size', () => {
         const service = new AntigravityApiService({
             MODEL_PROVIDER: 'gemini-antigravity',
             ANTIGRAVITY_BASE_URL: 'http://127.0.0.1:1',
@@ -32,7 +32,13 @@ describe('Antigravity image payloads', () => {
         const { payload } = service.buildAntigravityPayload('gemini-3.1-flash-image', {
             model: 'gemini-3.1-flash-image',
             contents: [{ role: 'user', parts: [{ text: 'draw a yellow banana on a blue table' }] }],
-            _imageSize: '1024x1024',
+            generationConfig: {
+                imageConfig: {
+                    aspectRatio: '16:9',
+                    imageSize: '1K'
+                }
+            },
+            _imageSize: '1536x1024',
             _imageQuality: 'high',
             _imageToolOptions: { background: 'transparent', output_format: 'png' }
         });
@@ -43,7 +49,23 @@ describe('Antigravity image payloads', () => {
         expect(payload.request.contents[0].parts[0].text).toContain('yellow banana');
         expect(payload.request.generationConfig.imageConfig).toMatchObject({
             imageSize: '1K',
-            aspectRatio: '1:1'
+            aspectRatio: '16:9'
         });
+    });
+
+    test('uses the official 1K default for image models', () => {
+        const service = new AntigravityApiService({
+            MODEL_PROVIDER: 'gemini-antigravity',
+            ANTIGRAVITY_BASE_URL: 'http://127.0.0.1:1',
+            PROJECT_ID: 'test-project'
+        });
+        service.availableModels = ['gemini-3.1-flash-image'];
+
+        const { payload } = service.buildAntigravityPayload('gemini-3.1-flash-image', {
+            model: 'gemini-3.1-flash-image',
+            contents: [{ role: 'user', parts: [{ text: 'draw a yellow banana' }] }]
+        });
+
+        expect(payload.request.generationConfig.imageConfig.imageSize).toBe('1K');
     });
 });
