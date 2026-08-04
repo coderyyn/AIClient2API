@@ -466,8 +466,7 @@ export function formatAntigravityUsage(usageData) {
     // 检查是否为原始 API 响应 (包含 models 对象且内部有 quotaInfo)
     if (usageData.models && typeof usageData.models === 'object' && !usageData.summary) {
         const supportedModels = getProviderModels(MODEL_PROVIDER.ANTIGRAVITY);
-        const items = [];
-        let totalPercent = 0;
+        const quotaGroups = new Map();
         let maxResetAt = null;
         
         for (const [modelId, modelData] of Object.entries(usageData.models)) {
@@ -481,31 +480,43 @@ export function formatAntigravityUsage(usageData) {
             if (modelData && modelData.quotaInfo) {
                 const qInfo = modelData.quotaInfo;
                 const remaining = typeof qInfo.remainingFraction === 'number' ? qInfo.remainingFraction : (qInfo.remaining || 0);
-                const percent = (1 - remaining) * 100;
-                
-                totalPercent += percent;
                 if (!maxResetAt || qInfo.resetTime > maxResetAt) {
                     maxResetAt = qInfo.resetTime;
                 }
-                
-                items.push({
-                    id: aliasName,
-                    label: aliasName,
-                    used: percent,
-                    limit: 100,
-                    percent,
-                    unit: 'percent',
-                    status: getStatus(percent),
-                    resetAt: formatTimestamp(qInfo.resetTime)
-                });
+
+                const fingerprint = `${remaining}|${qInfo.resetTime || ''}`;
+                const group = quotaGroups.get(fingerprint) || {
+                    remaining,
+                    resetTime: qInfo.resetTime,
+                    modelIds: []
+                };
+                group.modelIds.push(aliasName);
+                quotaGroups.set(fingerprint, group);
             }
         }
 
-        // 按名称排序
-        items.sort((a, b) => a.id.localeCompare(b.id));
+        const items = Array.from(quotaGroups.values()).map(group => {
+            const modelIds = group.modelIds.sort((a, b) => a.localeCompare(b));
+            const percent = (1 - group.remaining) * 100;
+            const shared = modelIds.length > 1;
+            return {
+                id: shared ? `shared:${modelIds.join('|')}` : modelIds[0],
+                label: shared ? `Shared quota (${modelIds.length} models)` : modelIds[0],
+                used: percent,
+                limit: 100,
+                percent,
+                unit: 'percent',
+                status: getStatus(percent),
+                resetAt: formatTimestamp(group.resetTime),
+                modelIds,
+                shared
+            };
+        }).sort((a, b) => a.modelIds[0].localeCompare(b.modelIds[0]));
 
-        // 计算平均使用率作为概要
-        const avgUsedPercent = items.length > 0 ? totalPercent / items.length : 0;
+        // 同一额度桶会重复出现在多个模型上，概要按额度桶平均，避免模型数量造成重复加权。
+        const avgUsedPercent = items.length > 0
+            ? items.reduce((total, item) => total + item.percent, 0) / items.length
+            : 0;
         const plan = parseTierId(usageData.tierId);
 
         return {

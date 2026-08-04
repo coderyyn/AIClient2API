@@ -10,6 +10,7 @@ import { autoLinkProviderConfigs, replaceProviderCredentialPath } from '../servi
 import { CONFIG } from '../core/config-manager.js';
 import { getGoogleAuthProxyConfig, parseProxyUrl } from '../utils/proxy-utils.js';
 import { resolveProxyPoolEntry } from '../utils/proxy-pool-store.js';
+import { extractGeminiCredentialEmail } from '../utils/gemini-account.js';
 
 /**
  * OAuth 提供商配置
@@ -281,28 +282,49 @@ async function removeGeneratedCredential(credPath) {
     }
 }
 
-async function persistGeminiCredentials(session, tokens) {
+async function resolveGeminiOAuthAccountEmail(session, tokens) {
+    if (tokens?.access_token && typeof session.authClient.getTokenInfo === 'function') {
+        try {
+            const tokenInfo = await session.authClient.getTokenInfo(tokens.access_token);
+            if (typeof tokenInfo?.email === 'string' && tokenInfo.email.trim()) {
+                return tokenInfo.email.trim();
+            }
+        } catch (error) {
+            logger.warn(`${session.config.logPrefix} Account email lookup failed, falling back to id_token: ${error.message}`);
+        }
+    }
+    return extractGeminiCredentialEmail(tokens);
+}
+
+async function persistGeminiCredentials(session, tokens, accountEmail = '') {
     const providerDir = session.options.providerDir || session.config.credentialsDir.replace('.', '');
     const finalCredPath = session.options.saveToConfigs
         ? path.join(process.cwd(), 'configs', providerDir, `${Date.now()}_oauth_creds.json`)
         : path.join(os.homedir(), session.config.credentialsDir, session.config.credentialsFile);
     await fs.promises.mkdir(path.dirname(finalCredPath), { recursive: true });
-    await fs.promises.writeFile(finalCredPath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+    const storedTokens = accountEmail ? { ...tokens, email: accountEmail } : tokens;
+    await fs.promises.writeFile(finalCredPath, JSON.stringify(storedTokens, null, 2), { mode: 0o600 });
     const relativePath = path.relative(process.cwd(), finalCredPath);
+    let customName = accountEmail;
 
     try {
         if (session.targetProviderUuid) {
-            await replaceProviderCredentialPath(CONFIG, {
+            const result = await replaceProviderCredentialPath(CONFIG, {
                 providerType: session.provider,
                 providerUuid: session.targetProviderUuid,
                 credPath: relativePath,
+                accountEmail,
                 ...(session.proxyOverrideProvided ? { proxyId: session.proxyId } : {})
             });
+            customName = result?.provider?.customName || session.targetProviderConfig?.customName || accountEmail;
         } else {
             await autoLinkProviderConfigs(CONFIG, {
                 onlyCurrentCred: true,
                 credPath: relativePath,
-                providerDefaults: session.proxyId ? { PROXY_ID: session.proxyId } : {},
+                providerDefaults: {
+                    ...(session.proxyId ? { PROXY_ID: session.proxyId } : {}),
+                    ...(accountEmail ? { accountEmail, customName: accountEmail } : {})
+                },
                 throwOnPersistError: true
             });
         }
@@ -310,7 +332,7 @@ async function persistGeminiCredentials(session, tokens) {
         await removeGeneratedCredential(finalCredPath);
         throw error;
     }
-    return { credPath: finalCredPath, relativePath };
+    return { credPath: finalCredPath, relativePath, accountEmail, customName: customName || '' };
 }
 
 function finishGeminiSession(session, errorMessage = '') {
@@ -338,11 +360,12 @@ async function completeGeminiOAuthSession(session, code) {
             codeVerifier: session.pkce.verifier,
             redirect_uri: session.redirectUri
         });
+        const accountEmail = await resolveGeminiOAuthAccountEmail(session, tokens);
         await withProviderTransitionLock(session.provider, async () => {
             if (latestSessions.get(session.provider) !== session.sessionId) {
                 throw new Error('OAuth authorization was replaced by a newer request');
             }
-            const credentials = await persistGeminiCredentials(session, tokens);
+            const credentials = await persistGeminiCredentials(session, tokens, accountEmail);
             broadcastEvent('oauth_success', {
                 provider: session.provider,
                 sessionId: session.sessionId,
@@ -424,6 +447,7 @@ async function handleGoogleOAuth(providerKey, currentConfig, options = {}) {
             sessionId: state,
             pkce,
             targetProviderUuid,
+            targetProviderConfig,
             proxyId: selectedProxyId,
             proxyOverrideProvided: hasProxyOverride,
             options,

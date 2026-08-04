@@ -58,6 +58,37 @@ function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
 }
 
+function isAntigravityProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.ANTIGRAVITY;
+}
+
+function normalizeAntigravityPlan(plan) {
+    const value = String(plan || '').trim();
+    if (!value) return { plan: 'unknown', isFree: false };
+    return {
+        plan: value,
+        isFree: /(^|[^a-z])free([^a-z]|$)/i.test(value) || value.toLowerCase() === 'free-tier'
+    };
+}
+
+function getAntigravityPlanStatusForProvider(providerType, uuid, usageCache, providerConfig = {}) {
+    const providerCache = usageCache?.providers?.[providerType];
+    const instance = Array.isArray(providerCache?.instances)
+        ? providerCache.instances.find(entry => (entry?.uuid || entry?.config?.uuid || entry?.providerUuid) === uuid)
+        : null;
+    const usageCandidates = [
+        instance?.usage?.summary?.plan,
+        instance?.usage?.raw?.tierId,
+        instance?.usage?.tierId
+    ];
+    for (const candidate of usageCandidates) {
+        const normalized = normalizeAntigravityPlan(candidate);
+        if (normalized.plan !== 'unknown') return { ...normalized, source: 'usage' };
+    }
+    const lastKnown = normalizeAntigravityPlan(providerConfig.lastKnownAntigravityPlan);
+    return { ...lastKnown, source: lastKnown.plan === 'unknown' ? 'unknown' : 'last_known' };
+}
+
 function getProviderWeight(config = {}) {
     const weight = Number(config.providerWeight ?? config.weight ?? 1);
     return Number.isFinite(weight) && weight > 0 ? weight : 1;
@@ -1392,6 +1423,9 @@ export class ProviderPoolManager {
         if (isCodexProviderType(providerType) && candidates.length > 0) {
             candidates = this._filterCodexProvidersByTokenQuota(providerType, candidates, requestedModel, options.selectionDiagnostics);
         }
+        if (isAntigravityProviderType(providerType) && candidates.length > 0) {
+            candidates = this._filterAntigravityProvidersByPlan(providerType, candidates, options.selectionDiagnostics);
+        }
 
         return candidates;
     }
@@ -2062,6 +2096,9 @@ export class ProviderPoolManager {
         if (isCodexProviderType(providerType)) {
             availableAndHealthyProviders = this._filterCodexProvidersByTokenQuota(providerType, availableAndHealthyProviders, requestedModel, selectionDiagnostics);
         }
+        if (isAntigravityProviderType(providerType)) {
+            availableAndHealthyProviders = this._filterAntigravityProvidersByPlan(providerType, availableAndHealthyProviders, selectionDiagnostics);
+        }
 
         if (options.acquireSlot === true) {
             const beforeConcurrencyFilter = availableAndHealthyProviders.length;
@@ -2237,6 +2274,48 @@ export class ProviderPoolManager {
             };
         }
 
+        return allowed;
+    }
+
+    _filterAntigravityProvidersByPlan(providerType, providers, selectionDiagnostics = null) {
+        const usageCache = readFreshUsageCacheSync();
+        const allowed = [];
+        let freeCount = 0;
+        let updatedLastKnownPlan = false;
+
+        for (const provider of providers) {
+            const uuid = provider.config?.uuid || provider.uuid;
+            const planStatus = getAntigravityPlanStatusForProvider(providerType, uuid, usageCache, provider.config);
+            if (planStatus.isFree) {
+                freeCount += 1;
+                this._log('info', `Skipping Antigravity provider ${this._getDisplayName(provider.config)}: plan ${planStatus.plan} is free`);
+                continue;
+            }
+            if (
+                planStatus.source === 'usage'
+                && provider.config?.lastKnownAntigravityPlan !== planStatus.plan
+            ) {
+                provider.config.lastKnownAntigravityPlan = planStatus.plan;
+                provider.config.lastKnownAntigravityPlanUpdatedAt = new Date().toISOString();
+                updatedLastKnownPlan = true;
+            }
+            allowed.push(provider);
+        }
+
+        if (updatedLastKnownPlan) this._debouncedSave(providerType);
+        if (selectionDiagnostics && freeCount > 0) {
+            selectionDiagnostics.filterReasons = {
+                ...(selectionDiagnostics.filterReasons || {}),
+                plan_free: freeCount
+            };
+        }
+        if (allowed.length === 0 && providers.length > 0 && freeCount > 0) {
+            const error = new Error(`All Antigravity providers are on the free plan (plan_free=${freeCount})`);
+            error.status = 429;
+            error.code = 429;
+            error.filterReasons = { plan_free: freeCount };
+            throw error;
+        }
         return allowed;
     }
 

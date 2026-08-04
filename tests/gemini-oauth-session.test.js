@@ -10,6 +10,7 @@ jest.mock('google-auth-library', () => ({
         this.options = options;
         this.generateAuthUrl = jest.fn(params => `https://accounts.example/auth?state=${params.state}`);
         this.getToken = jest.fn();
+        this.getTokenInfo = jest.fn();
     })
 }));
 jest.mock('../src/utils/logger.js', () => ({
@@ -96,6 +97,7 @@ describe('Gemini OAuth session completion', () => {
         });
         const client = OAuth2Client.mock.instances.at(-1);
         client.getToken.mockResolvedValueOnce({ tokens: { access_token: 'access', refresh_token: 'refresh' } });
+        client.getTokenInfo.mockResolvedValueOnce({ email: 'gemini.user@example.com' });
         const { response, done } = responseDone();
 
         await callbackHandler({ url: `/?code=code-1&state=${auth.authInfo.sessionId}` }, response);
@@ -105,14 +107,22 @@ describe('Gemini OAuth session completion', () => {
             code: 'code-1',
             codeVerifier: expect.any(String)
         }));
+        expect(client.getTokenInfo).toHaveBeenCalledWith('access');
+        expect(client.options.transporterOptions.agent).toBeDefined();
         expect(autoLinkProviderConfigs).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-            providerDefaults: { PROXY_ID: 'proxy-selected' },
+            providerDefaults: {
+                PROXY_ID: 'proxy-selected',
+                accountEmail: 'gemini.user@example.com',
+                customName: 'gemini.user@example.com'
+            },
             throwOnPersistError: true
         }));
         expect(broadcastEvent).toHaveBeenCalledWith('oauth_success', expect.objectContaining({
             provider: 'gemini-antigravity',
             sessionId: auth.authInfo.sessionId,
-            targetProviderUuid: null
+            targetProviderUuid: null,
+            accountEmail: 'gemini.user@example.com',
+            customName: 'gemini.user@example.com'
         }));
         expect(autoLinkProviderConfigs.mock.invocationCallOrder[0])
             .toBeLessThan(broadcastEvent.mock.invocationCallOrder.at(-1));
@@ -144,6 +154,7 @@ describe('Gemini OAuth session completion', () => {
         });
         const client = OAuth2Client.mock.instances.at(-1);
         client.getToken.mockResolvedValueOnce({ tokens: { access_token: 'access', refresh_token: 'refresh' } });
+        client.getTokenInfo.mockResolvedValueOnce({ email: 'reauthorized@example.com' });
         const { response, done } = responseDone();
 
         await callbackHandler({ url: `/?code=code-2&state=${auth.authInfo.sessionId}` }, response);
@@ -152,9 +163,67 @@ describe('Gemini OAuth session completion', () => {
         expect(replaceProviderCredentialPath).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
             providerType: 'gemini-antigravity',
             providerUuid: 'antigravity-1',
-            proxyId: 'proxy-selected'
+            proxyId: 'proxy-selected',
+            accountEmail: 'reauthorized@example.com'
         }));
         expect(autoLinkProviderConfigs).not.toHaveBeenCalled();
+    });
+
+    test('falls back to the id token email when token info lookup fails', async () => {
+        jest.spyOn(http, 'createServer').mockImplementation(handler => {
+            callbackHandler = handler;
+            return mockServer();
+        });
+        const auth = await handleGeminiAntigravityOAuth(setupConfig(), {
+            saveToConfigs: true,
+            providerDir: 'antigravity',
+            proxyId: 'proxy-selected'
+        });
+        const client = OAuth2Client.mock.instances.at(-1);
+        const payload = Buffer.from(JSON.stringify({ email: 'fallback@example.com', email_verified: true })).toString('base64url');
+        client.getToken.mockResolvedValueOnce({
+            tokens: { access_token: 'access', refresh_token: 'refresh', id_token: `header.${payload}.signature` }
+        });
+        client.getTokenInfo.mockRejectedValueOnce(new Error('token info unavailable'));
+        const { response, done } = responseDone();
+
+        await callbackHandler({ url: `/?code=code-fallback&state=${auth.authInfo.sessionId}` }, response);
+        await done;
+
+        expect(autoLinkProviderConfigs).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+            providerDefaults: expect.objectContaining({
+                accountEmail: 'fallback@example.com',
+                customName: 'fallback@example.com'
+            })
+        }));
+        expect(broadcastEvent).toHaveBeenCalledWith('oauth_success', expect.objectContaining({
+            accountEmail: 'fallback@example.com'
+        }));
+    });
+
+    test('continues authorization when no account email can be resolved', async () => {
+        jest.spyOn(http, 'createServer').mockImplementation(handler => {
+            callbackHandler = handler;
+            return mockServer();
+        });
+        const auth = await handleGeminiAntigravityOAuth(setupConfig(), {
+            saveToConfigs: true,
+            providerDir: 'antigravity',
+            proxyId: 'proxy-selected'
+        });
+        const client = OAuth2Client.mock.instances.at(-1);
+        client.getToken.mockResolvedValueOnce({ tokens: { access_token: 'access', refresh_token: 'refresh' } });
+        client.getTokenInfo.mockRejectedValueOnce(new Error('token info unavailable'));
+        const { response, done } = responseDone();
+
+        await callbackHandler({ url: `/?code=code-no-email&state=${auth.authInfo.sessionId}` }, response);
+        await done;
+
+        expect(autoLinkProviderConfigs).toHaveBeenCalled();
+        expect(broadcastEvent).toHaveBeenCalledWith('oauth_success', expect.objectContaining({
+            accountEmail: '',
+            customName: ''
+        }));
     });
 
     test('ends the session immediately when Google token exchange fails', async () => {

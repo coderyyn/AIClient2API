@@ -19,6 +19,7 @@ import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 import { getProviderModels } from '../providers/provider-models.js';
 import { codexOverloadFailoverStore } from '../providers/openai/codex-overload-failover.js';
+import { readGeminiCredentialEmail } from '../utils/gemini-account.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
@@ -30,6 +31,30 @@ function isTruthyConfigFlag(value) {
 
 function isCodexProviderType(providerType) {
     return providerType === MODEL_PROVIDER.CODEX_API || providerType?.startsWith(`${MODEL_PROVIDER.CODEX_API}-`);
+}
+
+function isGeminiProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.GEMINI_CLI || providerType === MODEL_PROVIDER.ANTIGRAVITY;
+}
+
+async function getGeminiProviderEmail(providerType, credPath) {
+    if (!isGeminiProviderType(providerType) || !credPath) return '';
+    const absolutePath = path.isAbsolute(credPath) ? credPath : path.join(process.cwd(), credPath);
+    return readGeminiCredentialEmail(absolutePath);
+}
+
+async function backfillGeminiProviderAccountNames(providers, providerType, credPathKey) {
+    if (!isGeminiProviderType(providerType) || !Array.isArray(providers)) return 0;
+    let updated = 0;
+    for (const provider of providers) {
+        if (!provider || (provider.accountEmail && provider.customName)) continue;
+        const accountEmail = await getGeminiProviderEmail(providerType, provider[credPathKey]);
+        if (!accountEmail) continue;
+        if (!provider.accountEmail) provider.accountEmail = accountEmail;
+        if (!String(provider.customName || '').trim()) provider.customName = accountEmail;
+        updated += 1;
+    }
+    return updated;
 }
 
 function isSupportedCodexModel(providerType, model) {
@@ -112,6 +137,7 @@ export async function autoLinkProviderConfigs(config, options = {}) {
     }
     
     let totalNewProviders = 0;
+    let updatedExistingProviders = 0;
     const allNewProviders = {};
     
     // 如果只关联当前凭证
@@ -139,6 +165,12 @@ export async function autoLinkProviderConfigs(config, options = {}) {
             if (!fs.existsSync(configsPath)) {
                 continue;
             }
+
+            updatedExistingProviders += await backfillGeminiProviderAccountNames(
+                config.providerPools[providerType],
+                providerType,
+                credPathKey
+            );
             
             // 获取已关联的配置文件路径集合
             const linkedPaths = new Set();
@@ -169,7 +201,7 @@ export async function autoLinkProviderConfigs(config, options = {}) {
     }
     
     // 如果有新的配置文件需要关联，保存更新后的 provider_pools.json
-    if (totalNewProviders > 0) {
+    if (totalNewProviders > 0 || updatedExistingProviders > 0) {
         const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
         try {
             await withFileLock(filePath, async () => {
@@ -187,6 +219,9 @@ export async function autoLinkProviderConfigs(config, options = {}) {
                         logger.info(`    - ${p[credKey]}`);
                     }
                 });
+            }
+            if (updatedExistingProviders > 0) {
+                logger.info(`[Auto-Link] Backfilled account names for ${updatedExistingProviders} existing Gemini provider(s)`);
             }
         } catch (error) {
             logger.error(`[Auto-Link] Failed to save provider_pools.json: ${error.message}`);
@@ -270,6 +305,13 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             }
         }
 
+        if (isGeminiProviderType(providerType) && typeof options.accountEmail === 'string' && options.accountEmail.trim()) {
+            nextProvider.accountEmail = options.accountEmail.trim();
+            if (!String(nextProvider.customName || '').trim()) {
+                nextProvider.customName = nextProvider.accountEmail;
+            }
+        }
+
         updatedProvider = applyCodexIdentityToProvider(nextProvider, codexIdentity);
 
         providerPools[providerType][providerIndex] = updatedProvider;
@@ -317,6 +359,12 @@ function pickProviderDefaults(providerDefaults = {}) {
     const defaults = {};
     if (typeof providerDefaults.PROXY_ID === 'string' && providerDefaults.PROXY_ID.trim()) {
         defaults.PROXY_ID = providerDefaults.PROXY_ID.trim();
+    }
+    if (typeof providerDefaults.accountEmail === 'string' && providerDefaults.accountEmail.trim()) {
+        defaults.accountEmail = providerDefaults.accountEmail.trim();
+    }
+    if (typeof providerDefaults.customName === 'string' && providerDefaults.customName.trim()) {
+        defaults.customName = providerDefaults.customName.trim();
     }
     return defaults;
 }
@@ -410,9 +458,10 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
         }
         
         const { providerType, credPathKey, defaultCheckModel, displayName, needsProjectId } = matchedMapping;
+        const geminiAccountEmail = await getGeminiProviderEmail(providerType, absolutePath);
         const customName = isCodexProviderType(providerType)
             ? await readCodexCredentialDisplayName(absolutePath)
-            : '';
+            : geminiAccountEmail;
         const codexIdentity = isCodexProviderType(providerType)
             ? await readCodexCredentialIdentity(absolutePath)
             : null;
@@ -473,6 +522,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
                 needsProjectId,
                 customName
             }),
+            ...(geminiAccountEmail ? { accountEmail: geminiAccountEmail } : {}),
             ...pickProviderDefaults(providerDefaults)
         };
         if (isCodexProviderType(providerType)) {
@@ -522,7 +572,7 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                     const fileName = getFileName(fullPath);
                     const customName = isCodexProviderType(providerType)
                         ? await readCodexCredentialDisplayName(fullPath)
-                        : '';
+                        : await getGeminiProviderEmail(providerType, fullPath);
                     const codexIdentity = isCodexProviderType(providerType)
                         ? await readCodexCredentialIdentity(fullPath)
                         : null;
@@ -546,6 +596,9 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                             needsProjectId,
                             customName
                         });
+                        if (isGeminiProviderType(providerType) && customName) {
+                            newProvider.accountEmail = customName;
+                        }
                         if (isCodexProviderType(providerType)) {
                             applyCodexIdentityToProvider(newProvider, codexIdentity);
                         }
