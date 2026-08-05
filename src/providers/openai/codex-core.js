@@ -12,6 +12,7 @@ import {MODEL_PROVIDER, formatExpiryLog, normalizeProviderErrorMessage} from '..
 import {getProxyConfigForProvider} from '../../utils/proxy-utils.js';
 import {getProviderModels} from '../provider-models.js';
 import {getProvidedPromptCacheKey, resolveCodexSessionId} from './codex-session-utils.js';
+import {normalizeCodexInstructions} from './codex-request-utils.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
@@ -622,6 +623,9 @@ export class CodexApiService {
         delete cleanedBody.prompt_cache_retention;
         delete cleanedBody.safety_identifier;
         delete cleanedBody.stream_options;
+
+        // Codex 接受顶层 instructions，但拒绝 input 中的 system/developer 消息。
+        normalizeCodexInstructions(cleanedBody);
 
         // 【关键修复】确保传给上游的模型名称不带 -fast 后缀
         // 即使 originalRequestBody 中已经带了 model，这里也必须覆盖
