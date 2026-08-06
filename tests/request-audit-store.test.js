@@ -30,6 +30,33 @@ describe('request audit store', () => {
     expect(rows[0].requestId).toBe('req-1');
   });
 
+  test('filters v2 audit rows by exact client ip and original path while keeping v1 readable', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'request-audit-network-'));
+    const store = new RequestAuditStore({ dir, retentionHours: 24 });
+
+    await store.append({
+      schemaVersion: 2,
+      timestamp: '2026-08-05T15:15:00.000Z',
+      requestId: 'req-v2',
+      request: { path: '/openai-codex-oauth/v1/chat/completions', normalizedPath: '/v1/chat/completions' },
+      network: { clientIp: '119.123.77.234' }
+    });
+    await store.append({
+      schemaVersion: 1,
+      timestamp: '2026-08-05T15:16:00.000Z',
+      requestId: 'req-v1',
+      request: { path: null }
+    });
+
+    const rows = await store.query({
+      clientIp: '119.123.77.234',
+      path: '/openai-codex-oauth/v1/chat/completions'
+    });
+
+    expect(rows.map(row => row.requestId)).toEqual(['req-v2']);
+    await expect(store.query({ requestId: 'req-v1' })).resolves.toHaveLength(1);
+  });
+
   test('cleanup removes only expired audit jsonl files', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'request-audit-cleanup-'));
     const oldPath = path.join(dir, 'audit-2026-06-20.jsonl');

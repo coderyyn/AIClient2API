@@ -14,12 +14,23 @@ import { PROMPT_LOG_FILENAME } from '../core/config-manager.js';
 import { getPluginManager } from '../core/plugin-manager.js';
 import { randomUUID } from 'crypto';
 import { handleGrokAssetsProxy } from '../utils/grok-assets-proxy.js';
+import { instrumentResponseForAudit } from '../utils/request-audit-lifecycle.js';
 
 /**
- * Generate a short unique request ID (8 characters)
+ * Generate a collision-resistant server-side request ID.
  */
 function generateRequestId() {
-    return randomUUID().slice(0, 8);
+    return randomUUID();
+}
+
+function isAuditableModelRequest(method, path) {
+    const value = String(path || '');
+    const route = value.replace(/^\/(?:[^/]+)\/(?=v1(?:beta)?\/)/, '/');
+    if (method === 'GET') return route === '/v1/models' || route === '/v1beta/models';
+    if (method !== 'POST') return false;
+    if (/^\/v1\/(?:chat\/completions|responses|messages|images\/(?:generations|edits))$/.test(route)) return true;
+    if (/^\/v1\/messages\/count_tokens$/.test(route)) return true;
+    return /^\/v1beta\/models\/.+?:(?:generateContent|streamGenerateContent)$/.test(route);
 }
 
 /**
@@ -31,15 +42,31 @@ function generateRequestId() {
  */
 export function createRequestHandler(config, providerPoolManager) {
     return async function requestHandler(req, res) {
-        // Generate unique request ID and set it in logger context
-        const clientIp = getClientIp(req, config);
-        const requestId = `${clientIp}:${generateRequestId()}`;
+        const network = getClientIp(req, config, { detailed: true });
+        const requestId = generateRequestId();
+        const initialRequestUrl = new URL(req.url, `http://${req.headers.host}`);
+        const originalPath = initialRequestUrl.pathname;
 
-        return requestContext.run({ requestId }, async () => {
+        return requestContext.run({ requestId, requestAudit: { requestId, ...network, originalPath } }, async () => {
             return logger.runWithContext(requestId, async () => {
                 // Deep copy the config for each request to allow dynamic modification
                 const currentConfig = deepmerge({}, config);
                 currentConfig._monitorRequestId = requestId;
+                currentConfig._requestAuditLifecycle = true;
+                const auditLifecycle = instrumentResponseForAudit(res, async ({ normalizedPath, response, errorClass }) => {
+                    const pluginManager = getPluginManager();
+                    await pluginManager.executeHook('onRequestCompleted', {
+                        ...currentConfig,
+                        requestId,
+                        method: req.method,
+                        path: originalPath,
+                        normalizedPath,
+                        ...network,
+                        response,
+                        errorClass
+                    });
+                }, { autoFinalize: false });
+                res.setHeader('X-Request-ID', requestId);
                 
                 // 计算当前请求的基础 URL
                 const protocol = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
@@ -54,12 +81,15 @@ export function createRequestHandler(config, providerPoolManager) {
                     requestUrl.pathname = path;
                 }
                 const method = req.method;
+                auditLifecycle.setNormalizedPath(path);
+                if (isAuditableModelRequest(method, originalPath)) auditLifecycle.markEligible();
 
                 try {
                     // Set CORS headers for all requests
                     res.setHeader('Access-Control-Allow-Origin', '*');
                     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
                     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key, Model-Provider, X-Requested-With, Accept, Origin');
+                    res.setHeader('Access-Control-Expose-Headers', 'X-Request-ID');
                     res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours cache for preflight
 
                     // Handle CORS preflight requests
@@ -195,6 +225,7 @@ export function createRequestHandler(config, providerPoolManager) {
                             pathSegments.shift();
                             path = '/' + pathSegments.join('/');
                             requestUrl.pathname = path;
+                            auditLifecycle.setNormalizedPath(path);
                         } else if (firstSegment && Object.values(MODEL_PROVIDER).includes(firstSegment)) {
                             // 如果在 MODEL_PROVIDER 中但没注册适配器，拦截并报错
                             logger.warn(`[Config] Provider ${firstSegment} is recognized but no adapter is registered.`);
@@ -275,7 +306,8 @@ export function createRequestHandler(config, providerPoolManager) {
                         handleError(res, error, currentConfig.MODEL_PROVIDER, null, req);
                     }
                 } finally {
-                    // AsyncLocalStorage 自动管理生命周期，不再需要手动清理
+                    await auditLifecycle.complete();
+                    auditLifecycle.dispose();
                 }
             });
         });

@@ -210,6 +210,8 @@ function parseQuery(requestUrl) {
         keyHash: requestUrl.searchParams.get('keyHash') || undefined,
         keyPrefix: requestUrl.searchParams.get('keyPrefix') || undefined,
         requestId: requestUrl.searchParams.get('requestId') || undefined,
+        clientIp: requestUrl.searchParams.get('clientIp') || undefined,
+        path: requestUrl.searchParams.get('path') || undefined,
         since: requestUrl.searchParams.get('since') || undefined,
         until: requestUrl.searchParams.get('until') || undefined,
         model: requestUrl.searchParams.get('model') || undefined,

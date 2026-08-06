@@ -67,6 +67,22 @@ describe('request audit api aggregation', () => {
     expect(payload.data.requests[0].diagnosis.primaryReason).toBe('tools_changed');
   });
 
+  test('passes client ip and original path filters to the audit store', async () => {
+    const query = jest.fn(async () => []);
+    await callRoute('/api/request-audit/requests?clientIp=119.123.77.234&path=%2Fopenai-codex-oauth%2Fv1%2Fchat%2Fcompletions', {
+      _requestAuditSkipAuth: true,
+      _requestAuditStore: { query },
+      _requestAuditAnalysisStore: {
+        readDiagnostics: jest.fn(async () => ({}))
+      }
+    });
+
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({
+      clientIp: '119.123.77.234',
+      path: '/openai-codex-oauth/v1/chat/completions'
+    }));
+  });
+
   test('raw capture status exposes scoped capture settings and file count', async () => {
     const controller = {
       getStatus: jest.fn(() => ({
@@ -183,7 +199,8 @@ async function callRoute(path, config, method = 'GET', requestBody = null, expec
     destroy() {}
   };
 
-  await handleRequestAuditRoutes(method, path, req, res, config);
+  const routePath = new URL(path, 'http://localhost').pathname;
+  await handleRequestAuditRoutes(method, routePath, req, res, config);
   expect(statusCode).toBe(expectedStatus);
   return JSON.parse(responseBody);
 }

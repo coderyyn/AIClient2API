@@ -59,6 +59,49 @@ describe('request audit plugin', () => {
     expect(JSON.stringify(auditStore.append.mock.calls[0][0])).not.toContain('hello');
   });
 
+  test('defers lifecycle-backed requests until completion and writes exactly one final event', async () => {
+    const auditStore = { append: jest.fn(), cleanup: jest.fn() };
+    await plugin.init({ REQUEST_AUDIT_ENABLED: true, _requestAuditStore: auditStore });
+
+    await plugin.hooks.onUnaryResponse({
+      requestId: 'req-lifecycle',
+      clientResponse: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'no image' }] }] }
+    });
+    await plugin.hooks.onContentGenerated({
+      _monitorRequestId: 'req-lifecycle',
+      _requestAuditLifecycle: true,
+      potluckApiKey: 'maki_secret_key',
+      originalRequestBody: { model: 'gpt-image-2', messages: [{ role: 'user', content: 'draw' }] },
+      model: 'gpt-image-2',
+      toProvider: 'openai-codex-oauth'
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    expect(auditStore.append).not.toHaveBeenCalled();
+
+    await plugin.hooks.onRequestCompleted({
+      requestId: 'req-lifecycle',
+      method: 'POST',
+      path: '/openai-codex-oauth/v1/chat/completions',
+      normalizedPath: '/v1/chat/completions',
+      clientIp: '119.123.77.234',
+      peerIp: '172.17.0.1',
+      clientIpSource: 'trusted-x-real-ip',
+      response: { httpStatus: 200, bytes: 512, completed: true, clientAborted: false }
+    });
+    await plugin.hooks.onRequestCompleted({
+      requestId: 'req-lifecycle',
+      response: { httpStatus: 200, bytes: 512, completed: true, clientAborted: false }
+    });
+
+    await waitFor(() => expect(auditStore.append).toHaveBeenCalledTimes(1));
+    expect(auditStore.append.mock.calls[0][0]).toMatchObject({
+      requestId: 'req-lifecycle',
+      response: { hasImageResult: false },
+      status: { outcome: 'semantic_failure', errorClass: 'missing_image_generation_result' }
+    });
+  });
+
   test('does not block content generation when audit persistence is slow', async () => {
     let resolveAppend;
     const appendPromise = new Promise(resolve => {

@@ -18,6 +18,15 @@ describe('request audit ui source', () => {
     expect(html).toContain('按密钥和时间窗复盘请求缓存率');
     expect(html).toContain('缓存命中率 =');
     expect(html).toContain('逐请求明细');
+    expect(html).toContain('id="clientIp"');
+    expect(html).toContain('id="requestPath"');
+    expect(html).toContain('客户端 IP');
+    expect(html).toContain('原始 Path');
+    expect(html).toContain('标准化 Path');
+    expect(html).toContain('Peer IP');
+    expect(html).toContain('IP 来源');
+    expect(html).toContain('响应字节');
+    expect(html).toContain('图片结果');
     expect(html).toContain('单次请求 token 分类');
     expect(html).toContain('type="datetime-local"');
     expect(html).toContain('默认最近 20 分钟');

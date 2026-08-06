@@ -5,6 +5,8 @@ import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
 import { buildBoundedRawCaptureEvent, RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
 
 const pendingUsage = new Map();
+const pendingAuditContexts = new Map();
+const finalizedRequestIds = new Map();
 const auditQueue = [];
 let auditQueueBytes = 0;
 let enabled = true;
@@ -111,10 +113,83 @@ function setPendingUsage(requestId, usage) {
             recordAuditLoss('pending usage overflow');
         }
     }
+    const previous = pendingUsage.get(requestId) || {};
     pendingUsage.set(requestId, {
         usage: mergeUsage(pendingUsage.get(requestId)?.usage, usage),
+        hasImageResult: previous.hasImageResult === true,
         updatedAt: Date.now()
     });
+}
+
+function containsImageResult(value, seen = new Set()) {
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some(item => containsImageResult(item, seen));
+    if (typeof value.b64_json === 'string' && value.b64_json.length > 0) return true;
+    if (Array.isArray(value.data) && value.data.some(item =>
+        typeof item?.b64_json === 'string' && item.b64_json.length > 0 ||
+        typeof item?.url === 'string' && item.url.length > 0
+    )) return true;
+    if (typeof value.url === 'string' && value.url.startsWith('data:image/')) return true;
+    if (value.type === 'image_generation_call' && typeof value.result === 'string' && value.result.length > 0) return true;
+    const inlineData = value.inlineData || value.inline_data;
+    if (inlineData && typeof inlineData.data === 'string' && inlineData.data.length > 0 && /^image\//i.test(inlineData.mimeType || inlineData.mime_type || '')) return true;
+    return Object.values(value).some(item => containsImageResult(item, seen));
+}
+
+function observeImageResult(requestId, ...candidates) {
+    if (!requestId || !candidates.some(candidate => containsImageResult(candidate))) return;
+    const entry = pendingUsage.get(requestId) || { usage: normalizeUsage({}), updatedAt: Date.now() };
+    entry.hasImageResult = true;
+    entry.updatedAt = Date.now();
+    pendingUsage.set(requestId, entry);
+}
+
+function isImageRequest(context = {}) {
+    const path = String(context.normalizedPath || context.path || '');
+    if (/\/v1\/images\/(?:generations|edits)$/i.test(path)) return true;
+    const model = String(context.model || context.processedRequestBody?.model || context.originalRequestBody?.model || '');
+    return /gpt-image|flash-image|image-preview|banana/i.test(model);
+}
+
+function rememberFinalizedRequest(requestId) {
+    if (!requestId) return;
+    finalizedRequestIds.set(requestId, Date.now());
+    while (finalizedRequestIds.size > MAX_PENDING_USAGE_ENTRIES) {
+        finalizedRequestIds.delete(finalizedRequestIds.keys().next().value);
+    }
+}
+
+function enqueueFinalAudit(context = {}) {
+    const requestId = getRequestId(context);
+    if (!requestId || finalizedRequestIds.has(requestId)) return;
+    cleanupPendingUsage();
+    const pending = pendingUsage.get(requestId) || {};
+    const response = {
+        ...(context.response || {}),
+        hasImageResult: isImageRequest(context) ? pending.hasImageResult === true : null
+    };
+    const event = buildRequestAuditEvent({
+        ...context,
+        requestId,
+        response,
+        usage: pending.usage || {},
+        timestamp: new Date().toISOString()
+    });
+    let rawCaptureEvent = null;
+    if (shouldCaptureRawRequest(rawCaptureOptions, event) && rawCaptureStore) {
+        try {
+            rawCaptureEvent = buildBoundedRawCaptureEvent(event, context, rawCaptureStore.maxBytes);
+        } catch {
+            recordAuditLoss('raw snapshot failure');
+            logger.warn('[Request Audit] raw snapshot failure');
+        }
+    }
+    enqueueAuditContext({ event, rawCaptureEvent });
+    rememberFinalizedRequest(requestId);
+    pendingUsage.delete(requestId);
+    pendingAuditContexts.delete(requestId);
 }
 
 function cleanupPendingUsage() {
@@ -122,7 +197,11 @@ function cleanupPendingUsage() {
     for (const [requestId, entry] of pendingUsage.entries()) {
         if ((entry.updatedAt || 0) < cutoff) {
             pendingUsage.delete(requestId);
+            pendingAuditContexts.delete(requestId);
         }
+    }
+    for (const [requestId, finalizedAt] of finalizedRequestIds.entries()) {
+        if (finalizedAt < cutoff) finalizedRequestIds.delete(requestId);
     }
 }
 
@@ -344,6 +423,8 @@ const requestAuditPlugin = {
         acceptingAuditContext = false;
         enabled = false;
         pendingUsage.clear();
+        pendingAuditContexts.clear();
+        finalizedRequestIds.clear();
         if (cleanupTimer) {
             clearInterval(cleanupTimer);
             cleanupTimer = null;
@@ -379,11 +460,13 @@ const requestAuditPlugin = {
         async onUnaryResponse({ requestId, nativeResponse, clientResponse }) {
             if (!enabled || !acceptingAuditContext || !requestId) return;
             setPendingUsage(requestId, extractUsage(nativeResponse, clientResponse));
+            observeImageResult(requestId, nativeResponse, clientResponse);
         },
 
         async onStreamChunk({ requestId, nativeChunk, chunkToSend }) {
             if (!enabled || !acceptingAuditContext || !requestId) return;
             setPendingUsage(requestId, extractUsage(nativeChunk, chunkToSend));
+            observeImageResult(requestId, nativeChunk, chunkToSend);
         },
 
         async onContentGenerated(context = {}) {
@@ -392,28 +475,28 @@ const requestAuditPlugin = {
             if (!requestId) return;
 
             try {
-                cleanupPendingUsage();
-                const usage = pendingUsage.get(requestId)?.usage || {};
-                const event = buildRequestAuditEvent({
-                    ...context,
-                    requestId,
-                    usage,
-                    timestamp: new Date().toISOString()
-                });
-                let rawCaptureEvent = null;
-                if (shouldCaptureRawRequest(rawCaptureOptions, event) && rawCaptureStore) {
-                    try {
-                        rawCaptureEvent = buildBoundedRawCaptureEvent(event, context, rawCaptureStore.maxBytes);
-                    } catch {
-                        recordAuditLoss('raw snapshot failure');
-                        logger.warn('[Request Audit] raw snapshot failure');
-                    }
+                if (context._requestAuditLifecycle === true) {
+                    setPendingUsage(requestId, {});
+                    pendingAuditContexts.set(requestId, { ...context, requestId });
+                    return;
                 }
-                enqueueAuditContext({ event, rawCaptureEvent });
+                enqueueFinalAudit(context);
             } catch (error) {
                 logger.warn('[Request Audit] Failed to enqueue audit event:', error.message);
-            } finally {
+            }
+        },
+
+        async onRequestCompleted(context = {}) {
+            if (!enabled || !acceptingAuditContext) return;
+            const requestId = getRequestId(context);
+            if (!requestId || finalizedRequestIds.has(requestId)) return;
+            try {
+                const generatedContext = pendingAuditContexts.get(requestId) || {};
+                enqueueFinalAudit({ ...generatedContext, ...context, requestId });
+            } catch (error) {
+                logger.warn('[Request Audit] Failed to finalize audit event:', error.message);
                 pendingUsage.delete(requestId);
+                pendingAuditContexts.delete(requestId);
             }
         }
     }

@@ -122,6 +122,8 @@ export class RequestAuditStore {
         if (filters.keyHash && event?.potluckKey?.hash !== filters.keyHash) return false;
         if (filters.keyPrefix && event?.potluckKey?.prefix !== filters.keyPrefix) return false;
         if (filters.requestId && event?.requestId !== filters.requestId) return false;
+        if (filters.clientIp && event?.network?.clientIp !== filters.clientIp) return false;
+        if (filters.path && event?.request?.path !== filters.path) return false;
         if (filters.model && event?.request?.model !== filters.model) return false;
         if (filters.provider && event?.request?.toProvider !== filters.provider) return false;
         if (filters.outcome && event?.status?.outcome !== filters.outcome) return false;

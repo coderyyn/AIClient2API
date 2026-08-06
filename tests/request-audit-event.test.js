@@ -2,6 +2,63 @@ import { buildRequestAuditEvent } from '../src/plugins/request-audit/audit-event
 import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
 
 describe('request audit event', () => {
+  test('builds a self-contained v2 event with request network and response facts', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-v2',
+      method: 'POST',
+      path: '/openai-codex-oauth/v1/chat/completions',
+      normalizedPath: '/v1/chat/completions',
+      clientIp: '119.123.77.234',
+      peerIp: '172.17.0.1',
+      clientIpSource: 'trusted-x-real-ip',
+      model: 'gpt-image-2',
+      response: {
+        httpStatus: 200,
+        bytes: 1864,
+        completed: true,
+        clientAborted: false,
+        hasImageResult: false
+      }
+    });
+
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      request: {
+        method: 'POST',
+        path: '/openai-codex-oauth/v1/chat/completions',
+        normalizedPath: '/v1/chat/completions',
+        model: 'gpt-image-2'
+      },
+      network: {
+        clientIp: '119.123.77.234',
+        peerIp: '172.17.0.1',
+        clientIpSource: 'trusted-x-real-ip'
+      },
+      response: {
+        httpStatus: 200,
+        bytes: 1864,
+        completed: true,
+        clientAborted: false,
+        hasImageResult: false
+      },
+      status: {
+        outcome: 'semantic_failure',
+        httpStatus: 200,
+        errorClass: 'missing_image_generation_result'
+      }
+    });
+  });
+
+  test.each([
+    [{ httpStatus: 503, completed: true, clientAborted: false, hasImageResult: null }, 'http_error'],
+    [{ httpStatus: 200, completed: false, clientAborted: true, hasImageResult: null }, 'client_aborted'],
+    [{ httpStatus: 200, completed: true, clientAborted: false, hasImageResult: true }, 'success']
+  ])('derives the real outcome from response facts %#', (response, outcome) => {
+    const event = buildRequestAuditEvent({ requestId: `req-${outcome}`, model: 'gpt-image-2', response });
+    expect(event.status.outcome).toBe(outcome);
+    expect(event.status.httpStatus).toBe(response.httpStatus);
+  });
+
   test('builds sanitized audit event with key hash and no raw prompt', () => {
     const event = buildRequestAuditEvent({
       requestId: 'req-1',

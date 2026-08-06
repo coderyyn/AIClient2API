@@ -86,6 +86,48 @@ function getBeijingParts(date) {
     };
 }
 
+function sanitizePath(value) {
+    if (!value) return null;
+    return String(value).split('?')[0] || null;
+}
+
+function normalizeResponse(context = {}) {
+    const source = context.response || {};
+    const rawStatus = source.httpStatus ?? context.httpStatus;
+    const httpStatus = Number.isInteger(Number(rawStatus)) ? Number(rawStatus) : null;
+    const rawImageResult = source.hasImageResult ?? context.hasImageResult;
+    return {
+        httpStatus,
+        bytes: Math.max(0, toNumber(source.bytes ?? context.responseBytes)),
+        completed: source.completed === true,
+        clientAborted: source.clientAborted === true,
+        hasImageResult: typeof rawImageResult === 'boolean' ? rawImageResult : null
+    };
+}
+
+function deriveStatus(context, response) {
+    if (context.outcome) {
+        return {
+            outcome: context.outcome,
+            httpStatus: response.httpStatus,
+            errorClass: context.errorClass || null
+        };
+    }
+    if (response.clientAborted) {
+        return { outcome: 'client_aborted', httpStatus: response.httpStatus, errorClass: context.errorClass || 'client_aborted' };
+    }
+    if (response.httpStatus !== null && (response.httpStatus < 200 || response.httpStatus >= 300)) {
+        return { outcome: 'http_error', httpStatus: response.httpStatus, errorClass: context.errorClass || `http_${response.httpStatus}` };
+    }
+    if (response.hasImageResult === false) {
+        return { outcome: 'semantic_failure', httpStatus: response.httpStatus, errorClass: context.errorClass || 'missing_image_generation_result' };
+    }
+    if (response.completed && response.httpStatus !== null) {
+        return { outcome: 'success', httpStatus: response.httpStatus, errorClass: context.errorClass || null };
+    }
+    return { outcome: 'http_error', httpStatus: response.httpStatus, errorClass: context.errorClass || 'incomplete_response' };
+}
+
 export function buildRequestAuditEvent(context = {}) {
     const timestamp = context.timestamp || new Date().toISOString();
     const date = new Date(timestamp);
@@ -94,9 +136,11 @@ export function buildRequestAuditEvent(context = {}) {
     const actualModel = context.model || context.processedRequestBody?.model || context.originalRequestBody?.model || 'unknown';
     const requestedModel = context.originalRequestBody?.model || actualModel;
     const cacheAffinityScope = context._codexCacheAffinityScope || {};
+    const response = normalizeResponse(context);
+    const derivedStatus = deriveStatus(context, response);
 
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         timestamp,
         beijingDate: beijing.date,
         beijingHour: beijing.hour,
@@ -106,13 +150,19 @@ export function buildRequestAuditEvent(context = {}) {
         session_id_hash: hashSecret(cacheAffinityScope.sessionId, 32),
         request: {
             method: context.method || 'POST',
-            path: context.path || context.requestPath || null,
+            path: sanitizePath(context.path || context.requestPath),
+            normalizedPath: sanitizePath(context.normalizedPath),
             fromProvider: context.fromProvider || null,
             toProvider: context.toProvider || context.provider || null,
             model: actualModel,
             requestedModel,
             actualModel,
             stream: Boolean(context.isStream)
+        },
+        network: {
+            clientIp: context.clientIp || null,
+            peerIp: context.peerIp || null,
+            clientIpSource: context.clientIpSource || null
         },
         potluckKey: {
             ...maskPotluckKey(context.potluckApiKey),
@@ -125,12 +175,11 @@ export function buildRequestAuditEvent(context = {}) {
             providerNameDisplay: sanitizeProviderName(context.providerName)
         },
         status: {
-            outcome: context.outcome || 'success',
-            httpStatus: context.httpStatus || 200,
-            errorClass: context.errorClass || null,
+            ...derivedStatus,
             retryCount: toNumber(context.retryCount),
             cooldownApplied: Boolean(context.cooldownApplied)
         },
+        response,
         usage
     };
 }
