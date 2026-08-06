@@ -42,4 +42,80 @@ describe('Antigravity usage formatting', () => {
         expect(formatted.summary.usedPercent).toBe(37.5);
         expect(formatted.summary.plan).toBe('Quota(free)');
     });
+
+    test('adds authoritative 5h and weekly remaining quota items from quota groups', () => {
+        const formatted = formatAntigravityUsage({
+            tierId: 'Antigravity Pro',
+            account: 'user@example.com',
+            models: {
+                'gemini-3-flash': {
+                    quotaInfo: { remainingFraction: 0.8, resetTime: '2026-08-06T22:00:00Z' }
+                }
+            },
+            quotaGroups: [
+                {
+                    displayName: 'Gemini Models',
+                    buckets: [
+                        {
+                            bucketId: 'gemini-weekly',
+                            displayName: 'Weekly Limit Remaining',
+                            window: 'weekly',
+                            remainingFraction: 0.9,
+                            resetTime: '2026-08-11T04:53:25Z'
+                        },
+                        {
+                            bucketId: 'gemini-5h',
+                            displayName: 'Five Hour Limit Remaining',
+                            window: '5h',
+                            remainingFraction: 0.75,
+                            resetTime: '2026-08-06T22:01:21Z'
+                        }
+                    ]
+                },
+                {
+                    displayName: 'Claude and GPT models',
+                    buckets: [
+                        {
+                            bucketId: '3p-weekly',
+                            displayName: 'Weekly Limit Remaining',
+                            window: 'weekly',
+                            remainingFraction: 1,
+                            resetTime: '2026-08-13T17:01:21Z'
+                        }
+                    ]
+                }
+            ]
+        });
+
+        const authoritativeItems = formatted.items.filter(item => item.source === 'retrieveUserQuotaSummary');
+        expect(authoritativeItems).toHaveLength(3);
+        expect(authoritativeItems).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'quota-group:gemini-5h',
+                label: 'Gemini Models · Five Hour Limit Remaining',
+                percent: 25,
+                remainingPercent: 75,
+                displayValue: '75.0%',
+                windowKind: 'short',
+                resetAt: '2026-08-06T22:01:21.000Z'
+            }),
+            expect.objectContaining({
+                id: 'quota-group:gemini-weekly',
+                label: 'Gemini Models · Weekly Limit Remaining',
+                percent: 10,
+                remainingPercent: 90,
+                displayValue: '90.0%',
+                windowKind: 'weekly'
+            }),
+            expect.objectContaining({
+                id: 'quota-group:3p-weekly',
+                label: 'Claude and GPT models · Weekly Limit Remaining',
+                percent: 0,
+                remainingPercent: 100,
+                displayValue: '100.0%',
+                windowKind: 'weekly'
+            })
+        ]));
+        expect(formatted.items.some(item => item.id === 'gemini-3-flash')).toBe(true);
+    });
 });

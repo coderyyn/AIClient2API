@@ -495,7 +495,7 @@ export function formatAntigravityUsage(usageData) {
             }
         }
 
-        const items = Array.from(quotaGroups.values()).map(group => {
+        const modelItems = Array.from(quotaGroups.values()).map(group => {
             const modelIds = group.modelIds.sort((a, b) => a.localeCompare(b));
             const percent = (1 - group.remaining) * 100;
             const shared = modelIds.length > 1;
@@ -513,9 +513,47 @@ export function formatAntigravityUsage(usageData) {
             };
         }).sort((a, b) => a.modelIds[0].localeCompare(b.modelIds[0]));
 
+        const authoritativeItems = [];
+        for (const group of Array.isArray(usageData.quotaGroups) ? usageData.quotaGroups : []) {
+            if (!group || typeof group !== 'object') continue;
+            const groupName = group.displayName || group.id || 'Quota group';
+
+            for (const bucket of Array.isArray(group.buckets) ? group.buckets : []) {
+                if (!bucket || typeof bucket !== 'object') continue;
+                const remainingFraction = Number(bucket.remainingFraction);
+                if (!Number.isFinite(remainingFraction)) continue;
+
+                const normalizedRemaining = Math.min(1, Math.max(0, remainingFraction));
+                const remainingPercent = Number((normalizedRemaining * 100).toFixed(6));
+                const percent = Number((100 - remainingPercent).toFixed(6));
+                const bucketId = bucket.bucketId || `${groupName}:${bucket.window || authoritativeItems.length}`;
+                const bucketName = bucket.displayName
+                    || (bucket.window === 'weekly' ? 'Weekly Limit Remaining' : bucket.window === '5h' ? 'Five Hour Limit Remaining' : bucketId);
+
+                authoritativeItems.push({
+                    id: `quota-group:${bucketId}`,
+                    label: `${groupName} · ${bucketName}`,
+                    used: percent,
+                    limit: 100,
+                    percent,
+                    remainingPercent,
+                    displayValue: `${remainingPercent.toFixed(1)}%`,
+                    unit: 'percent',
+                    status: getStatus(percent),
+                    resetAt: formatTimestamp(bucket.resetTime),
+                    windowKind: bucket.window === 'weekly' ? 'weekly' : bucket.window === '5h' ? 'short' : 'custom',
+                    source: 'retrieveUserQuotaSummary',
+                    quotaGroup: groupName,
+                    bucketId
+                });
+            }
+        }
+
+        const items = [...authoritativeItems, ...modelItems];
+
         // 同一额度桶会重复出现在多个模型上，概要按额度桶平均，避免模型数量造成重复加权。
-        const avgUsedPercent = items.length > 0
-            ? items.reduce((total, item) => total + item.percent, 0) / items.length
+        const avgUsedPercent = modelItems.length > 0
+            ? modelItems.reduce((total, item) => total + item.percent, 0) / modelItems.length
             : 0;
         const plan = parseTierId(usageData.tierId);
 

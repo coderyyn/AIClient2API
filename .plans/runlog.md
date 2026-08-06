@@ -68,3 +68,4 @@
 
 DECISION: 2026-07-22 OOM 止血继续复用现有 atomicWriteFile 与 usage ledger；现有工具只保证单文件原子替换，不能处理 dirty 版本、批量调度和优雅退出，因此新增最小持久化协调逻辑，而不引入数据库或第二套权威存储。
 DECISION: 2026-07-29 Codex 容量/过载重试仅通过既有 ProviderPoolManager 重新选择；全部已尝试后解除 UUID 排除但不直接指定凭证，继续执行健康、模型、额度、冷却与并发筛选。
+DECISION: 2026-08-06 Antigravity 继续复用现有 usage cache 与用量页；`fetchAvailableModels` 只能提供模型 5h quotaInfo，无法复用为 weekly 数据，因此新增 best-effort `retrieveUserQuotaSummary`，不引入第二套存储或改变账号路由。

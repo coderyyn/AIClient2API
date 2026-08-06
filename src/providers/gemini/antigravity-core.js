@@ -1921,8 +1921,10 @@ export class AntigravityApiService {
                 this._applySidecar(requestOptions);
                 const res = await this.authClient.request(requestOptions);
                 if (res.data) {
+                    const quotaGroups = await this.fetchQuotaSummaryGroups(baseURL);
                     return {
                         ...res.data,
+                        quotaGroups,
                         tierId: this.tierId,
                         account: this.accountEmail
                     };
@@ -1932,6 +1934,44 @@ export class AntigravityApiService {
             }
         }
         throw new Error('Failed to fetch usage limits from all endpoints');
+    }
+
+    /**
+     * 获取 Antigravity 官方分组额度（Gemini / Claude+GPT 的 5h 与 weekly 窗口）。
+     * 该端点为 best-effort：失败时返回 null，不影响 fetchAvailableModels 主结果。
+     * @param {string|null} preferredBaseURL - 已成功返回模型额度的优先 host
+     * @returns {Promise<Array|null>}
+     */
+    async fetchQuotaSummaryGroups(preferredBaseURL = null) {
+        const orderedBaseURLs = preferredBaseURL
+            ? [preferredBaseURL, ...this.baseURLs.filter(baseURL => baseURL !== preferredBaseURL)]
+            : this.baseURLs;
+
+        for (const baseURL of orderedBaseURLs) {
+            try {
+                const requestOptions = {
+                    url: `${baseURL}/${ANTIGRAVITY_API_VERSION}:retrieveUserQuotaSummary`,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-Agent': this.userAgent
+                    },
+                    responseType: 'json',
+                    body: JSON.stringify(this.projectId ? { project: this.projectId } : {})
+                };
+
+                this._applySidecar(requestOptions);
+                const res = await this.authClient.request(requestOptions);
+                if (Array.isArray(res.data?.groups)) {
+                    return res.data.groups;
+                }
+                logger.warn(`[Antigravity] Unexpected quota summary response from ${baseURL}`);
+            } catch (error) {
+                logger.warn(`[Antigravity] Failed to fetch quota summary from ${baseURL}: ${error.message}`);
+            }
+        }
+
+        return null;
     }
 
 }
