@@ -1,42 +1,58 @@
-import { describe, expect, test } from '@jest/globals';
-import { normalizeCodexInstructions } from '../src/providers/openai/codex-request-utils.js';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { CodexApiService } from '../src/providers/openai/codex-core.js';
 
-describe('Codex instruction normalization from upstream v3.3.9', () => {
-    test('moves system and developer messages into top-level instructions', () => {
-        const request = {
-            input: [
-                { role: 'system', content: 'system rule' },
-                {
-                    role: 'developer',
-                    content: [
-                        { type: 'input_text', text: 'developer rule' },
-                        'developer suffix'
-                    ]
-                },
-                { role: 'user', content: [{ type: 'input_text', text: 'hello' }] }
-            ]
-        };
+jest.mock('../src/auth/oauth-handlers.js', () => ({
+    refreshCodexTokensWithRetry: jest.fn()
+}));
 
-        normalizeCodexInstructions(request);
+jest.mock('../src/services/service-manager.js', () => ({
+    getProviderPoolManager: jest.fn(() => null)
+}));
 
-        expect(request.instructions).toBe('system rule\ndeveloper rule\ndeveloper suffix');
-        expect(request.input).toEqual([
-            { role: 'user', content: [{ type: 'input_text', text: 'hello' }] }
-        ]);
-    });
+jest.mock('../src/utils/proxy-utils.js', () => ({
+    configureTLSSidecar: jest.fn(config => config),
+    isTLSSidecarEnabledForProvider: jest.fn(() => false),
+    getProxyConfigForProvider: jest.fn(() => null)
+}));
 
-    test('preserves existing instructions without duplicating identical content', () => {
-        const request = {
-            instructions: 'existing rule',
-            input: [
-                { role: 'developer', content: 'existing rule' },
-                { role: 'assistant', content: 'answer' }
-            ]
-        };
+let consoleSpies = [];
 
-        normalizeCodexInstructions(request);
+beforeEach(() => {
+    consoleSpies = ['log', 'warn', 'error'].map((method) => jest.spyOn(console, method).mockImplementation(() => {}));
+});
 
-        expect(request.instructions).toBe('existing rule');
-        expect(request.input).toEqual([{ role: 'assistant', content: 'answer' }]);
+afterEach(() => {
+    consoleSpies.forEach((spy) => spy.mockRestore());
+    consoleSpies = [];
+});
+
+describe('Codex custom request compatibility', () => {
+    test('keeps Codex client input items unchanged', async () => {
+        const service = new CodexApiService({ MODEL_PROVIDER: 'openai-codex-oauth' });
+        const input = [
+            {
+                type: 'additional_tools',
+                role: 'developer',
+                tools: [{
+                    type: 'function',
+                    name: 'shell',
+                    parameters: { type: 'object', properties: {} }
+                }]
+            },
+            { type: 'message', role: 'developer', content: 'developer rule' },
+            { role: 'user', content: 'Run a read-only command.' }
+        ];
+
+        try {
+            const body = await service.prepareRequestBody('gpt-5.4', {
+                instructions: 'base rule',
+                input
+            }, true);
+
+            expect(body.instructions).toBe('base rule');
+            expect(body.input).toEqual(input);
+        } finally {
+            service.stopCacheCleanup();
+        }
     });
 });
