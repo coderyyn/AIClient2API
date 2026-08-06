@@ -121,6 +121,10 @@ export async function handleGetConfig(req, res, currentConfig) {
         RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
         RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
         IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: currentConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED !== false,
+        IMAGE_SIZE_NORMALIZATION_ENABLED: currentConfig.IMAGE_SIZE_NORMALIZATION_ENABLED !== false,
+        IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: currentConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED !== false,
+        IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD ?? 0.10,
+        IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS ?? 8388608,
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
         CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
         CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
@@ -257,6 +261,16 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             if (Number.isInteger(v) && v >= 0) currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS = v;
         }
         if (newConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED !== undefined) currentConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED = parseBooleanConfig(newConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED);
+        if (newConfig.IMAGE_SIZE_NORMALIZATION_ENABLED !== undefined) currentConfig.IMAGE_SIZE_NORMALIZATION_ENABLED = parseBooleanConfig(newConfig.IMAGE_SIZE_NORMALIZATION_ENABLED);
+        if (newConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED !== undefined) currentConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED = parseBooleanConfig(newConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED);
+        if (newConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD !== undefined) {
+            const v = Number(newConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD);
+            if (Number.isFinite(v) && v > 0 && v <= 1) currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD = v;
+        }
+        if (newConfig.IMAGE_SIZE_MAX_PIXELS !== undefined) {
+            const v = Number(newConfig.IMAGE_SIZE_MAX_PIXELS);
+            if (Number.isInteger(v) && v > 0) currentConfig.IMAGE_SIZE_MAX_PIXELS = v;
+        }
         if (newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED !== undefined) currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = parseBooleanConfig(newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED);
         if (newConfig.CODEX_PREWARM_ENABLED !== undefined) currentConfig.CODEX_PREWARM_ENABLED = parseBooleanConfig(newConfig.CODEX_PREWARM_ENABLED);
         if (newConfig.CODEX_PREWARM_TIMES !== undefined) {
@@ -460,9 +474,13 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 RATE_LIMIT_COOLDOWN_ENABLED: currentConfig.RATE_LIMIT_COOLDOWN_ENABLED,
                 RATE_LIMIT_COOLDOWN_MS: currentConfig.RATE_LIMIT_COOLDOWN_MS,
                 RATE_LIMIT_COOLDOWN_JITTER_MS: currentConfig.RATE_LIMIT_COOLDOWN_JITTER_MS,
-                RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
-                IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: currentConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED,
-                CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
+                    RATE_LIMIT_COOLDOWN_MAX_MS: currentConfig.RATE_LIMIT_COOLDOWN_MAX_MS,
+                    IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: currentConfig.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED,
+                    IMAGE_SIZE_NORMALIZATION_ENABLED: currentConfig.IMAGE_SIZE_NORMALIZATION_ENABLED,
+                    IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: currentConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED,
+                    IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD,
+                    IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS,
+                    CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
                 CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
                 CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
                 CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,

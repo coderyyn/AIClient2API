@@ -38,7 +38,8 @@ describe('Codex image generation tool options', () => {
                     content: [{ type: 'input_text', text: 'draw one green circle' }]
                 }],
                 _imageSize: '1024x1024',
-                _imageQuality: 'medium'
+                _imageQuality: 'medium',
+                _imagePromptConstraintApplied: true
             }, false);
 
             expect(body.tools).toEqual([{
@@ -48,6 +49,7 @@ describe('Codex image generation tool options', () => {
             }]);
             expect(body._imageSize).toBeUndefined();
             expect(body._imageQuality).toBeUndefined();
+            expect(body._imagePromptConstraintApplied).toBeUndefined();
         } finally {
             service.stopCacheCleanup();
         }

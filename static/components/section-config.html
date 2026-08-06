@@ -268,6 +268,38 @@
                 <hr>
 
                 <div class="config-inline-heading">
+                    <span data-i18n="config.advanced.imageSizeNormalizationTitle">Codex 生图尺寸归一化</span>
+                    <small data-i18n="config.advanced.imageSizeNormalizationNote">为 Codex Images 请求追加最小比例约束，并将比例偏差在阈值内的结果缩放到精确请求尺寸；偏差过大时返回中文错误。</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="config.advanced.imageSizeNormalizationEnabled">启用尺寸归一化</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="imageSizeNormalizationEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="config.advanced.imagePromptAspectConstraintEnabled">追加英文比例约束</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="imagePromptAspectConstraintEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="imageAspectMismatchThreshold" data-i18n="config.advanced.imageAspectMismatchThreshold">最大比例偏差</label>
+                        <input type="number" id="imageAspectMismatchThreshold" class="form-control" min="0.01" max="1" step="0.01" value="0.10">
+                    </div>
+                    <div class="form-group">
+                        <label for="imageSizeMaxPixels" data-i18n="config.advanced.imageSizeMaxPixels">最大目标总像素</label>
+                        <input type="number" id="imageSizeMaxPixels" class="form-control" min="1" step="1" value="8388608">
+                    </div>
+                </div>
+                <hr>
+
+                <div class="config-inline-heading">
                     <span data-i18n="config.advanced.imageProviderRoundRobinTitle">生图账号均衡调度</span>
                     <small data-i18n="config.advanced.imageProviderRoundRobinNote">开启后，Images、OpenAI 和 Gemini 协议中的生图请求会绕过缓存亲和，在同类型的健康可用账号间严格轮询。</small>
                 </div>

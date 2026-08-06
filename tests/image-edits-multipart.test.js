@@ -1,5 +1,6 @@
 import { Readable } from 'stream';
 import { jest } from '@jest/globals';
+import sharp from 'sharp';
 import '../src/converters/register-converters.js';
 import { handleAPIRequests, shouldRetryFastImageOverload } from '../src/services/api-manager.js';
 
@@ -97,6 +98,12 @@ function makeImageResponse(result = 'generated-image-b64') {
             }]
         }
     };
+}
+
+async function makePngBase64(width, height, background = { r: 20, g: 80, b: 160, alpha: 1 }) {
+    return (await sharp({
+        create: { width, height, channels: 4, background }
+    }).png().toBuffer()).toString('base64');
 }
 
 function makeOverloadError() {
@@ -268,7 +275,7 @@ describe('/v1/images/edits multipart handling', () => {
             '/v1/images/edits',
             req,
             res,
-            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            { MODEL_PROVIDER: 'openai-codex-oauth', IMAGE_SIZE_NORMALIZATION_ENABLED: false },
             null,
             null,
             null
@@ -351,6 +358,46 @@ describe('/v1/images/edits multipart handling', () => {
             expect.objectContaining({ routingStrategy: 'image-round-robin' })
         );
     });
+
+    test('adds an aspect constraint and normalizes a Codex edit result to the requested size', async () => {
+        mockGenerateContent.mockResolvedValueOnce(makeImageResponse(await makePngBase64(125, 125)));
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: '保留帽子主体并优化光线' },
+            { name: 'size', value: '100x100' },
+            { name: 'include_processing_metadata', value: 'true' },
+            { name: 'image', file: true, filename: 'input.png', contentType: 'image/png', value: 'image-data' }
+        ]);
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/edits',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                IMAGE_SIZE_NORMALIZATION_ENABLED: true,
+                IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true
+            },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        const [, requestBody] = mockGenerateContent.mock.calls[0];
+        expect(requestBody.input[0].content[0].text).toContain('[ASPECT RATIO] Strict 1:1');
+
+        const payload = JSON.parse(res.body);
+        const metadata = await sharp(Buffer.from(payload.data[0].b64_json, 'base64')).metadata();
+        expect([metadata.width, metadata.height]).toEqual([100, 100]);
+        expect(payload.x_aiclient2api.image_processing.images[0]).toEqual(expect.objectContaining({
+            source_size: '125x125',
+            final_size: '100x100',
+            scale_operation: 'downscale'
+        }));
+    });
 });
 
 describe('/v1/images/generations request handling', () => {
@@ -387,7 +434,7 @@ describe('/v1/images/generations request handling', () => {
             '/v1/images/generations',
             req,
             res,
-            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            { MODEL_PROVIDER: 'openai-codex-oauth', IMAGE_SIZE_NORMALIZATION_ENABLED: false },
             null,
             null,
             null
@@ -421,7 +468,7 @@ describe('/v1/images/generations request handling', () => {
             '/v1/images/generations',
             req,
             res,
-            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            { MODEL_PROVIDER: 'openai-codex-oauth', IMAGE_SIZE_NORMALIZATION_ENABLED: false },
             null,
             null,
             null
@@ -585,7 +632,7 @@ describe('/v1/images/generations request handling', () => {
             '/v1/images/generations',
             req,
             res,
-            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            { MODEL_PROVIDER: 'openai-codex-oauth', IMAGE_SIZE_NORMALIZATION_ENABLED: false },
             null,
             null,
             null
@@ -621,6 +668,248 @@ describe('/v1/images/generations request handling', () => {
 
         const [, , options] = getApiServiceWithFallback.mock.calls.at(-1);
         expect(options).not.toHaveProperty('routingStrategy');
+    });
+
+    test('adds an aspect constraint and returns exact pixels with processing metadata', async () => {
+        mockGenerateContent.mockResolvedValueOnce(makeImageResponse(await makePngBase64(125, 125)));
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            size: '100x100',
+            include_processing_metadata: true,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                IMAGE_SIZE_NORMALIZATION_ENABLED: true,
+                IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true
+            },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(res.headers).toEqual(expect.objectContaining({
+            'X-AIClient-Image-Adjusted': 'true',
+            'X-AIClient-Image-Upscaled': 'false',
+            'X-AIClient-Image-Requested-Size': '100x100',
+            'X-AIClient-Image-Source-Size': '125x125',
+            'X-AIClient-Image-Final-Size': '100x100'
+        }));
+
+        const [, requestBody] = mockGenerateContent.mock.calls[0];
+        expect(requestBody.input[0].content[0].text).toContain('[ASPECT RATIO] Strict 1:1');
+        expect(requestBody.input[0].content[0].text).not.toContain('100x100');
+
+        const payload = JSON.parse(res.body);
+        const output = Buffer.from(payload.data[0].b64_json, 'base64');
+        const metadata = await sharp(output).metadata();
+        expect([metadata.width, metadata.height]).toEqual([100, 100]);
+        expect(payload.x_aiclient2api.image_processing).toEqual(expect.objectContaining({
+            requested_size: '100x100',
+            allowed_aspect_deviation: 0.1,
+            prompt_constraint_applied: true
+        }));
+        expect(payload.x_aiclient2api.image_processing.images[0]).toEqual(expect.objectContaining({
+            source_size: '125x125',
+            final_size: '100x100',
+            size_adjusted: true,
+            upscaled: false,
+            scale_operation: 'downscale'
+        }));
+    });
+
+    test('returns a structured Chinese 422 when the aspect mismatch exceeds the threshold', async () => {
+        mockGenerateContent.mockResolvedValueOnce(makeImageResponse(await makePngBase64(200, 80)));
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw a landscape',
+            size: '120x80',
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                IMAGE_SIZE_NORMALIZATION_ENABLED: true,
+                IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10
+            },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(422);
+        expect(JSON.parse(res.body)).toEqual({
+            error: expect.objectContaining({
+                type: 'image_aspect_ratio_mismatch',
+                message: '生成图片的长宽比与请求尺寸差异过大，已停止缩放以避免图片明显变形。',
+                requested_size: '120x80',
+                source_size: '200x80',
+                allowed_deviation: 0.1,
+                image_index: 0
+            })
+        });
+    });
+
+    test('normalizes a data URL response and preserves the requested response shape', async () => {
+        mockGenerateContent.mockResolvedValueOnce(makeImageResponse(await makePngBase64(125, 125)));
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one blue square',
+            size: '100x100',
+            response_format: 'url'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        const payload = JSON.parse(res.body);
+        expect(payload.data[0].url).toMatch(/^data:image\/png;base64,/);
+        const output = Buffer.from(payload.data[0].url.split(',')[1], 'base64');
+        const metadata = await sharp(output).metadata();
+        expect([metadata.width, metadata.height]).toEqual([100, 100]);
+    });
+
+    test('fails an n>1 response atomically when a later image has an extreme mismatch', async () => {
+        mockGenerateContent
+            .mockResolvedValueOnce(makeImageResponse(await makePngBase64(125, 125)))
+            .mockResolvedValueOnce(makeImageResponse(await makePngBase64(200, 80)));
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw two square icons',
+            size: '100x100',
+            n: 2,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            { MODEL_PROVIDER: 'openai-codex-oauth', IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10 },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(422);
+        expect(JSON.parse(res.body).error).toEqual(expect.objectContaining({
+            type: 'image_aspect_ratio_mismatch',
+            image_index: 1
+        }));
+    });
+
+    test('does not append an aspect hint when prompt constraints are disabled', async () => {
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            size: '100x100'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                IMAGE_SIZE_NORMALIZATION_ENABLED: false,
+                IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: false
+            },
+            null,
+            null,
+            null
+        );
+
+        const [, requestBody] = mockGenerateContent.mock.calls[0];
+        expect(requestBody.input[0].content[0].text).toBe('draw one green circle');
+    });
+
+    test('does not leak a Codex aspect hint when retry falls back to Gemini', async () => {
+        const codexGenerate = jest.fn(async () => {
+            throw Object.assign(new Error('switch provider'), { credentialMarkedUnhealthy: true });
+        });
+        const geminiGenerate = jest.fn(async () => ({
+            candidates: [{
+                content: {
+                    parts: [{ inlineData: { mimeType: 'image/png', data: 'generated-image-b64' } }]
+                }
+            }]
+        }));
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({
+                service: { generateContent: codexGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-a'
+            })
+            .mockResolvedValueOnce({
+                service: { generateContent: geminiGenerate },
+                actualProviderType: 'gemini-antigravity',
+                uuid: 'gemini-b'
+            });
+        const providerPoolManager = {
+            releaseSlot: jest.fn(),
+            markProviderUnhealthy: jest.fn()
+        };
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0);
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            size: '100x100',
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        try {
+            await handleAPIRequests(
+                'POST',
+                '/v1/images/generations',
+                req,
+                res,
+                {
+                    MODEL_PROVIDER: 'openai-codex-oauth',
+                    providerPools: {},
+                    IMAGE_SIZE_NORMALIZATION_ENABLED: false
+                },
+                null,
+                providerPoolManager,
+                null
+            );
+
+            expect(res.statusCode).toBe(200);
+            const [, geminiBody] = geminiGenerate.mock.calls[0];
+            expect(JSON.stringify(geminiBody)).not.toContain('[ASPECT RATIO]');
+            expect(geminiBody).not.toHaveProperty('_imagePromptConstraintApplied');
+        } finally {
+            randomSpy.mockRestore();
+        }
     });
 });
 

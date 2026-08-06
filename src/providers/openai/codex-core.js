@@ -640,6 +640,7 @@ export class CodexApiService {
             delete cleanedBody._imageSize;
             delete cleanedBody._imageQuality;
             delete cleanedBody._imageToolOptions;
+            delete cleanedBody._imagePromptConstraintApplied;
             cleanedBody.tools = [imageToolConfig];
             // 服务器要求 instructions 非空
             if (!cleanedBody.instructions?.trim()) {

@@ -496,6 +496,10 @@ async function loadConfiguration() {
         const rateLimitCooldownEnabledEl = document.getElementById('rateLimitCooldownEnabled');
         const rateLimitCooldownMsEl = document.getElementById('rateLimitCooldownMs');
         const imageProviderRoundRobinEnabledEl = document.getElementById('imageProviderRoundRobinEnabled');
+        const imageSizeNormalizationEnabledEl = document.getElementById('imageSizeNormalizationEnabled');
+        const imagePromptAspectConstraintEnabledEl = document.getElementById('imagePromptAspectConstraintEnabled');
+        const imageAspectMismatchThresholdEl = document.getElementById('imageAspectMismatchThreshold');
+        const imageSizeMaxPixelsEl = document.getElementById('imageSizeMaxPixels');
         const codexPotluckStickyProviderEnabledEl = document.getElementById('codexPotluckStickyProviderEnabled');
 
         if (systemPromptFilePathEl) systemPromptFilePathEl.value = data.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
@@ -512,6 +516,10 @@ async function loadConfiguration() {
         if (rateLimitCooldownEnabledEl) rateLimitCooldownEnabledEl.checked = data.RATE_LIMIT_COOLDOWN_ENABLED || false;
         if (rateLimitCooldownMsEl) rateLimitCooldownMsEl.value = data.RATE_LIMIT_COOLDOWN_MS ?? 30000;
         if (imageProviderRoundRobinEnabledEl) imageProviderRoundRobinEnabledEl.checked = data.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED !== false;
+        if (imageSizeNormalizationEnabledEl) imageSizeNormalizationEnabledEl.checked = data.IMAGE_SIZE_NORMALIZATION_ENABLED !== false;
+        if (imagePromptAspectConstraintEnabledEl) imagePromptAspectConstraintEnabledEl.checked = data.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED !== false;
+        if (imageAspectMismatchThresholdEl) imageAspectMismatchThresholdEl.value = data.IMAGE_ASPECT_MISMATCH_THRESHOLD ?? 0.10;
+        if (imageSizeMaxPixelsEl) imageSizeMaxPixelsEl.value = data.IMAGE_SIZE_MAX_PIXELS ?? 8388608;
         if (codexPotluckStickyProviderEnabledEl) codexPotluckStickyProviderEnabledEl.checked = data.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED || false;
         
         if (cronNearMinutesEl) cronNearMinutesEl.value = data.CRON_NEAR_MINUTES || 1;
@@ -733,6 +741,10 @@ async function saveConfiguration(options = {}) {
     config.RATE_LIMIT_COOLDOWN_ENABLED = document.getElementById('rateLimitCooldownEnabled')?.checked || false;
     config.RATE_LIMIT_COOLDOWN_MS = parseInt(document.getElementById('rateLimitCooldownMs')?.value || 30000);
     config.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED = document.getElementById('imageProviderRoundRobinEnabled')?.checked !== false;
+    config.IMAGE_SIZE_NORMALIZATION_ENABLED = document.getElementById('imageSizeNormalizationEnabled')?.checked !== false;
+    config.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED = document.getElementById('imagePromptAspectConstraintEnabled')?.checked !== false;
+    config.IMAGE_ASPECT_MISMATCH_THRESHOLD = parseFloat(document.getElementById('imageAspectMismatchThreshold')?.value || 0.10);
+    config.IMAGE_SIZE_MAX_PIXELS = parseInt(document.getElementById('imageSizeMaxPixels')?.value || 8388608);
     config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = document.getElementById('codexPotluckStickyProviderEnabled')?.checked || false;
     config.CRON_NEAR_MINUTES = parseInt(document.getElementById('cronNearMinutes')?.value || 1);
     config.CRON_REFRESH_TOKEN = document.getElementById('cronRefreshToken')?.checked || false;

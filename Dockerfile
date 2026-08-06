@@ -41,6 +41,7 @@ COPY package*.json ./
 
 # 构建时代理（如果提供了的话）
 RUN npm install || npm install --ignore-scripts
+RUN node -e "import('sharp').then(() => console.log('sharp runtime ok'))"
 
 # 复制源代码
 COPY . .

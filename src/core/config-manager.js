@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import { promises as pfs } from 'fs';
 import { DEFAULT_REQUEST_BODY_MAX_BYTES, INPUT_SYSTEM_PROMPT_FILE } from '../utils/common.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
+import { normalizeAspectMismatchThreshold } from '../utils/image-size-normalizer.js';
 import logger from '../utils/logger.js';
 
 export let CONFIG = {}; // Make CONFIG exportable
@@ -138,6 +139,10 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         RATE_LIMIT_COOLDOWN_JITTER_MS: 5000, // 429 限流冷却随机抖动（毫秒）
         RATE_LIMIT_COOLDOWN_MAX_MS: 300000, // Retry-After 允许的最大冷却时间（毫秒）
         IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: true, // 生图请求是否在同类型健康账号池内严格轮询
+        IMAGE_SIZE_NORMALIZATION_ENABLED: true, // Codex Images 接口是否将返回图片缩放到请求尺寸
+        IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true, // Codex 生图提示词是否追加最小画幅比例约束
+        IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10, // 原图与目标长宽比偏差超过此值时拒绝拉伸
+        IMAGE_SIZE_MAX_PIXELS: 8388608, // 后处理允许的最大目标总像素（约 4K UHD）
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CODEX_STICKY_HOT_SHARD_ENABLED: true, // Codex sticky 热 key 是否自动拆分到多个账号
         CODEX_STICKY_HOT_SHARD_WINDOW_MS: 3600000, // 热 key 统计窗口，默认60分钟
@@ -234,6 +239,10 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--rate-limit-cooldown-jitter-ms', configKey: 'RATE_LIMIT_COOLDOWN_JITTER_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-max-ms', configKey: 'RATE_LIMIT_COOLDOWN_MAX_MS', type: 'int' },
         { flag: '--image-provider-round-robin-enabled', configKey: 'IMAGE_PROVIDER_ROUND_ROBIN_ENABLED', type: 'bool' },
+        { flag: '--image-size-normalization-enabled', configKey: 'IMAGE_SIZE_NORMALIZATION_ENABLED', type: 'bool' },
+        { flag: '--image-prompt-aspect-constraint-enabled', configKey: 'IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED', type: 'bool' },
+        { flag: '--image-aspect-mismatch-threshold', configKey: 'IMAGE_ASPECT_MISMATCH_THRESHOLD', type: 'float' },
+        { flag: '--image-size-max-pixels', configKey: 'IMAGE_SIZE_MAX_PIXELS', type: 'int' },
         { flag: '--codex-potluck-sticky-provider-enabled', configKey: 'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-enabled', configKey: 'CODEX_STICKY_HOT_SHARD_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-window-ms', configKey: 'CODEX_STICKY_HOT_SHARD_WINDOW_MS', type: 'int' },
@@ -290,6 +299,9 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
             case 'int':
                 currentConfig[def.configKey] = parseInt(rawValue, 10);
                 break;
+            case 'float':
+                currentConfig[def.configKey] = parseFloat(rawValue);
+                break;
             case 'bool':
                 currentConfig[def.configKey] = rawValue.toLowerCase() === 'true';
                 break;
@@ -314,6 +326,9 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
     normalizeRequestBodyMaxBytes(currentConfig);
     normalizeLogRetentionDays(currentConfig);
     normalizeConfiguredProviders(currentConfig);
+    currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD = normalizeAspectMismatchThreshold(
+        currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD
+    );
 
     if (!currentConfig.SYSTEM_PROMPT_FILE_PATH) {
         currentConfig.SYSTEM_PROMPT_FILE_PATH = INPUT_SYSTEM_PROMPT_FILE;

@@ -16,6 +16,14 @@ import busboy from 'busboy';
 import { SUPPORTED_IMAGE_MODELS } from '../utils/constants.js';
 import { convertData } from '../convert/convert.js';
 import { summarizePayloadForLog } from '../utils/log-sanitizer.js';
+import {
+    ImageAspectRatioMismatchError,
+    ImagePostprocessError,
+    ImageSizeValidationError,
+    appendAspectRatioConstraint,
+    normalizeAspectMismatchThreshold,
+    normalizeImageBuffer
+} from '../utils/image-size-normalizer.js';
 
 const IMAGE_GEN_MAX_N = 4;
 const VALID_RESPONSE_FORMATS = new Set(['b64_json', 'url']);
@@ -26,6 +34,137 @@ const IMAGE_TOOL_NUMERIC_FIELDS = ['output_compression', 'partial_images'];
 const FAST_IMAGE_OVERLOAD_RETRY_WINDOW_MS = 10_000;
 const FAST_IMAGE_OVERLOAD_RETRY_DELAY_MIN_MS = 500;
 const FAST_IMAGE_OVERLOAD_RETRY_DELAY_JITTER_MS = 1_001;
+
+function isEnabledByDefault(value) {
+    return ![false, 0, '0', 'false'].includes(value);
+}
+
+function parseOptionalBoolean(value) {
+    return [true, 1, '1', 'true'].includes(value);
+}
+
+function isCodexImagePostprocessingEnabled(config, providerProtocol, size) {
+    return providerProtocol === MODEL_PROTOCOL_PREFIX.CODEX
+        && Boolean(size)
+        && String(size).trim().toLowerCase() !== 'auto'
+        && isEnabledByDefault(config?.IMAGE_SIZE_NORMALIZATION_ENABLED);
+}
+
+function enhanceCodexImagePrompt(virtualRequest, prompt, size, config, providerProtocol, isEdit = false) {
+    if (
+        providerProtocol !== MODEL_PROTOCOL_PREFIX.CODEX
+        || !isEnabledByDefault(config?.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED)
+    ) {
+        return false;
+    }
+
+    const enhanced = appendAspectRatioConstraint(prompt, size, {
+        maxPixels: config?.IMAGE_SIZE_MAX_PIXELS
+    });
+    if (!enhanced.promptConstraintApplied) return false;
+
+    if (isEdit) {
+        const textPart = virtualRequest?.messages?.[0]?.content?.find(part => part?.type === 'text');
+        if (textPart) textPart.text = enhanced.prompt;
+    } else if (virtualRequest?.messages?.[0]) {
+        virtualRequest.messages[0].content = enhanced.prompt;
+    }
+    return true;
+}
+
+function decodeImageDataItem(item) {
+    if (typeof item?.b64_json === 'string' && item.b64_json) {
+        return { buffer: Buffer.from(item.b64_json, 'base64'), responseKind: 'b64_json' };
+    }
+    if (typeof item?.url === 'string') {
+        const match = /^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(item.url);
+        if (match) {
+            return {
+                buffer: Buffer.from(match[2], 'base64'),
+                responseKind: 'url',
+                dataUrlFormat: match[1].toLowerCase()
+            };
+        }
+    }
+    throw new ImagePostprocessError('生成图片不是可处理的 Base64 图片数据。');
+}
+
+function encodeImageDataItem(item, buffer, responseKind, outputFormat) {
+    const encoded = buffer.toString('base64');
+    if (responseKind === 'url') {
+        return { ...item, url: `data:image/${outputFormat || 'png'};base64,${encoded}` };
+    }
+    return { ...item, b64_json: encoded };
+}
+
+async function normalizeCodexImageData(data, {
+    size,
+    config,
+    outputFormat,
+    promptConstraintApplied
+}) {
+    const images = [];
+    const normalizedData = [];
+    for (let index = 0; index < data.length; index++) {
+        const decoded = decodeImageDataItem(data[index]);
+        const normalized = await normalizeImageBuffer(decoded.buffer, {
+            requestedSize: size,
+            aspectMismatchThreshold: config?.IMAGE_ASPECT_MISMATCH_THRESHOLD,
+            maxPixels: config?.IMAGE_SIZE_MAX_PIXELS,
+            outputFormat: outputFormat || decoded.dataUrlFormat,
+            imageIndex: index
+        });
+        normalizedData.push(encodeImageDataItem(
+            data[index],
+            normalized.buffer,
+            decoded.responseKind,
+            normalized.outputFormat || decoded.dataUrlFormat || outputFormat || 'png'
+        ));
+        images.push(normalized.metadata);
+    }
+
+    return {
+        data: normalizedData,
+        metadata: {
+            requested_size: String(size).trim().toLowerCase(),
+            allowed_aspect_deviation: normalizeAspectMismatchThreshold(
+                config?.IMAGE_ASPECT_MISMATCH_THRESHOLD
+            ),
+            prompt_constraint_applied: Boolean(promptConstraintApplied),
+            images
+        }
+    };
+}
+
+function buildImageProcessingHeaders(metadata) {
+    const images = metadata?.images || [];
+    return {
+        'Content-Type': 'application/json',
+        'X-AIClient-Image-Adjusted': String(images.some(item => item.size_adjusted)),
+        'X-AIClient-Image-Upscaled': String(images.some(item => item.upscaled)),
+        'X-AIClient-Image-Requested-Size': metadata.requested_size,
+        'X-AIClient-Image-Source-Size': images.map(item => item.source_size).join(','),
+        'X-AIClient-Image-Final-Size': images.map(item => item.final_size).join(',')
+    };
+}
+
+function writeImageProcessingError(res, error) {
+    if (!(error instanceof ImageSizeValidationError)
+        && !(error instanceof ImageAspectRatioMismatchError)
+        && !(error instanceof ImagePostprocessError)) {
+        return false;
+    }
+
+    res.writeHead(error.statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        error: {
+            type: error.type,
+            message: error.message,
+            ...error.details
+        }
+    }));
+    return true;
+}
 
 export function shouldRetryFastImageOverload(error, elapsedMs) {
     if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs >= FAST_IMAGE_OVERLOAD_RETRY_WINDOW_MS) return false;
@@ -295,10 +434,12 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     let slotAccountIdentity = null;
     let slotAccountEmail = null;
     let model, n, response_format, size, quality, prompt, imageToolOptions, codexRequestBody, virtualOpenAIRequest;
+    let includeProcessingMetadata = false;
+    let promptConstraintApplied = false;
 
     try {
         if (retryContext?.parsedBody) {
-            ({model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest} = retryContext.parsedBody);
+            ({model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest, includeProcessingMetadata} = retryContext.parsedBody);
             codexRequestBody = virtualOpenAIRequest;
         } else {
             const body = await getRequestBody(req, { maxBytes: CONFIG.REQUEST_BODY_MAX_BYTES });
@@ -307,6 +448,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             response_format = body.response_format || 'b64_json';
             size = body.size;
             quality = body.quality;
+            includeProcessingMetadata = parseOptionalBoolean(body.include_processing_metadata);
             imageToolOptions = collectImageToolOptions(body);
             // cap n：至少 1，最多 IMAGE_GEN_MAX_N，非数字降级为 1
             n = Math.min(Math.max(1, parseInt(body.n) || 1), IMAGE_GEN_MAX_N);
@@ -387,6 +529,17 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         const fromProvider = MODEL_PROTOCOL_PREFIX.OPENAI;
         const toProvider = slotProviderType || CONFIG.MODEL_PROVIDER;
 
+        const attemptOpenAIRequest = structuredClone(virtualOpenAIRequest);
+        promptConstraintApplied = enhanceCodexImagePrompt(
+            attemptOpenAIRequest,
+            prompt,
+            size,
+            CONFIG,
+            finalProviderProtocol,
+            false
+        );
+        codexRequestBody = attemptOpenAIRequest;
+
         // 执行自动转换：OpenAI -> 目标协议
         const fromProtocol = MODEL_PROTOCOL_PREFIX.OPENAI;
         if (fromProtocol !== finalProviderProtocol) {
@@ -394,9 +547,9 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             codexRequestBody = convertData(codexRequestBody, 'request', fromProvider, toProvider, model, currentConfig._monitorRequestId);
             
             // 保持以 _ 开头的内部属性
-            Object.keys(virtualOpenAIRequest).forEach(key => {
+            Object.keys(attemptOpenAIRequest).forEach(key => {
                 if (key.startsWith('_') && codexRequestBody[key] === undefined) {
-                    codexRequestBody[key] = virtualOpenAIRequest[key];
+                    codexRequestBody[key] = attemptOpenAIRequest[key];
                 }
             });
         }
@@ -427,7 +580,23 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             return;
         }
 
-        const clientResponse = { created: Math.floor(Date.now() / 1000), data };
+        let responseData = data;
+        let processingMetadata = null;
+        if (isCodexImagePostprocessingEnabled(CONFIG, finalProviderProtocol, size)) {
+            const normalized = await normalizeCodexImageData(data, {
+                size,
+                config: CONFIG,
+                outputFormat: imageToolOptions?.output_format,
+                promptConstraintApplied
+            });
+            responseData = normalized.data;
+            processingMetadata = normalized.metadata;
+        }
+
+        const clientResponse = { created: Math.floor(Date.now() / 1000), data: responseData };
+        if (includeProcessingMetadata && processingMetadata) {
+            clientResponse.x_aiclient2api = { image_processing: processingMetadata };
+        }
 
         // 监控钩子：内容生成后与一元响应
         if (currentConfig._monitorRequestId) {
@@ -467,10 +636,16 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             }
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, processingMetadata
+            ? buildImageProcessingHeaders(processingMetadata)
+            : { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(clientResponse));
     } catch (error) {
         logger.error('[Image Generation] Error:', error.message);
+
+        if (!res.writableEnded && writeImageProcessingError(res, error)) {
+            return;
+        }
 
         const shouldSwitchCredential = error.shouldSwitchCredential === true;
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
@@ -535,7 +710,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     maxRetries,
                     failedCredentialUuids,
                     failedProviderTypes,
-                    parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest}
+                    parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest, includeProcessingMetadata}
                 });
             } catch (retryError) {
                 logger.error('[Image Generation Retry] Failed to get alternative service:', retryError.message);
@@ -701,6 +876,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         const response_format = fields.response_format || 'b64_json';
         const size = fields.size;
         const quality = fields.quality;
+        const includeProcessingMetadata = parseOptionalBoolean(fields.include_processing_metadata);
         const imageToolOptions = collectImageToolOptions(fields, { includeInputFidelity: true });
         const n = Math.min(Math.max(1, parseInt(fields.n) || 1), IMAGE_GEN_MAX_N);
 
@@ -795,17 +971,27 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         const fromProvider = MODEL_PROTOCOL_PREFIX.OPENAI;
         const toProvider = slotProviderType || currentConfig.MODEL_PROVIDER;
 
+        const attemptOpenAIRequest = structuredClone(virtualOpenAIRequest);
+        const promptConstraintApplied = enhanceCodexImagePrompt(
+            attemptOpenAIRequest,
+            prompt,
+            size,
+            currentConfig,
+            finalProviderProtocol,
+            true
+        );
+
         // 执行自动转换：OpenAI -> 目标协议
-        let codexRequestBody = virtualOpenAIRequest;
+        let codexRequestBody = attemptOpenAIRequest;
         const fromProtocol = MODEL_PROTOCOL_PREFIX.OPENAI;
         if (fromProtocol !== finalProviderProtocol) {
             logger.info(`[Image Edits] Converting request from ${fromProtocol} to ${finalProviderProtocol}`);
             codexRequestBody = convertData(codexRequestBody, 'request', fromProtocol, toProvider, model, currentConfig._monitorRequestId);
             
             // 保持以 _ 开头的内部属性
-            Object.keys(virtualOpenAIRequest).forEach(key => {
+            Object.keys(attemptOpenAIRequest).forEach(key => {
                 if (key.startsWith('_') && codexRequestBody[key] === undefined) {
-                    codexRequestBody[key] = virtualOpenAIRequest[key];
+                    codexRequestBody[key] = attemptOpenAIRequest[key];
                 }
             });
         }
@@ -837,7 +1023,23 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             return;
         }
 
-        const clientResponse = { created: Math.floor(Date.now() / 1000), data };
+        let responseData = data;
+        let processingMetadata = null;
+        if (isCodexImagePostprocessingEnabled(currentConfig, finalProviderProtocol, size)) {
+            const normalized = await normalizeCodexImageData(data, {
+                size,
+                config: currentConfig,
+                outputFormat: imageToolOptions?.output_format,
+                promptConstraintApplied
+            });
+            responseData = normalized.data;
+            processingMetadata = normalized.metadata;
+        }
+
+        const clientResponse = { created: Math.floor(Date.now() / 1000), data: responseData };
+        if (includeProcessingMetadata && processingMetadata) {
+            clientResponse.x_aiclient2api = { image_processing: processingMetadata };
+        }
 
         // 监控钩子
         if (currentConfig._monitorRequestId) {
@@ -877,10 +1079,15 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             }
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, processingMetadata
+            ? buildImageProcessingHeaders(processingMetadata)
+            : { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(clientResponse));
     } catch (error) {
         logger.error('[Image Edits] Error:', error.message);
+        if (!res.writableEnded && writeImageProcessingError(res, error)) {
+            return;
+        }
         if (!res.writableEnded) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, type: 'server_error' } }));
