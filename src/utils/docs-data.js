@@ -51,7 +51,7 @@ export const API_GUIDE_DATA = [
         { method: 'POST',   path: '/v1/images/edits',             desc: '图片编辑/改图 (OpenAI 标准)' },
         { method: 'POST',   path: '/v1/messages',                 desc: 'Claude 兼容消息接口' },
         { method: 'GET',    path: '/v1beta/models',               desc: 'Gemini 格式模型列表' },
-        { method: 'POST',   path: '/v1beta/models/{model}:generateContent', desc: 'Gemini 原生生成' },
+        { method: 'POST',   path: '/v1beta/models/{model}:generateContent', desc: 'Gemini 原生内容与图片生成（支持多图输入）' },
         { method: 'POST',   path: '/v1/responses',                desc: 'Codex 专有响应接口' },
         { method: 'POST',   path: '/count_tokens',                desc: 'Token 计数 (Anthropic 格式)' }
     ]},
@@ -146,9 +146,50 @@ async function chat(prompt) {
     });
     return await res.json();
 }`,
+    gemini_native_image: `
+/**
+ * 示例 2: Gemini 原生图片生成与多图编辑
+ * 鉴权: 可使用 ?key=YOUR_API_KEY、x-goog-api-key 或 Bearer Token
+ * 参数: generationConfig.imageConfig.aspectRatio / imageSize
+ */
+async function generateGeminiImage(prompt, inputImages = []) {
+    const parts = [
+        { text: prompt },
+        ...inputImages.map(image => ({
+            inlineData: {
+                mimeType: image.mimeType,
+                data: image.base64
+            }
+        }))
+    ];
+
+    const res = await fetch(
+        '/v1beta/models/gemini-3.1-flash-image:generateContent?key=YOUR_API_KEY',
+        {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+                // 也可改用 'x-goog-api-key': 'YOUR_API_KEY'
+                // 或 'Authorization': 'Bearer YOUR_API_KEY'
+            },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts }],
+                generationConfig: {
+                    responseModalities: ['IMAGE'],
+                    imageConfig: {
+                        aspectRatio: '16:9',
+                        imageSize: '2K'
+                    }
+                }
+            })
+        }
+    );
+
+    return await res.json();
+}`,
     management_api: `
 /**
- * 示例 2: 调用管理后台接口 (如修改配置)
+ * 示例 3: 调用管理后台接口 (如修改配置)
  * 授权: 先通过 login 获取动态 Token
  */
 async function updateConfig(newConfig) {
@@ -209,6 +250,8 @@ export function formatApiGuideText(data = API_GUIDE_DATA, examples = API_EXAMPLE
     output += `\x1b[1m\x1b[33m                    前端调用代码实现示例\x1b[0m\n`;
     output += `\x1b[33m${'='.repeat(100)}\x1b[0m\n`;
     output += examples.ai_api + `\n`;
+    output += `\x1b[33m${'-'.repeat(100)}\x1b[0m\n`;
+    output += examples.gemini_native_image + `\n`;
     output += `\x1b[33m${'-'.repeat(100)}\x1b[0m\n`;
     output += examples.management_api + `\n`;
 
