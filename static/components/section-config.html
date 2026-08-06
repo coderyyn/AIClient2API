@@ -268,6 +268,21 @@
                 <hr>
 
                 <div class="config-inline-heading">
+                    <span data-i18n="config.advanced.imageProviderRoundRobinTitle">生图账号均衡调度</span>
+                    <small data-i18n="config.advanced.imageProviderRoundRobinNote">开启后，Images、OpenAI 和 Gemini 协议中的生图请求会绕过缓存亲和，在同类型的健康可用账号间严格轮询。</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="config.advanced.imageProviderRoundRobinEnabled">启用生图严格轮询</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="imageProviderRoundRobinEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <hr>
+
+                <div class="config-inline-heading">
                     <span data-i18n="config.advanced.codexPotluckStickyProviderTitle">Codex 缓存亲和路由</span>
                     <small data-i18n="config.advanced.codexPotluckStickyProviderNote">开启后，Codex 请求会优先按 prompt_cache_key/thread/session 固定到同一健康 Codex 账号，提高同一对话的 prompt cache 复用率；缺少对话标识时再按 API Potluck Key + 模型兜底。账号不可用时自动切换。</small>
                 </div>

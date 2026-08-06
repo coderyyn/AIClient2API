@@ -111,6 +111,14 @@ function getProviderStableId(provider) {
     return `${type}:${uuid}`;
 }
 
+function normalizeImageRoundRobinModel(model) {
+    let normalized = String(model || '').trim().toLowerCase();
+    if (normalized.includes(':')) {
+        normalized = normalized.split(':').slice(1).join(':');
+    }
+    return normalized.endsWith('-fast') ? normalized.slice(0, -5) : normalized;
+}
+
 function selectWeightedStickyProvider(providers, affinityScope) {
     if (!Array.isArray(providers) || providers.length === 0) return null;
 
@@ -461,6 +469,7 @@ export class ProviderPoolManager {
         this.globalConfig = options.globalConfig || {}; // 存储全局配置
         this.providerStatus = {}; // Tracks health and usage for each provider instance
         this.roundRobinIndex = {}; // Tracks the current index for round-robin selection for each provider type
+        this.imageRoundRobinIndex = new Map(); // Tracks image-only round-robin cursors by provider type and model
         // 使用 ?? 运算符确保 0 也能被正确设置，而不是被 || 替换为默认值
         this.maxErrorCount = options.maxErrorCount ?? 10; // Default to 10 errors before marking unhealthy
         this.healthCheckInterval = options.healthCheckInterval ?? 10 * 60 * 1000; // Default to 10 minutes
@@ -749,6 +758,25 @@ export class ProviderPoolManager {
         const shardIndex = Math.min(shardProviders.length - 1, Math.floor(shardUnit * shardProviders.length));
         const selected = shardProviders[shardIndex];
         this._log('debug', `Selected provider for ${providerType} by hot sticky shard ${shardIndex + 1}/${shardProviders.length}: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
+        return selected;
+    }
+
+    _selectImageRoundRobinProvider(providers, providerType, requestedModel) {
+        if (!Array.isArray(providers) || providers.length === 0) return null;
+
+        const candidates = [...providers].sort((a, b) =>
+            getProviderStableId(a).localeCompare(getProviderStableId(b))
+        );
+        const cursorKey = `${providerType}:${normalizeImageRoundRobinModel(requestedModel)}`;
+        const cursor = this.imageRoundRobinIndex.get(cursorKey) || 0;
+        const selected = candidates[cursor % candidates.length];
+        this.imageRoundRobinIndex.set(cursorKey, cursor + 1);
+        this._log(
+            'debug',
+            `Selected provider for ${providerType} by image round robin ` +
+            `(${(cursor % candidates.length) + 1}/${candidates.length}): ${this._getDisplayName(selected.config)}` +
+            `${requestedModel ? ` for model: ${requestedModel}` : ''}`
+        );
         return selected;
     }
 
@@ -2125,7 +2153,13 @@ export class ProviderPoolManager {
                 this._log('debug', `Selected preferred provider for ${providerType}: ${this._getDisplayName(selected.config)}`);
             }
         }
-        if (!selected && options.stickyProviderKey && isCodexProviderType(providerType)) {
+        if (!selected && options.routingStrategy === 'image-round-robin') {
+            selected = this._selectImageRoundRobinProvider(
+                availableAndHealthyProviders,
+                providerType,
+                requestedModel
+            );
+        } else if (!selected && options.stickyProviderKey && isCodexProviderType(providerType)) {
             selected = this._selectCodexHotShardProvider(
                 availableAndHealthyProviders,
                 providerType,
@@ -2328,7 +2362,9 @@ export class ProviderPoolManager {
             return null;
         }
 
-        const mixedSlot = await this.acquireSlotFromMixedPool(providerType, requestedModel, options);
+        const mixedSlot = options.routingStrategy === 'image-round-robin'
+            ? null
+            : await this.acquireSlotFromMixedPool(providerType, requestedModel, options);
         if (mixedSlot) {
             return mixedSlot;
         }
@@ -2480,7 +2516,9 @@ export class ProviderPoolManager {
             return null;
         }
 
-        const mixedSelection = await this.selectProviderFromMixedPool(providerType, requestedModel, options);
+        const mixedSelection = options.routingStrategy === 'image-round-robin'
+            ? null
+            : await this.selectProviderFromMixedPool(providerType, requestedModel, options);
         if (mixedSelection) {
             return mixedSelection;
         }

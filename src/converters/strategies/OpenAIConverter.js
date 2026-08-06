@@ -1094,9 +1094,9 @@ export class OpenAIConverter extends BaseConverter {
             }
         }
 
-        // 处理 image_config（OpenRouter 风格）
-        if (openaiRequest.image_config) {
-            const imgCfg = openaiRequest.image_config;
+        // 处理 extra_body.google.image_config（OpenAI-compatible Google extension）
+        const imgCfg = openaiRequest.extra_body?.google?.image_config;
+        if (imgCfg) {
             if (imgCfg.aspect_ratio) {
                 geminiRequest.generationConfig = geminiRequest.generationConfig || {};
                 geminiRequest.generationConfig.imageConfig = geminiRequest.generationConfig.imageConfig || {};

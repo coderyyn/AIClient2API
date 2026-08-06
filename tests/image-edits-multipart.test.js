@@ -325,6 +325,32 @@ describe('/v1/images/edits multipart handling', () => {
             randomSpy.mockRestore();
         }
     });
+
+    test('routes image edits with image round robin enabled by default', async () => {
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: 'edit this image' },
+            { name: 'image', file: true, filename: 'input.png', contentType: 'image/png', value: 'image-data' }
+        ]);
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/edits',
+            req,
+            res,
+            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            null,
+            null,
+            null
+        );
+
+        expect(getApiServiceWithFallback).toHaveBeenCalledWith(
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ routingStrategy: 'image-round-robin' })
+        );
+    });
 });
 
 describe('/v1/images/generations request handling', () => {
@@ -416,7 +442,7 @@ describe('/v1/images/generations request handling', () => {
         });
     });
 
-    test('forwards official image_config to the Gemini image request', async () => {
+    test('does not forward deprecated top-level image_config to the Gemini image request', async () => {
         getApiServiceWithFallback.mockResolvedValueOnce({
             service: { generateContent: mockGenerateContent },
             actualProviderType: 'gemini-antigravity'
@@ -451,10 +477,7 @@ describe('/v1/images/generations request handling', () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         const [, requestBody] = mockGenerateContent.mock.calls[0];
-        expect(requestBody.generationConfig.imageConfig).toEqual({
-            aspectRatio: '3:2',
-            imageSize: '2K'
-        });
+        expect(requestBody.generationConfig?.imageConfig).toBeUndefined();
         expect(requestBody.size).toBeUndefined();
     });
 
@@ -548,5 +571,136 @@ describe('/v1/images/generations request handling', () => {
         } finally {
             randomSpy.mockRestore();
         }
+    });
+
+    test('routes image generations with image round robin enabled by default', async () => {
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            { MODEL_PROVIDER: 'openai-codex-oauth' },
+            null,
+            null,
+            null
+        );
+
+        expect(getApiServiceWithFallback).toHaveBeenCalledWith(
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ routingStrategy: 'image-round-robin' })
+        );
+    });
+
+    test('keeps legacy image routing when image round robin is disabled', async () => {
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: false
+            },
+            null,
+            null,
+            null
+        );
+
+        const [, , options] = getApiServiceWithFallback.mock.calls.at(-1);
+        expect(options).not.toHaveProperty('routingStrategy');
+    });
+});
+
+describe('OpenAI and Gemini content image routing', () => {
+    beforeEach(() => {
+        mockGenerateContent.mockReset();
+        mockGenerateContent.mockResolvedValue(makeImageResponse());
+        getApiServiceWithFallback.mockClear();
+    });
+
+    test('routes OpenAI Responses image-generation tools with image round robin', async () => {
+        const req = makeJsonRequest({
+            model: 'gpt-5.5',
+            input: 'draw one green circle',
+            tools: [{ type: 'image_generation' }]
+        });
+        const res = makeResponse();
+
+        try {
+            await handleAPIRequests(
+                'POST',
+                '/v1/responses',
+                req,
+                res,
+                {
+                    MODEL_PROVIDER: 'openai-codex-oauth',
+                    providerPools: { 'openai-codex-oauth': [{}] }
+                },
+                null,
+                {},
+                null
+            );
+        } catch {
+            // The routing assertion is independent of downstream response conversion.
+        }
+
+        expect(getApiServiceWithFallback).toHaveBeenCalledWith(
+            expect.anything(),
+            'gpt-5.5',
+            expect.objectContaining({
+                acquireSlot: true,
+                routingStrategy: 'image-round-robin'
+            })
+        );
+    });
+
+    test('routes Gemini IMAGE modality requests with image round robin', async () => {
+        const requestPath = '/v1beta/models/gemini-3.1-flash-image:generateContent';
+        const req = makeJsonRequest({
+            contents: [{ role: 'user', parts: [{ text: 'draw one green circle' }] }],
+            generationConfig: { responseModalities: ['IMAGE'] }
+        });
+        req.url = requestPath;
+        const res = makeResponse();
+
+        try {
+            await handleAPIRequests(
+                'POST',
+                requestPath,
+                req,
+                res,
+                {
+                    MODEL_PROVIDER: 'gemini-antigravity',
+                    providerPools: { 'gemini-antigravity': [{}] }
+                },
+                null,
+                {},
+                null
+            );
+        } catch {
+            // The routing assertion is independent of downstream response conversion.
+        }
+
+        expect(getApiServiceWithFallback).toHaveBeenCalledWith(
+            expect.anything(),
+            'gemini-3.1-flash-image',
+            expect.objectContaining({
+                acquireSlot: true,
+                routingStrategy: 'image-round-robin'
+            })
+        );
     });
 });

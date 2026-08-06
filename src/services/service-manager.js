@@ -93,8 +93,15 @@ export function resolveCodexAffinityKey(config, providerType, requestedModel = n
     return { key: `potluck:${hashAffinityScope(config.potluckApiKey)}:model:${requestedModel || ''}`, source: 'potluck_key' };
 }
 
-function withStickyProviderAffinity(config, providerType, options = {}) {
+export function withStickyProviderAffinity(config, providerType, options = {}) {
     const selectionOptions = { ...options };
+    if (selectionOptions.routingStrategy === 'image-round-robin') {
+        delete selectionOptions.preferredProviderUuid;
+        delete selectionOptions.stickyProviderKey;
+        delete selectionOptions.stickyProviderSource;
+        delete selectionOptions.shardDiscriminator;
+        return selectionOptions;
+    }
     if (!selectionOptions.stickyProviderKey) {
         const affinity = resolveCodexAffinityKey(config, providerType, options.requestedModel);
         if (affinity) {

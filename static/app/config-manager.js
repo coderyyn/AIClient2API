@@ -495,6 +495,7 @@ async function loadConfiguration() {
         const modelFallbackMappingEl = document.getElementById('modelFallbackMapping');
         const rateLimitCooldownEnabledEl = document.getElementById('rateLimitCooldownEnabled');
         const rateLimitCooldownMsEl = document.getElementById('rateLimitCooldownMs');
+        const imageProviderRoundRobinEnabledEl = document.getElementById('imageProviderRoundRobinEnabled');
         const codexPotluckStickyProviderEnabledEl = document.getElementById('codexPotluckStickyProviderEnabled');
 
         if (systemPromptFilePathEl) systemPromptFilePathEl.value = data.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
@@ -510,6 +511,7 @@ async function loadConfiguration() {
         if (credentialSwitchMaxRetriesEl) credentialSwitchMaxRetriesEl.value = data.CREDENTIAL_SWITCH_MAX_RETRIES || 5;
         if (rateLimitCooldownEnabledEl) rateLimitCooldownEnabledEl.checked = data.RATE_LIMIT_COOLDOWN_ENABLED || false;
         if (rateLimitCooldownMsEl) rateLimitCooldownMsEl.value = data.RATE_LIMIT_COOLDOWN_MS ?? 30000;
+        if (imageProviderRoundRobinEnabledEl) imageProviderRoundRobinEnabledEl.checked = data.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED !== false;
         if (codexPotluckStickyProviderEnabledEl) codexPotluckStickyProviderEnabledEl.checked = data.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED || false;
         
         if (cronNearMinutesEl) cronNearMinutesEl.value = data.CRON_NEAR_MINUTES || 1;
@@ -730,6 +732,7 @@ async function saveConfiguration(options = {}) {
     config.CREDENTIAL_SWITCH_MAX_RETRIES = parseInt(document.getElementById('credentialSwitchMaxRetries')?.value || 5);
     config.RATE_LIMIT_COOLDOWN_ENABLED = document.getElementById('rateLimitCooldownEnabled')?.checked || false;
     config.RATE_LIMIT_COOLDOWN_MS = parseInt(document.getElementById('rateLimitCooldownMs')?.value || 30000);
+    config.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED = document.getElementById('imageProviderRoundRobinEnabled')?.checked !== false;
     config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = document.getElementById('codexPotluckStickyProviderEnabled')?.checked || false;
     config.CRON_NEAR_MINUTES = parseInt(document.getElementById('cronNearMinutes')?.value || 1);
     config.CRON_REFRESH_TOKEN = document.getElementById('cronRefreshToken')?.checked || false;

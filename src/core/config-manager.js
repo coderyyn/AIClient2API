@@ -137,6 +137,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         RATE_LIMIT_COOLDOWN_MS: 30000, // 429 限流默认冷却时间（毫秒）
         RATE_LIMIT_COOLDOWN_JITTER_MS: 5000, // 429 限流冷却随机抖动（毫秒）
         RATE_LIMIT_COOLDOWN_MAX_MS: 300000, // Retry-After 允许的最大冷却时间（毫秒）
+        IMAGE_PROVIDER_ROUND_ROBIN_ENABLED: true, // 生图请求是否在同类型健康账号池内严格轮询
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CODEX_STICKY_HOT_SHARD_ENABLED: true, // Codex sticky 热 key 是否自动拆分到多个账号
         CODEX_STICKY_HOT_SHARD_WINDOW_MS: 3600000, // 热 key 统计窗口，默认60分钟
@@ -232,6 +233,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--rate-limit-cooldown-ms', configKey: 'RATE_LIMIT_COOLDOWN_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-jitter-ms', configKey: 'RATE_LIMIT_COOLDOWN_JITTER_MS', type: 'int' },
         { flag: '--rate-limit-cooldown-max-ms', configKey: 'RATE_LIMIT_COOLDOWN_MAX_MS', type: 'int' },
+        { flag: '--image-provider-round-robin-enabled', configKey: 'IMAGE_PROVIDER_ROUND_ROBIN_ENABLED', type: 'bool' },
         { flag: '--codex-potluck-sticky-provider-enabled', configKey: 'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-enabled', configKey: 'CODEX_STICKY_HOT_SHARD_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-window-ms', configKey: 'CODEX_STICKY_HOT_SHARD_WINDOW_MS', type: 'int' },

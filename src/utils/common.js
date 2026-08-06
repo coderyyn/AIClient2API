@@ -8,7 +8,7 @@ import logger from './logger.js';
 import { convertData, getOpenAIStreamChunkStop } from '../convert/convert.js';
 import { ProviderStrategyFactory } from './provider-strategies.js';
 import { getPluginManager } from '../core/plugin-manager.js';
-import { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER } from './constants.js';
+import { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER, SUPPORTED_IMAGE_MODELS } from './constants.js';
 import {
     codexOverloadFailoverStore,
     resolveCodexOverloadFailoverKey
@@ -487,6 +487,55 @@ function parseJsonObject(value) {
     } catch {
         return {};
     }
+}
+
+function normalizeImageModelName(model) {
+    let normalized = String(model || '').trim().toLowerCase();
+    if (normalized.includes(':')) {
+        normalized = normalized.split(':').slice(1).join(':');
+    }
+    if (normalized.endsWith('-fast')) {
+        normalized = normalized.slice(0, -5);
+    }
+    return normalized;
+}
+
+export function isImageGenerationRequest({ requestPath = null, model = null, body = null } = {}) {
+    const pathName = String(requestPath || '').split('?')[0];
+    if (pathName === '/v1/images/generations' || pathName === '/v1/images/edits') {
+        return true;
+    }
+
+    const normalizedModel = normalizeImageModelName(model || body?.model);
+    if (
+        SUPPORTED_IMAGE_MODELS.has(normalizedModel) ||
+        /(^|[-_.])image($|[-_.])/.test(normalizedModel)
+    ) {
+        return true;
+    }
+
+    if (Array.isArray(body?.tools) && body.tools.some(tool => tool?.type === 'image_generation')) {
+        return true;
+    }
+
+    const generationConfig = body?.generationConfig || body?.generation_config;
+    const responseModalities = generationConfig?.responseModalities || generationConfig?.response_modalities;
+    if (
+        Array.isArray(responseModalities) &&
+        responseModalities.some(modality => String(modality).toUpperCase() === 'IMAGE')
+    ) {
+        return true;
+    }
+
+    return Boolean(generationConfig?.imageConfig || generationConfig?.image_config);
+}
+
+export function resolveImageProviderRoutingStrategy(config, request = {}) {
+    const configured = config?.IMAGE_PROVIDER_ROUND_ROBIN_ENABLED;
+    if (configured === false || configured === 0 || configured === '0' || configured === 'false') {
+        return undefined;
+    }
+    return isImageGenerationRequest(request) ? 'image-round-robin' : undefined;
 }
 
 export function extractCodexCacheAffinityScope(requestBody = {}) {
@@ -1998,10 +2047,21 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     // - service 缺失时（例如上游未预先注入）进行兜底选择
     // - 使用号池/AUTO 时按模型重选并支持 fallback
     // 注意：仅在号池场景开启 acquireSlot，占用并发名额或进入队列
-    const shouldSelectByPool = providerPoolManager && (CONFIG.MODEL_PROVIDER === MODEL_PROVIDER.AUTO || (CONFIG.providerPools && CONFIG.providerPools[CONFIG.MODEL_PROVIDER]));
+    const shouldSelectByPool = Boolean(
+        providerPoolManager &&
+        (CONFIG.MODEL_PROVIDER === MODEL_PROVIDER.AUTO || (CONFIG.providerPools && CONFIG.providerPools[CONFIG.MODEL_PROVIDER]))
+    );
     if (!service || shouldSelectByPool) {
         const { getApiServiceWithFallback } = await import('../services/service-manager.js');
-        const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: shouldSelectByPool });
+        const routingStrategy = resolveImageProviderRoutingStrategy(CONFIG, {
+            requestPath,
+            model,
+            body: originalRequestBody
+        });
+        const result = await getApiServiceWithFallback(CONFIG, model, {
+            acquireSlot: shouldSelectByPool,
+            ...(routingStrategy ? { routingStrategy } : {})
+        });
 
         service = result.service;
         toProvider = result.actualProviderType;

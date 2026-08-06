@@ -7,7 +7,8 @@ import {
     applyProviderRateLimitCooldown,
     getProtocolPrefix,
     MODEL_PROTOCOL_PREFIX,
-    extractCodexCacheAffinityScope
+    extractCodexCacheAffinityScope,
+    resolveImageProviderRoutingStrategy
 } from '../utils/common.js';
 import { getProviderPoolManager, getApiServiceWithFallback } from './service-manager.js';
 import logger from '../utils/logger.js';
@@ -179,31 +180,6 @@ function collectImageToolOptions(source, { includeInputFidelity = false } = {}) 
     return Object.keys(options).length > 0 ? options : undefined;
 }
 
-function parseOfficialImageConfig(value) {
-    if (value === undefined || value === null || value === '') return undefined;
-
-    let raw = value;
-    if (typeof raw === 'string') {
-        try {
-            raw = JSON.parse(raw);
-        } catch {
-            throw new Error('image_config must be a JSON object');
-        }
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new Error('image_config must be an object');
-    }
-
-    const imageConfig = {};
-    if (typeof raw.aspect_ratio === 'string' && raw.aspect_ratio.trim()) {
-        imageConfig.aspect_ratio = raw.aspect_ratio.trim();
-    }
-    if (typeof raw.image_size === 'string' && raw.image_size.trim()) {
-        imageConfig.image_size = raw.image_size.trim();
-    }
-    return Object.keys(imageConfig).length > 0 ? imageConfig : undefined;
-}
-
 /**
  * Handle API authentication and routing
  * @param {string} method - The HTTP method
@@ -318,7 +294,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     let slotCustomName = null;
     let slotAccountIdentity = null;
     let slotAccountEmail = null;
-    let model, n, response_format, size, quality, prompt, imageToolOptions, imageConfig, codexRequestBody, virtualOpenAIRequest;
+    let model, n, response_format, size, quality, prompt, imageToolOptions, codexRequestBody, virtualOpenAIRequest;
 
     try {
         if (retryContext?.parsedBody) {
@@ -332,7 +308,6 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             size = body.size;
             quality = body.quality;
             imageToolOptions = collectImageToolOptions(body);
-            imageConfig = parseOfficialImageConfig(body.image_config);
             // cap n：至少 1，最多 IMAGE_GEN_MAX_N，非数字降级为 1
             n = Math.min(Math.max(1, parseInt(body.n) || 1), IMAGE_GEN_MAX_N);
             prompt = body.prompt;
@@ -368,7 +343,6 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                 size,
                 quality,
                 response_format,
-                image_config: imageConfig,
                 _imageSize: size, // 兼容 Codex 内部使用的字段
                 _imageQuality: quality,
                 _imageToolOptions: imageToolOptions,
@@ -381,8 +355,14 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
 
         // 从号池获取服务实例
         const shouldUsePool = !!(providerPoolManager && CONFIG.providerPools);
+        const routingStrategy = resolveImageProviderRoutingStrategy(CONFIG, {
+            requestPath: '/v1/images/generations',
+            model,
+            body: virtualOpenAIRequest
+        });
         const result = await getApiServiceWithFallback(CONFIG, model, {
             acquireSlot: shouldUsePool,
+            ...(routingStrategy ? { routingStrategy } : {}),
             excludeProviderUuids: retryContext?.failedCredentialUuids || [],
             deprioritizeProviderTypes: retryContext?.failedProviderTypes || []
         });
@@ -722,7 +702,6 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         const size = fields.size;
         const quality = fields.quality;
         const imageToolOptions = collectImageToolOptions(fields, { includeInputFidelity: true });
-        const imageConfig = parseOfficialImageConfig(fields.image_config);
         const n = Math.min(Math.max(1, parseInt(fields.n) || 1), IMAGE_GEN_MAX_N);
 
         // Support both image and image[] field names, preserving repeated file inputs.
@@ -780,7 +759,6 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             size,
             quality,
             response_format,
-            image_config: imageConfig,
             _imageSize: size,
             _imageQuality: quality,
             _imageToolOptions: imageToolOptions,
@@ -788,7 +766,15 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         };
 
         const shouldUsePool = !!(providerPoolManager && currentConfig.providerPools);
-        const result = await getApiServiceWithFallback(currentConfig, model, { acquireSlot: shouldUsePool });
+        const routingStrategy = resolveImageProviderRoutingStrategy(currentConfig, {
+            requestPath: '/v1/images/edits',
+            model,
+            body: fields
+        });
+        const result = await getApiServiceWithFallback(currentConfig, model, {
+            acquireSlot: shouldUsePool,
+            ...(routingStrategy ? { routingStrategy } : {})
+        });
         const service = result.service;
 
         if (!service) {
