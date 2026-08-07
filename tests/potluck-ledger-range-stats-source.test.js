@@ -41,9 +41,9 @@ describe('API Potluck ledger range stats surface', () => {
         expect(source).not.toContain('function formatRangeDataSourceLabel(rangeSummary)');
         expect(source).not.toContain('数据源: 账本');
         expect(source).not.toContain('数据源: 实时统计');
-        expect(source).toContain("apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}${customQuery}&${getCostQuery()}`)");
+        expect(source).toContain("apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}${customQuery}&includeKeys=1&${getCostQuery()}`)");
         expect(source).toContain("refreshLedgerRangeStats(currentUsageRange, { force: true });");
-        expect(source).toContain('refreshLedgerRangeStats(currentUsageRange);');
+        expect(source).toContain('await refreshLedgerRangeStats(currentUsageRange, { force: true });');
         expect(source).toContain('from=${encodeURIComponent(currentCustomRange.from)}');
         expect(source).toContain('to=${encodeURIComponent(currentCustomRange.to)}');
     });

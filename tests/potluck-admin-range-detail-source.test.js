@@ -201,6 +201,20 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(source).toContain("else if (field === 'rangeTokens') { va = getKeyRangeMetrics(a).totalTokens; vb = getKeyRangeMetrics(b).totalTokens; }");
     });
 
+    test('admin key range amount sorting waits for the ledger-backed key summaries', () => {
+        const source = loadPotluckSource();
+        const setRangeStart = source.indexOf('async function setUsageRange(range)');
+        const setRangeEnd = source.indexOf('function setLimitControl', setRangeStart);
+        const setRangeBlock = source.slice(setRangeStart, setRangeEnd);
+
+        expect(setRangeStart).toBeGreaterThanOrEqual(0);
+        expect(setRangeBlock).toContain('await refreshLedgerRangeStats(currentUsageRange, { force: true });');
+        expect(setRangeBlock.indexOf('await refreshLedgerRangeStats(currentUsageRange, { force: true });'))
+            .toBeLessThan(setRangeBlock.indexOf('applyFilterAndSort();'));
+        expect(source).toContain('&includeKeys=1');
+        expect(source).toContain('ledgerData?.keySummaries?.[key.id]');
+    });
+
     test('admin provider account tree rolls account cost up to provider headers', () => {
         const source = loadPotluckSource();
 

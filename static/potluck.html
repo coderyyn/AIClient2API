@@ -1944,6 +1944,16 @@
         }
 
         function getKeyRangeMetrics(key, range = currentUsageRange) {
+            const ledgerSummary = getLedgerKeyRangeSummary(key, range);
+            if (ledgerSummary) {
+                return {
+                    requestCount: ledgerSummary.requestCount,
+                    totalTokens: ledgerSummary.totalTokens,
+                    cachedTokens: ledgerSummary.cachedTokens,
+                    cacheHitRatio: ledgerSummary.cacheHitRatio,
+                    cost: ledgerSummary.cost
+                };
+            }
             if (range === 'custom') {
                 const rangeSummary = getCustomKeyRangeSummary(key);
                 return {
@@ -2226,9 +2236,9 @@
             if (!force && ledgerRangeStats.key === key) return ledgerRangeStats.data;
             try {
                 const customQuery = range === 'custom'
-                    ? `&from=${encodeURIComponent(currentCustomRange.from)}&to=${encodeURIComponent(currentCustomRange.to)}&includeKeys=1`
+                    ? `&from=${encodeURIComponent(currentCustomRange.from)}&to=${encodeURIComponent(currentCustomRange.to)}`
                     : '';
-                const result = await apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}${customQuery}&${getCostQuery()}`);
+                const result = await apiRequest(`${API_BASE}/range-stats?range=${encodeURIComponent(range)}${customQuery}&includeKeys=1&${getCostQuery()}`);
                 const data = result?.success ? result.data : null;
                 ledgerRangeStats = { key, data };
                 if (data?.bounds) updateCustomRangeBounds(data.bounds);
@@ -2278,6 +2288,19 @@
 
         function getCustomKeyRangeSummary(key) {
             return key?._customRangeSummary || buildCustomKeyRangeSummary(key);
+        }
+
+        function getLedgerKeyRangeSummary(key, range = currentUsageRange) {
+            const ledgerData = getLedgerRangeStatsFor(range);
+            const source = ledgerData?.keySummaries?.[key?.id];
+            if (!source) return null;
+
+            const summary = createUsageSummaryBucket();
+            addUsageBucket(summary, source.summary || {});
+            (ledgerData.missingDates || [])
+                .filter(date => key?.usageHistory?.[date])
+                .forEach(date => addUsageBucket(summary, key.usageHistory[date]?.summary || {}));
+            return withCacheHitRatio(summary);
         }
 
         function renderUsageCoverage(ledgerStats, usageHistory = {}) {
@@ -2623,7 +2646,7 @@
             }
         }
 
-        function setUsageRange(range) {
+        async function setUsageRange(range) {
             currentUsageRange = ['total', '30d', '7d', 'today'].includes(range) ? range : 'total';
             closeCustomRangePanel();
             updateUsageRangeButtons();
@@ -2636,7 +2659,7 @@
                 }
                 renderCalendar(currentStats.usageHistory || {});
             }
-            refreshLedgerRangeStats(currentUsageRange);
+            await refreshLedgerRangeStats(currentUsageRange, { force: true });
             applyFilterAndSort();
 
             if (currentDetailKeyId) {
