@@ -836,6 +836,20 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     let isFallback = false;
     let selectedUuid = null;
     let actualModel = actualModelName;
+    const selectionDiagnostics = options.selectionDiagnostics || {};
+    Object.assign(selectionDiagnostics, {
+        totalCandidateCount: 0,
+        healthCooldownSkipped: 0,
+        concurrencyLimitSkipped: 0,
+        eligibleCandidateCount: 0,
+        capacityExhausted: false,
+        filterReasons: {},
+        attempts: []
+    });
+    const routingOptions = {
+        ...options,
+        selectionDiagnostics
+    };
     
     const isPoolable = PROVIDER_MAPPINGS.some(m => m.providerType === config.MODEL_PROVIDER);
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
@@ -873,7 +887,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         };
 
         const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-            ...options,
+            ...routingOptions,
             requestedModel: actualModelName,
             preferredProviderUuid,
             excludeProviderUuids: [...new Set([
@@ -888,7 +902,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         if (!selectedResult && pendingExcludedUuid) {
             logger.info(`[Codex Overload] No alternative provider available; retrying selection with previous provider allowed: ${pendingExcludedUuid}`);
             const fallbackSelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-                ...options,
+                ...routingOptions,
                 requestedModel: actualModelName,
                 preferredProviderUuid: null,
                 excludeProviderUuids: originalExcludedUuids
@@ -902,7 +916,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         if (!selectedResult && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
             logger.info(`[Credential Retry] No untried provider available; retrying standard selection with previously tried providers eligible again`);
             const retrySelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-                ...options,
+                ...routingOptions,
                 requestedModel: actualModelName,
                 preferredProviderUuid: null,
                 excludeProviderUuids: []
@@ -937,6 +951,17 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
                 serviceConfig.MODEL_PROVIDER = actualProviderType;
             }
         } else {
+            if (
+                useAcquire
+                && selectionDiagnostics.capacityExhausted === true
+            ) {
+                const errorMsg = `[API Service] All healthy providers are at concurrency capacity for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
+                logger.warn(errorMsg);
+                const error = new Error(errorMsg);
+                error.status = 429;
+                error.code = 429;
+                throw error;
+            }
             const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
             logger.error(errorMsg);
             throw new Error(errorMsg);

@@ -2021,6 +2021,11 @@ export class ProviderPoolManager {
         }
 
         const selectionStartedAt = Date.now();
+        const callerDiagnostics = options.selectionDiagnostics;
+        const attemptDiagnostics = callerDiagnostics ? {} : null;
+        const attemptOptions = attemptDiagnostics
+            ? { ...options, selectionDiagnostics: attemptDiagnostics }
+            : options;
  
         // 使用标志位 + 异步等待实现更强力的互斥锁
         // 这种方式能更好地处理同一微任务循环内的并发
@@ -2032,9 +2037,17 @@ export class ProviderPoolManager {
         
         try {
             // 在锁内部执行同步选择
-            return this._doSelectProvider(providerType, requestedModel, options);
+            return this._doSelectProvider(providerType, requestedModel, attemptOptions);
         } finally {
             this._isSelecting[providerType] = false;
+            if (callerDiagnostics && attemptDiagnostics) {
+                const attempts = Array.isArray(callerDiagnostics.attempts)
+                    ? callerDiagnostics.attempts
+                    : [];
+                attempts.push({ ...attemptDiagnostics });
+                Object.assign(callerDiagnostics, attemptDiagnostics, { attempts });
+                callerDiagnostics.capacityExhausted = attempts.some(attempt => attempt.capacityExhausted === true);
+            }
             this._logSlowProviderSelection(providerType, requestedModel, selectionStartedAt);
         }
     }
@@ -2065,7 +2078,14 @@ export class ProviderPoolManager {
         const availableProviders = this.providerStatus[providerType] || [];
         const selectionDiagnostics = options.selectionDiagnostics;
         if (selectionDiagnostics) {
-            selectionDiagnostics.totalCandidateCount = availableProviders.length;
+            Object.assign(selectionDiagnostics, {
+                totalCandidateCount: availableProviders.length,
+                healthCooldownSkipped: 0,
+                concurrencyLimitSkipped: 0,
+                eligibleCandidateCount: 0,
+                capacityExhausted: false,
+                filterReasons: {}
+            });
         }
         
         // 检查并恢复已到恢复时间的提供商
@@ -2133,6 +2153,9 @@ export class ProviderPoolManager {
             availableAndHealthyProviders = availableAndHealthyProviders.filter(provider => this._hasAcquireCapacity(provider));
             if (selectionDiagnostics) {
                 selectionDiagnostics.concurrencyLimitSkipped = beforeConcurrencyFilter - availableAndHealthyProviders.length;
+                selectionDiagnostics.capacityExhausted = beforeConcurrencyFilter > 0
+                    && availableAndHealthyProviders.length === 0
+                    && selectionDiagnostics.concurrencyLimitSkipped === beforeConcurrencyFilter;
             }
         }
         if (selectionDiagnostics) {

@@ -133,7 +133,7 @@ describe('Codex overload service routing', () => {
         manager.releaseSlot(providerType, thirdRetry.uuid);
     });
 
-    test('does not reintroduce credentials that are unhealthy or have no concurrency capacity', async () => {
+    test('returns a rate-limit error when every healthy credential is at concurrency capacity', async () => {
         const config = createConfig(['codex-a', 'codex-b']);
         config.providerPools[providerType][0].concurrencyLimit = 1;
         config.providerPools[providerType][1].concurrencyLimit = 1;
@@ -144,10 +144,79 @@ describe('Codex overload service routing', () => {
         providerA.config.isHealthy = false;
         providerB.state.activeCount = 1;
 
-        await expect(getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+        const request = getApiServiceWithFallback(config, 'gpt-5.4-mini', {
             acquireSlot: true,
             excludeProviderUuids: ['codex-a', 'codex-b'],
             allowExcludedProviderFallback: true
-        })).rejects.toThrow('No healthy provider found');
+        });
+
+        await expect(request).rejects.toMatchObject({
+            status: 429,
+            code: 429
+        });
+        await expect(request).rejects.toThrow('concurrency capacity');
+    });
+
+    test('does not reuse stale concurrency diagnostics when every credential is unhealthy', async () => {
+        const config = createConfig(['codex-a']);
+        await initApiService(config);
+        const manager = getProviderPoolManager();
+        manager.providerStatus[providerType][0].config.isHealthy = false;
+        const selectionDiagnostics = {
+            eligibleCandidateCount: 0,
+            concurrencyLimitSkipped: 1,
+            capacityExhausted: true
+        };
+
+        const request = getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            selectionDiagnostics
+        });
+
+        await expect(request).rejects.not.toMatchObject({ status: 429 });
+        await expect(request).rejects.toThrow('No healthy provider found');
+        expect(selectionDiagnostics).toMatchObject({
+            eligibleCandidateCount: 0,
+            concurrencyLimitSkipped: 0,
+            capacityExhausted: false
+        });
+    });
+
+    test('atomically selects and occupies the only available concurrency slot', async () => {
+        const config = createConfig(['codex-a']);
+        config.providerPools[providerType][0].concurrencyLimit = 1;
+        config.providerPools[providerType][0].queueLimit = 0;
+        await initApiService(config);
+        const manager = getProviderPoolManager();
+        const selectedConfig = manager.providerStatus[providerType][0].config;
+        const originalSelectProvider = manager.selectProvider.bind(manager);
+        let waiting = 0;
+        let releaseBoth;
+        const bothSelected = new Promise(resolve => {
+            releaseBoth = resolve;
+        });
+        manager.selectProvider = jest.fn(async () => {
+            waiting++;
+            if (waiting === 2) releaseBoth();
+            await bothSelected;
+            return selectedConfig;
+        });
+
+        try {
+            const results = await Promise.allSettled([
+                manager.acquireSlot(providerType, 'gpt-5.4-mini'),
+                manager.acquireSlot(providerType, 'gpt-5.4-mini')
+            ]);
+            const fulfilled = results.filter(result => result.status === 'fulfilled');
+            const rejected = results.filter(result => result.status === 'rejected');
+
+            expect(fulfilled).toHaveLength(1);
+            expect(rejected).toHaveLength(1);
+            expect(rejected[0].reason).toMatchObject({ status: 429, code: 429 });
+            expect(manager.providerStatus[providerType][0].state.activeCount).toBe(1);
+        } finally {
+            manager.selectProvider = originalSelectProvider;
+            manager.releaseSlot(providerType, selectedConfig.uuid);
+        }
     });
 });
