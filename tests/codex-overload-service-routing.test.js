@@ -178,7 +178,38 @@ describe('Codex overload service routing', () => {
         expect(selectionDiagnostics).toMatchObject({
             eligibleCandidateCount: 0,
             concurrencyLimitSkipped: 0,
-            capacityExhausted: false
+            capacityExhausted: false,
+            temporaryCooldownSkipped: 0
+        });
+    });
+
+    test('returns 429 when every credential is temporarily unavailable during a rate-limit cooldown', async () => {
+        const config = createConfig(['codex-a', 'codex-b']);
+        await initApiService(config);
+        const manager = getProviderPoolManager();
+        const recoveryTime = new Date(Date.now() + 60_000).toISOString();
+
+        for (const provider of manager.providerStatus[providerType]) {
+            provider.config.isHealthy = false;
+            provider.config.scheduledRecoveryTime = recoveryTime;
+            provider.config.lastErrorMessage = '429 Too Many Requests - short cooldown';
+        }
+
+        const selectionDiagnostics = {};
+        const request = getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            acquireSlot: true,
+            selectionDiagnostics
+        });
+
+        await expect(request).rejects.toMatchObject({
+            status: 429,
+            code: 429
+        });
+        await expect(request).rejects.toThrow('temporarily unavailable');
+        expect(selectionDiagnostics).toMatchObject({
+            eligibleCandidateCount: 0,
+            temporaryCooldownSkipped: 2,
+            nextTemporaryRecoveryTime: recoveryTime
         });
     });
 

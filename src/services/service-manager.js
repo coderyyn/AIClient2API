@@ -840,6 +840,8 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     Object.assign(selectionDiagnostics, {
         totalCandidateCount: 0,
         healthCooldownSkipped: 0,
+        temporaryCooldownSkipped: 0,
+        nextTemporaryRecoveryTime: null,
         concurrencyLimitSkipped: 0,
         eligibleCandidateCount: 0,
         capacityExhausted: false,
@@ -960,6 +962,18 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
                 const error = new Error(errorMsg);
                 error.status = 429;
                 error.code = 429;
+                throw error;
+            }
+            if (
+                selectionDiagnostics.temporaryCooldownSkipped > 0
+                && selectionDiagnostics.eligibleCandidateCount === 0
+            ) {
+                const errorMsg = `[API Service] All providers are temporarily unavailable during cooldown for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
+                logger.warn(errorMsg);
+                const error = new Error(errorMsg);
+                error.status = 429;
+                error.code = 429;
+                error.retryAfter = selectionDiagnostics.nextTemporaryRecoveryTime;
                 throw error;
             }
             const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;

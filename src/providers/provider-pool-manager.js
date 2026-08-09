@@ -2103,6 +2103,8 @@ export class ProviderPoolManager {
             Object.assign(selectionDiagnostics, {
                 totalCandidateCount: availableProviders.length,
                 healthCooldownSkipped: 0,
+                temporaryCooldownSkipped: 0,
+                nextTemporaryRecoveryTime: null,
                 concurrencyLimitSkipped: 0,
                 eligibleCandidateCount: 0,
                 capacityExhausted: false,
@@ -2115,6 +2117,17 @@ export class ProviderPoolManager {
         
         // 获取固定时间戳，确保排序过程中一致
         const now = Date.now();
+
+        if (selectionDiagnostics) {
+            const temporaryRecoveryTimes = availableProviders
+                .filter(provider => provider.config.isHealthy === false && !provider.config.isDisabled)
+                .map(provider => Date.parse(provider.config.scheduledRecoveryTime || ''))
+                .filter(recoveryTime => Number.isFinite(recoveryTime) && recoveryTime > now);
+            selectionDiagnostics.temporaryCooldownSkipped = temporaryRecoveryTimes.length;
+            if (temporaryRecoveryTimes.length > 0) {
+                selectionDiagnostics.nextTemporaryRecoveryTime = new Date(Math.min(...temporaryRecoveryTimes)).toISOString();
+            }
+        }
         
         // 提前计算池中最小序列号，避免在排序算法中重复 O(N) 计算
         const minSeq = Math.min(...availableProviders.map(p => p.config._lastSelectionSeq || 0));
