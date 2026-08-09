@@ -180,7 +180,38 @@ export function shouldRetryFastImageOverload(error, elapsedMs) {
     return /\b(?:our servers are )?currently overloaded\b|server[_ -]?overloaded/i.test(message);
 }
 
-async function generateImageWithFastOverloadRetry(service, model, requestBody, scope) {
+function shouldRetryTransientImageError(error) {
+    const errorBody = error?.response?.data?.error || error?.response?.data || {};
+    const message = [error?.message, errorBody?.message, errorBody?.type, errorBody?.code]
+        .filter(Boolean)
+        .join(' ');
+
+    return /stream has been aborted|upstream connect error or disconnect\/reset before headers|reset reason:\s*connection termination/i.test(message);
+}
+
+function markImageProviderRetry(error, kind) {
+    error.shouldSwitchCredential = true;
+    error.skipErrorCount = true;
+    error.imageProviderRetryable = true;
+    error.imageProviderRetryKind = kind;
+    return error;
+}
+
+function createImageRejectionRetryError(scope, rejection) {
+    const error = new Error(`${scope} rejected: ${rejection}`);
+    error.response = {
+        status: 400,
+        data: { error: { message: rejection, type: 'invalid_request_error' } }
+    };
+    return markImageProviderRetry(error, 'rejection');
+}
+
+function getImageRequestMaxRetries(config, fallback = 3) {
+    const configured = Number.parseInt(config?.REQUEST_MAX_RETRIES, 10);
+    return Number.isFinite(configured) ? Math.max(0, configured) : fallback;
+}
+
+async function generateImageWithInternalRetry(service, model, requestBody, scope) {
     let internalRetryCount = 0;
 
     while (true) {
@@ -195,6 +226,10 @@ async function generateImageWithFastOverloadRetry(service, model, requestBody, s
                 logger.warn(`[${scope}] internal overload retry 1/1 after ${elapsedMs}ms; waiting ${delayMs}ms`);
                 await new Promise(resolve => setTimeout(resolve, delayMs));
                 continue;
+            }
+            if (shouldRetryTransientImageError(error)) {
+                logger.warn(`[${scope}] requesting provider reroute after transient upstream failure (${elapsedMs}ms)`);
+                throw markImageProviderRetry(error, 'transient');
             }
             throw error;
         }
@@ -425,7 +460,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     const IMAGE_GEN_MAX_N = 4;
     const VALID_RESPONSE_FORMATS = new Set(['b64_json', 'url']);
 
-    const maxRetries = retryContext?.maxRetries ?? 3;
+    const maxRetries = retryContext?.maxRetries ?? getImageRequestMaxRetries(currentConfig);
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG ?? currentConfig;
     let slotProviderType = null;
@@ -506,7 +541,8 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             acquireSlot: shouldUsePool,
             ...(routingStrategy ? { routingStrategy } : {}),
             excludeProviderUuids: retryContext?.failedCredentialUuids || [],
-            deprioritizeProviderTypes: retryContext?.failedProviderTypes || []
+            deprioritizeProviderTypes: retryContext?.failedProviderTypes || [],
+            allowExcludedProviderFallback: retryContext?.allowExcludedProviderFallback === true
         });
         const service = result.service;
 
@@ -561,9 +597,15 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
         const data = [];
         const responses = [];
         for (let i = 0; i < n; i++) {
-            const response = await generateImageWithFastOverloadRetry(service, model, codexRequestBody, 'Image Generation');
+            const response = await generateImageWithInternalRetry(service, model, codexRequestBody, 'Image Generation');
             responses.push(response);
             const extracted = extractImagesFromServiceResponse(response, finalProviderProtocol, response_format);
+            if (extracted.length === 0) {
+                const rejection = extractRejectionMessage([response], finalProviderProtocol);
+                if (rejection && providerPoolManager && slotUuid && currentRetry < maxRetries) {
+                    throw createImageRejectionRetryError('Image generation', rejection);
+                }
+            }
             data.push(...extracted);
         }
 
@@ -698,8 +740,8 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                 ...(retryContext?.failedProviderTypes || []),
                 slotProviderType || CONFIG.MODEL_PROVIDER
             ].filter(Boolean);
-            const randomDelay = Math.floor(Math.random() * 10000);
-            logger.info(`[Image Generation Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
+            const randomDelay = error.imageProviderRetryable ? 0 : Math.floor(Math.random() * 10000);
+            logger.info(`[Image Generation Retry] Switching credential without changing provider health. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
 
             try {
@@ -710,6 +752,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     maxRetries,
                     failedCredentialUuids,
                     failedProviderTypes,
+                    allowExcludedProviderFallback: error.imageProviderRetryable === true,
                     parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest, includeProcessingMetadata}
                 });
             } catch (retryError) {
@@ -859,19 +902,24 @@ function getMultipartFiles(form, fieldNames) {
  * Accepts multipart/form-data: image (required), prompt (required),
  * mask (ignored), model, n, size, response_format
  */
-async function handleImageEditsRequest(req, res, currentConfig, providerPoolManager) {
+async function handleImageEditsRequest(req, res, currentConfig, providerPoolManager, retryContext = null) {
+    const CONFIG = retryContext?.CONFIG ?? currentConfig;
+    const maxRetries = retryContext?.maxRetries ?? getImageRequestMaxRetries(CONFIG);
+    const currentRetry = retryContext?.currentRetry ?? 0;
     let slotProviderType = null;
     let slotUuid = null;
     let slotCustomName = null;
     let slotAccountIdentity = null;
     let slotAccountEmail = null;
+    let form = null;
+    let model = null;
 
     try {
-        const form = await parseMultipartForm(req);
+        form = retryContext?.parsedForm ?? await parseMultipartForm(req);
         const { fields, files } = form;
-        currentConfig._codexCacheAffinityScope = extractCodexCacheAffinityScope(fields);
+        CONFIG._codexCacheAffinityScope = extractCodexCacheAffinityScope(fields);
 
-        const model = fields.model || 'gpt-image-2';
+        model = fields.model || 'gpt-image-2';
         const prompt = fields.prompt;
         const response_format = fields.response_format || 'b64_json';
         const size = fields.size;
@@ -949,7 +997,10 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         });
         const result = await getApiServiceWithFallback(currentConfig, model, {
             acquireSlot: shouldUsePool,
-            ...(routingStrategy ? { routingStrategy } : {})
+            ...(routingStrategy ? { routingStrategy } : {}),
+            excludeProviderUuids: retryContext?.failedCredentialUuids || [],
+            deprioritizeProviderTypes: retryContext?.failedProviderTypes || [],
+            allowExcludedProviderFallback: retryContext?.allowExcludedProviderFallback === true
         });
         const service = result.service;
 
@@ -1000,7 +1051,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         logImagePayloadSummary('Image Edits', model, codexRequestBody);
 
         const imageRequests = Array.from({ length: n }, () =>
-            generateImageWithFastOverloadRetry(service, model, codexRequestBody, 'Image Edits')
+            generateImageWithInternalRetry(service, model, codexRequestBody, 'Image Edits')
         );
         const responses = await Promise.all(imageRequests);
         const data = [];
@@ -1014,6 +1065,9 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             // 检查是否有拒绝消息
             const rejection = extractRejectionMessage(responses, finalProviderProtocol);
             if (rejection) {
+                if (providerPoolManager && slotUuid && currentRetry < maxRetries) {
+                    throw createImageRejectionRetryError('Image editing', rejection);
+                }
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: { message: `Image editing rejected: ${rejection}`, type: 'invalid_request_error' } }));
             } else {
@@ -1088,6 +1142,32 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
         if (!res.writableEnded && writeImageProcessingError(res, error)) {
             return;
         }
+
+        if (error.shouldSwitchCredential === true && providerPoolManager && slotUuid && currentRetry < maxRetries) {
+            const failedCredentialUuids = [
+                ...(retryContext?.failedCredentialUuids || []),
+                slotUuid
+            ].filter(Boolean);
+            const failedProviderTypes = [
+                ...(retryContext?.failedProviderTypes || []),
+                slotProviderType || CONFIG.MODEL_PROVIDER
+            ].filter(Boolean);
+            const randomDelay = error.imageProviderRetryable ? 0 : Math.floor(Math.random() * 10000);
+            logger.info(`[Image Edits Retry] Switching credential without changing provider health. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
+            await new Promise(resolve => setTimeout(resolve, randomDelay));
+
+            return await handleImageEditsRequest(req, res, CONFIG, providerPoolManager, {
+                ...retryContext,
+                CONFIG,
+                currentRetry: currentRetry + 1,
+                maxRetries,
+                failedCredentialUuids,
+                failedProviderTypes,
+                allowExcludedProviderFallback: error.imageProviderRetryable === true,
+                parsedForm: form
+            });
+        }
+
         if (!res.writableEnded) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, type: 'server_error' } }));

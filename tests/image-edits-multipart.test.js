@@ -110,6 +110,45 @@ function makeOverloadError() {
     return new Error('Codex API error: Our servers are currently overloaded. Please try again later.');
 }
 
+function makeStreamAbortedError() {
+    return new Error('200 HTTP Error (non-stream): stream has been aborted');
+}
+
+function makeUpstreamResetError() {
+    return Object.assign(
+        new Error('503 Service Unavailable (non-stream): upstream connect error or disconnect/reset before headers. reset reason: connection termination'),
+        {
+            response: {
+                status: 503,
+                data: {
+                    error: {
+                        message: 'upstream connect error or disconnect/reset before headers. reset reason: connection termination'
+                    }
+                }
+            }
+        }
+    );
+}
+
+function makeSafetyRejectionResponse() {
+    return {
+        response: {
+            output: [{
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Sorry, I cannot generate that shower scene with a human subject.' }]
+            }]
+        }
+    };
+}
+
+function makeProviderPoolManager() {
+    return {
+        releaseSlot: jest.fn(),
+        markProviderUnhealthy: jest.fn()
+    };
+}
+
 describe('fast image overload retry classification', () => {
     test('allows one retry for an explicit overload that fails before ten seconds', () => {
         expect(shouldRetryFastImageOverload(makeOverloadError(), 9999)).toBe(true);
@@ -132,6 +171,11 @@ describe('fast image overload retry classification', () => {
 describe('/v1/images/edits multipart handling', () => {
     beforeEach(() => {
         mockGenerateContent.mockReset();
+        getApiServiceWithFallback.mockReset();
+        getApiServiceWithFallback.mockResolvedValue({
+            service: { generateContent: mockGenerateContent },
+            actualProviderType: 'openai-codex-oauth'
+        });
         logger.info.mockClear();
         logger.warn.mockClear();
         logger.error.mockClear();
@@ -333,6 +377,108 @@ describe('/v1/images/edits multipart handling', () => {
         }
     });
 
+    test.each([
+        ['an aborted upstream response stream', makeStreamAbortedError()],
+        ['an upstream connection reset before response headers', makeUpstreamResetError()]
+    ])('reroutes %s to another image account without marking the first unhealthy', async (_label, transientError) => {
+        const firstGenerate = jest.fn().mockRejectedValueOnce(transientError);
+        const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('retried-image'));
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({
+                service: { generateContent: firstGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-a'
+            })
+            .mockResolvedValueOnce({
+                service: { generateContent: secondGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-b'
+            });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: 'edit this image' },
+            { name: 'image', file: true, filename: 'first.png', contentType: 'image/png', value: 'first-image' }
+        ]);
+        const res = makeResponse();
+
+        const handled = await handleAPIRequests(
+            'POST',
+            '/v1/images/edits',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                REQUEST_MAX_RETRIES: 2,
+                providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+            },
+            null,
+            providerPoolManager,
+            null
+        );
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(getApiServiceWithFallback).toHaveBeenNthCalledWith(
+            2,
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
+        );
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+    });
+
+    test('reroutes an explicit image safety rejection without marking the first account unhealthy', async () => {
+        const firstGenerate = jest.fn().mockResolvedValueOnce(makeSafetyRejectionResponse());
+        const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('recovered-image'));
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({
+                service: { generateContent: firstGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-a'
+            })
+            .mockResolvedValueOnce({
+                service: { generateContent: secondGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-b'
+            });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: 'create the shower scene' },
+            { name: 'image', file: true, filename: 'first.png', contentType: 'image/png', value: 'first-image' }
+        ]);
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/edits',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                REQUEST_MAX_RETRIES: 2,
+                providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+            },
+            null,
+            providerPoolManager,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(getApiServiceWithFallback).toHaveBeenNthCalledWith(
+            2,
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
+        );
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+    });
+
     test('routes image edits with image round robin enabled by default', async () => {
         const req = makeMultipartRequest([
             { name: 'model', value: 'gpt-image-2' },
@@ -403,6 +549,11 @@ describe('/v1/images/edits multipart handling', () => {
 describe('/v1/images/generations request handling', () => {
     beforeEach(() => {
         mockGenerateContent.mockReset();
+        getApiServiceWithFallback.mockReset();
+        getApiServiceWithFallback.mockResolvedValue({
+            service: { generateContent: mockGenerateContent },
+            actualProviderType: 'openai-codex-oauth'
+        });
         logger.info.mockClear();
         logger.warn.mockClear();
         logger.error.mockClear();
@@ -618,6 +769,109 @@ describe('/v1/images/generations request handling', () => {
         } finally {
             randomSpy.mockRestore();
         }
+    });
+
+    test.each([
+        ['an aborted upstream response stream', makeStreamAbortedError()],
+        ['an upstream connection reset before response headers', makeUpstreamResetError()]
+    ])('reroutes %s for image generation without marking the first account unhealthy', async (_label, transientError) => {
+        const firstGenerate = jest.fn().mockRejectedValueOnce(transientError);
+        const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('retried-generation'));
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({
+                service: { generateContent: firstGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-a'
+            })
+            .mockResolvedValueOnce({
+                service: { generateContent: secondGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-b'
+            });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            n: 1,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                REQUEST_MAX_RETRIES: 2,
+                providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+            },
+            null,
+            providerPoolManager,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(getApiServiceWithFallback).toHaveBeenNthCalledWith(
+            2,
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
+        );
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+    });
+
+    test('reroutes an explicit image generation safety rejection without marking the first account unhealthy', async () => {
+        const firstGenerate = jest.fn().mockResolvedValueOnce(makeSafetyRejectionResponse());
+        const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('recovered-generation'));
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({
+                service: { generateContent: firstGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-a'
+            })
+            .mockResolvedValueOnce({
+                service: { generateContent: secondGenerate },
+                actualProviderType: 'openai-codex-oauth',
+                uuid: 'codex-b'
+            });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'create the shower scene',
+            n: 1,
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            {
+                MODEL_PROVIDER: 'openai-codex-oauth',
+                REQUEST_MAX_RETRIES: 2,
+                providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+            },
+            null,
+            providerPoolManager,
+            null
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(getApiServiceWithFallback).toHaveBeenNthCalledWith(
+            2,
+            expect.anything(),
+            'gpt-image-2',
+            expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
+        );
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
     });
 
     test('routes image generations with image round robin enabled by default', async () => {
