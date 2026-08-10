@@ -167,9 +167,21 @@ function writeImageProcessingError(res, error) {
     return true;
 }
 
+function isImageConnectionResetError(error) {
+    if (error?.code === 'ECONNRESET') return true;
+
+    const errorBody = error?.response?.data?.error || error?.response?.data || {};
+    const message = [error?.message, errorBody?.message, errorBody?.type, errorBody?.code]
+        .filter(Boolean)
+        .join(' ');
+    return /socket hang up/i.test(message);
+}
+
 function writeImageRequestError(res, error) {
     if (res.writableEnded) return;
-    const rawStatus = error?.response?.status || error?.status || error?.statusCode || error?.code || 500;
+    const rawStatus = isImageConnectionResetError(error)
+        ? 502
+        : error?.response?.status || error?.status || error?.statusCode || error?.code || 500;
     const parsedStatus = Number(rawStatus);
     const status = Number.isInteger(parsedStatus) && parsedStatus >= 100 && parsedStatus <= 599
         ? parsedStatus
@@ -200,6 +212,8 @@ export function shouldRetryFastImageOverload(error, elapsedMs) {
 }
 
 function shouldRetryTransientImageError(error) {
+    if (isImageConnectionResetError(error)) return true;
+
     const errorBody = error?.response?.data?.error || error?.response?.data || {};
     const message = [error?.message, errorBody?.message, errorBody?.type, errorBody?.code]
         .filter(Boolean)
@@ -287,6 +301,7 @@ function parseRetryAfterMs(value) {
 
 function classifyImageGenerationError(error) {
     const status = error?.response?.status || error?.status || error?.statusCode || null;
+    if (isImageConnectionResetError(error)) return 'network_reset';
     if (Number(status) === 429) return 'upstream_429';
     if (Number(status) === 401 || Number(status) === 403) return 'auth_failed';
     if (Number(status) >= 500) return 'upstream_5xx';
@@ -334,6 +349,7 @@ export function buildImageGenerationErrorAudit({
         upstreamRequestId,
         currentRetry,
         maxRetries,
+        imageProviderRetryKind: error?.imageProviderRetryKind || null,
         cooldownApplied: Boolean(cooldownApplied),
         willRetry: Boolean(willRetry)
     };

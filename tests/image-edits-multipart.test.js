@@ -2,7 +2,11 @@ import { Readable } from 'stream';
 import { jest } from '@jest/globals';
 import sharp from 'sharp';
 import '../src/converters/register-converters.js';
-import { handleAPIRequests, shouldRetryFastImageOverload } from '../src/services/api-manager.js';
+import {
+    buildImageGenerationErrorAudit,
+    handleAPIRequests,
+    shouldRetryFastImageOverload
+} from '../src/services/api-manager.js';
 
 const mockGenerateContent = jest.fn();
 
@@ -130,6 +134,12 @@ function makeUpstreamResetError() {
     );
 }
 
+function makeSocketHangUpError({ withCode = true } = {}) {
+    const error = new Error('socket hang up');
+    if (withCode) error.code = 'ECONNRESET';
+    return error;
+}
+
 function makeSafetyRejectionResponse() {
     return {
         response: {
@@ -167,6 +177,20 @@ describe('fast image overload retry classification', () => {
         Object.assign(new Error('connection aborted'), { code: 'ECONNABORTED' })
     ])('does not retry unrelated, rate-limit, or network failures', (error) => {
         expect(shouldRetryFastImageOverload(error, 1000)).toBe(false);
+    });
+
+    test('classifies ECONNRESET image failures as network resets in retry audit', () => {
+        const error = makeSocketHangUpError();
+        error.imageProviderRetryKind = 'transient';
+
+        expect(buildImageGenerationErrorAudit({
+            model: 'gpt-image-2',
+            error
+        })).toMatchObject({
+            errorClass: 'network_reset',
+            errorCode: 'ECONNRESET',
+            imageProviderRetryKind: 'transient'
+        });
     });
 });
 
@@ -498,7 +522,9 @@ describe('/v1/images/edits multipart handling', () => {
 
     test.each([
         ['an aborted upstream response stream', makeStreamAbortedError()],
-        ['an upstream connection reset before response headers', makeUpstreamResetError()]
+        ['an upstream connection reset before response headers', makeUpstreamResetError()],
+        ['an ECONNRESET socket hang up', makeSocketHangUpError()],
+        ['a socket hang up without an error code', makeSocketHangUpError({ withCode: false })]
     ])('reroutes %s to another image account without marking the first unhealthy', async (_label, transientError) => {
         const firstGenerate = jest.fn().mockRejectedValueOnce(transientError);
         const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('retried-image'));
@@ -547,6 +573,34 @@ describe('/v1/images/edits multipart handling', () => {
             expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
         );
         expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
+    });
+
+    test('returns 502 after socket hang up retries are exhausted for image edits', async () => {
+        const firstGenerate = jest.fn().mockRejectedValueOnce(makeSocketHangUpError());
+        const secondGenerate = jest.fn().mockRejectedValueOnce(makeSocketHangUpError());
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({ service: { generateContent: firstGenerate }, actualProviderType: 'openai-codex-oauth', uuid: 'codex-a' })
+            .mockResolvedValueOnce({ service: { generateContent: secondGenerate }, actualProviderType: 'openai-codex-oauth', uuid: 'codex-b' });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gpt-image-2' },
+            { name: 'prompt', value: 'edit this image' },
+            { name: 'image', file: true, filename: 'first.png', contentType: 'image/png', value: 'first-image' }
+        ]);
+        const res = makeResponse();
+
+        await handleAPIRequests('POST', '/v1/images/edits', req, res, {
+            MODEL_PROVIDER: 'openai-codex-oauth',
+            REQUEST_MAX_RETRIES: 1,
+            providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+        }, null, providerPoolManager, null);
+
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(res.statusCode).toBe(502);
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
     });
 
     test('reroutes an explicit image safety rejection without marking the first account unhealthy', async () => {
@@ -892,7 +946,9 @@ describe('/v1/images/generations request handling', () => {
 
     test.each([
         ['an aborted upstream response stream', makeStreamAbortedError()],
-        ['an upstream connection reset before response headers', makeUpstreamResetError()]
+        ['an upstream connection reset before response headers', makeUpstreamResetError()],
+        ['an ECONNRESET socket hang up', makeSocketHangUpError()],
+        ['a socket hang up without an error code', makeSocketHangUpError({ withCode: false })]
     ])('reroutes %s for image generation without marking the first account unhealthy', async (_label, transientError) => {
         const firstGenerate = jest.fn().mockRejectedValueOnce(transientError);
         const secondGenerate = jest.fn().mockResolvedValueOnce(makeImageResponse('retried-generation'));
@@ -941,6 +997,34 @@ describe('/v1/images/generations request handling', () => {
             expect.objectContaining({ excludeProviderUuids: ['codex-a'] })
         );
         expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
+    });
+
+    test('returns 502 after socket hang up retries are exhausted for image generation', async () => {
+        const firstGenerate = jest.fn().mockRejectedValueOnce(makeSocketHangUpError());
+        const secondGenerate = jest.fn().mockRejectedValueOnce(makeSocketHangUpError());
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({ service: { generateContent: firstGenerate }, actualProviderType: 'openai-codex-oauth', uuid: 'codex-a' })
+            .mockResolvedValueOnce({ service: { generateContent: secondGenerate }, actualProviderType: 'openai-codex-oauth', uuid: 'codex-b' });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeJsonRequest({
+            model: 'gpt-image-2',
+            prompt: 'draw one green circle',
+            response_format: 'b64_json'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests('POST', '/v1/images/generations', req, res, {
+            MODEL_PROVIDER: 'openai-codex-oauth',
+            REQUEST_MAX_RETRIES: 1,
+            providerPools: { 'openai-codex-oauth': [{ uuid: 'codex-a' }, { uuid: 'codex-b' }] }
+        }, null, providerPoolManager, null);
+
+        expect(firstGenerate).toHaveBeenCalledTimes(1);
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+        expect(res.statusCode).toBe(502);
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
     });
 
     test('reroutes an explicit image generation safety rejection without marking the first account unhealthy', async () => {
