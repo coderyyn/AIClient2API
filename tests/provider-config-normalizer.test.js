@@ -18,6 +18,22 @@ describe('provider config normalizer', () => {
         });
     });
 
+    test('normalizes Antigravity family quota limits as non-negative numbers', () => {
+        const normalized = normalizeProviderConfigFields({
+            antigravityGeminiMax5hPercent: '80',
+            antigravityGeminiMaxWeeklyPercent: '90',
+            antigravityThirdPartyMax5hPercent: '70',
+            antigravityThirdPartyMaxWeeklyPercent: '75'
+        });
+
+        expect(normalized).toMatchObject({
+            antigravityGeminiMax5hPercent: 80,
+            antigravityGeminiMaxWeeklyPercent: 90,
+            antigravityThirdPartyMax5hPercent: 70,
+            antigravityThirdPartyMaxWeeklyPercent: 75
+        });
+    });
+
     test('removes legacy Codex token quota limit fields from saved config', () => {
         const normalized = normalizeProviderConfigFields({
             codexMax5hTokens: '100000000',

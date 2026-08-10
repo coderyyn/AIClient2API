@@ -456,6 +456,12 @@ function renderCollapsedStatusIcons(instance, providerType) {
             renderStatusIcon('5.3额度', getQuotaStatusState(instance.codexQuotaHealth?.codex53))
         );
     }
+    if (providerType === 'gemini-antigravity') {
+        icons.push(
+            renderStatusIcon('Gemini额度', getQuotaStatusState(instance.antigravityQuotaHealth?.families?.gemini)),
+            renderStatusIcon('Claude+GPT额度', getQuotaStatusState(instance.antigravityQuotaHealth?.families?.thirdParty))
+        );
+    }
 
     return icons.join('');
 }
@@ -481,6 +487,35 @@ function renderCodexQuotaHealthBadges(instance, providerType) {
     return [
         renderBadge('通用', quotaHealth.general),
         renderBadge('5.3', quotaHealth.codex53)
+    ].join('');
+}
+
+function renderAntigravityQuotaHealthBadges(instance, providerType) {
+    if (providerType !== 'gemini-antigravity') return '';
+
+    const quotaHealth = instance.antigravityQuotaHealth || {};
+    const renderBadge = (label, state = {}) => {
+        const isHealthy = state?.isHealthy !== false;
+        const titleParts = [];
+        if (state?.lastErrorMessage) titleParts.push(state.lastErrorMessage);
+        if (state?.scheduledRecoveryTime) titleParts.push(`恢复时间: ${formatDate(state.scheduledRecoveryTime)}`);
+        const title = titleParts.length > 0 ? ` title="${escapeHtml(titleParts.join('；'))}"` : '';
+        return `<span class="badge ${isHealthy ? 'badge-healthy' : 'badge-unhealthy'}"${title}>${label}：${isHealthy ? '正常' : '受限'}</span>`;
+    };
+    const activeModels = Object.entries(quotaHealth.models || {})
+        .filter(([, state]) => state?.isHealthy === false);
+    const modelTitle = activeModels.map(([model, state]) => {
+        const recovery = state?.scheduledRecoveryTime ? `，恢复时间: ${formatDate(state.scheduledRecoveryTime)}` : '';
+        return `${model}${recovery}`;
+    }).join('；');
+    const modelBadge = activeModels.length > 0
+        ? `<span class="badge badge-unhealthy" title="${escapeHtml(modelTitle)}">模型冷却：${activeModels.length}</span>`
+        : '<span class="badge badge-healthy">模型冷却：0</span>';
+
+    return [
+        renderBadge('Gemini', quotaHealth.families?.gemini),
+        renderBadge('Claude+GPT', quotaHealth.families?.thirdParty),
+        modelBadge
     ].join('');
 }
 
@@ -736,6 +771,7 @@ function createInstanceUsageCard(instance, providerType) {
                         <button class="btn-refresh-usage" title="${t('usage.card.refresh')}"><i class="fas fa-sync-alt"></i></button>
                         ${renderBaseStatusBadge(instance)}
                         ${renderCodexQuotaHealthBadges(instance, providerType)}
+                        ${renderAntigravityQuotaHealthBadges(instance, providerType)}
                     </div>
                 </div>
                 <div class="instance-name"><span class="instance-name-text" title="${displayName}">${displayName}</span></div>

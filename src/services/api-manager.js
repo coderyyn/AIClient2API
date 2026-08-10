@@ -8,7 +8,8 @@ import {
     getProtocolPrefix,
     MODEL_PROTOCOL_PREFIX,
     extractCodexCacheAffinityScope,
-    resolveImageProviderRoutingStrategy
+    resolveImageProviderRoutingStrategy,
+    createErrorResponse
 } from '../utils/common.js';
 import { getProviderPoolManager, getApiServiceWithFallback } from './service-manager.js';
 import logger from '../utils/logger.js';
@@ -164,6 +165,24 @@ function writeImageProcessingError(res, error) {
         }
     }));
     return true;
+}
+
+function writeImageRequestError(res, error) {
+    if (res.writableEnded) return;
+    const rawStatus = error?.response?.status || error?.status || error?.statusCode || error?.code || 500;
+    const parsedStatus = Number(rawStatus);
+    const status = Number.isInteger(parsedStatus) && parsedStatus >= 100 && parsedStatus <= 599
+        ? parsedStatus
+        : 500;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(createErrorResponse(error, MODEL_PROTOCOL_PREFIX.OPENAI)));
+}
+
+function resolveFinalImageRequestError(error, retryContext, slotUuid) {
+    if (!slotUuid && retryContext?.lastRateLimitError) {
+        return retryContext.lastRateLimitError;
+    }
+    return error;
 }
 
 export function shouldRetryFastImageOverload(error, elapsedMs) {
@@ -752,6 +771,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     maxRetries,
                     failedCredentialUuids,
                     failedProviderTypes,
+                    lastRateLimitError: cooldownApplied ? error : retryContext?.lastRateLimitError,
                     allowExcludedProviderFallback: error.imageProviderRetryable === true,
                     parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest, includeProcessingMetadata}
                 });
@@ -760,10 +780,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             }
         }
 
-        if (!res.writableEnded) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: error.message, type: 'server_error' } }));
-        }
+        writeImageRequestError(res, resolveFinalImageRequestError(error, retryContext, slotUuid));
     } finally {
         // 确保并发槽在请求结束后归还（与 handleStreamRequest/handleUnaryRequest 保持一致）
         if (providerPoolManager && slotProviderType && slotUuid) {
@@ -1143,7 +1160,22 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             return;
         }
 
-        if (error.shouldSwitchCredential === true && providerPoolManager && slotUuid && currentRetry < maxRetries) {
+        let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
+        let cooldownApplied = false;
+        if (providerPoolManager && slotUuid && applyProviderRateLimitCooldown({
+            error,
+            config: CONFIG,
+            providerPoolManager,
+            providerType: slotProviderType,
+            providerUuid: slotUuid,
+            requestedModel: model
+        })) {
+            credentialMarkedUnhealthy = true;
+            cooldownApplied = true;
+        }
+        if (error.shouldSwitchCredential === true) credentialMarkedUnhealthy = true;
+
+        if (credentialMarkedUnhealthy && providerPoolManager && slotUuid && currentRetry < maxRetries) {
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
                 slotUuid
@@ -1163,15 +1195,13 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
                 maxRetries,
                 failedCredentialUuids,
                 failedProviderTypes,
+                lastRateLimitError: cooldownApplied ? error : retryContext?.lastRateLimitError,
                 allowExcludedProviderFallback: error.imageProviderRetryable === true,
                 parsedForm: form
             });
         }
 
-        if (!res.writableEnded) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: error.message, type: 'server_error' } }));
-        }
+        writeImageRequestError(res, resolveFinalImageRequestError(error, retryContext, slotUuid));
     } finally {
         if (providerPoolManager && slotProviderType && slotUuid) {
             providerPoolManager.releaseSlot(slotProviderType, slotUuid);

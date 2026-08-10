@@ -332,6 +332,28 @@ function parseDurationMs(value) {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.round(value));
 
     const text = String(value).trim();
+    const compoundMatch = text.match(/^(?:(\d+(?:\.\d+)?)d)?(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/i);
+    if (compoundMatch && compoundMatch.slice(1).some(part => part !== undefined)) {
+        const [, days = 0, hours = 0, minutes = 0, seconds = 0] = compoundMatch;
+        return Math.max(0, Math.round((
+            Number(days) * 24 * 60 * 60 +
+            Number(hours) * 60 * 60 +
+            Number(minutes) * 60 +
+            Number(seconds)
+        ) * 1000));
+    }
+
+    const isoMatch = text.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i);
+    if (isoMatch && isoMatch.slice(1).some(part => part !== undefined)) {
+        const [, days = 0, hours = 0, minutes = 0, seconds = 0] = isoMatch;
+        return Math.max(0, Math.round((
+            Number(days) * 24 * 60 * 60 +
+            Number(hours) * 60 * 60 +
+            Number(minutes) * 60 +
+            Number(seconds)
+        ) * 1000));
+    }
+
     const match = text.match(/^([\d.]+)\s*(ms|s)?$/i);
     if (!match) return null;
 
@@ -341,27 +363,90 @@ function parseDurationMs(value) {
     return Math.max(0, Math.round(match[2]?.toLowerCase() === 's' ? amount * 1000 : amount));
 }
 
+function parseErrorBody(errorBody) {
+    if (typeof errorBody !== 'string') return errorBody;
+    try {
+        return JSON.parse(errorBody);
+    } catch {
+        return errorBody;
+    }
+}
+
+function walkErrorPayload(value, visitor, seen = new Set()) {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    visitor(value);
+    if (Array.isArray(value)) {
+        value.forEach(item => walkErrorPayload(item, visitor, seen));
+        return;
+    }
+    Object.values(value).forEach(item => walkErrorPayload(item, visitor, seen));
+}
+
+function getAntigravityQuotaSignal(error, requestedModel, config = {}, now = Date.now()) {
+    const payload = parseErrorBody(error?.response?.data);
+    let metadata = null;
+    walkErrorPayload(payload, value => {
+        if (!metadata && value.metadata && typeof value.metadata === 'object') {
+            const candidate = value.metadata;
+            if (candidate.model || candidate.quotaResetTimeStamp || candidate.quotaResetDelay) {
+                metadata = candidate;
+            }
+        }
+    });
+
+    const rawModel = metadata?.model || requestedModel || '';
+    let model = String(rawModel).trim();
+    if (model.startsWith(`${MODEL_PROVIDER.ANTIGRAVITY}:`)) {
+        model = model.slice(`${MODEL_PROVIDER.ANTIGRAVITY}:`.length);
+    }
+    if (model.startsWith('models/')) model = model.slice('models/'.length);
+    if (model.startsWith('gemini-claude-')) model = model.replace(/^gemini-/, '');
+
+    const maxCooldownMs = getPositiveInteger(
+        config.ANTIGRAVITY_MODEL_COOLDOWN_MAX_MS,
+        7 * 24 * 60 * 60 * 1000
+    );
+    const defaultCooldownMs = getPositiveInteger(config.RATE_LIMIT_COOLDOWN_MS, 30000);
+    const absoluteResetMs = Date.parse(metadata?.quotaResetTimeStamp || '');
+    const quotaResetDelayMs = getRetryDelayFromBody(error?.response?.data);
+    const retryAfterMs = parseRetryAfterMs(getHeaderValue(error?.response?.headers, 'retry-after'), now)
+        ?? parseDurationMs(error?.retryAfterMs)
+        ?? parseDurationMs(error?.retryAfter);
+    let cooldownMs = Number.isFinite(absoluteResetMs) && absoluteResetMs > now
+        ? absoluteResetMs - now
+        : (quotaResetDelayMs ?? retryAfterMs);
+    if (cooldownMs === null) cooldownMs = defaultCooldownMs;
+    cooldownMs = Math.min(Math.max(0, cooldownMs), Math.max(defaultCooldownMs, maxCooldownMs));
+
+    return {
+        model,
+        recoveryTime: new Date(now + cooldownMs)
+    };
+}
+
 function getRetryDelayFromBody(errorBody) {
     try {
-        const data = typeof errorBody === 'string' ? JSON.parse(errorBody) : errorBody;
+        const data = parseErrorBody(errorBody);
 
         const directDelay = parseDurationMs(data?.retryDelay ?? data?.retry_delay ?? data?.retryAfterMs);
         if (directDelay !== null) return directDelay;
 
-        const details = data?.error?.details;
-        if (Array.isArray(details)) {
-            for (const detail of details) {
-                const retryDelay = parseDurationMs(detail?.retryDelay || detail?.metadata?.quotaResetDelay);
-                if (retryDelay !== null) return retryDelay;
-            }
-        }
+        let nestedDelay = null;
+        walkErrorPayload(data, value => {
+            if (nestedDelay !== null) return;
+            nestedDelay = parseDurationMs(value?.retryDelay || value?.metadata?.quotaResetDelay);
+        });
+        if (nestedDelay !== null) return nestedDelay;
 
-        const message = data?.error?.message;
+        let message = data?.error?.message;
+        walkErrorPayload(data, value => {
+            if (!message && typeof value?.message === 'string') message = value.message;
+        });
         if (message) {
-            const match = message.match(/after\s+([\d.]+)\s*(ms|s)?\.?/i);
+            const match = message.match(/after\s+([\dhms.]+)\.?/i);
             if (match) {
-                const amount = parseFloat(match[1]);
-                return Math.max(0, Math.round(match[2]?.toLowerCase() === 'ms' ? amount : amount * 1000));
+                return parseDurationMs(match[1]);
             }
         }
     } catch {}
@@ -472,6 +557,26 @@ export function applyProviderRateLimitCooldown({
     requestedModel,
     loggerPrefix = '[Provider Pool]'
 }) {
+    if (
+        providerType === MODEL_PROVIDER.ANTIGRAVITY &&
+        Number(getErrorStatusCode(error)) === 429 &&
+        providerPoolManager &&
+        providerUuid &&
+        typeof providerPoolManager.markAntigravityModelQuotaUnhealthy === 'function'
+    ) {
+        const signal = getAntigravityQuotaSignal(error, requestedModel, config);
+        if (signal.model) {
+            error.quotaScope = 'model';
+            error.quotaKey = signal.model;
+            error.nextRecoveryTime = signal.recoveryTime.toISOString();
+            logger.info(`${loggerPrefix} Applying Antigravity model cooldown for ${providerType}/${signal.model} (${providerUuid}) until ${signal.recoveryTime.toISOString()}`);
+            providerPoolManager.markAntigravityModelQuotaUnhealthy(providerType, {
+                uuid: providerUuid
+            }, signal.model, '429 Too Many Requests - model cooldown', signal.recoveryTime);
+            return true;
+        }
+    }
+
     const rateLimitRecoveryTime = getRateLimitCooldownRecoveryTime(error, config);
     if (!rateLimitRecoveryTime || !providerPoolManager || !providerUuid) {
         return false;
@@ -2671,11 +2776,20 @@ export function formatToLocal(dateInput) {
  * @param {string} fromProvider - 客户端期望的提供商格式
  * @returns {Object} 格式化的错误响应对象
  */
-function createErrorResponse(error, fromProvider) {
+function getQuotaErrorMetadata(error) {
+    const metadata = {};
+    if (error?.quotaScope) metadata.quota_scope = error.quotaScope;
+    if (error?.quotaKey) metadata.quota_key = error.quotaKey;
+    if (error?.nextRecoveryTime) metadata.next_recovery_time = error.nextRecoveryTime;
+    return metadata;
+}
+
+export function createErrorResponse(error, fromProvider) {
     const protocolPrefix = getProtocolPrefix(fromProvider);
-    const rawStatusCode = error.status || error.code || 500;
+    const rawStatusCode = error.response?.status || error.status || error.statusCode || error.code || 500;
     const statusCode = ensureValidStatusCode(rawStatusCode);
     const errorMessage = getClientFacingErrorMessage(error, error.message || "An error occurred during processing.");
+    const quotaMetadata = getQuotaErrorMetadata(error);
     
     // 根据 HTTP 状态码映射错误类型
     const getErrorType = (code) => {
@@ -2704,7 +2818,8 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: getErrorType(statusCode)  // OpenAI 使用 code 字段作为核心判断
+                    code: getErrorType(statusCode),  // OpenAI 使用 code 字段作为核心判断
+                    ...quotaMetadata
                 }
             };
             
@@ -2714,7 +2829,8 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     type: getErrorType(statusCode),
                     message: errorMessage,
-                    code: getErrorType(statusCode)
+                    code: getErrorType(statusCode),
+                    ...quotaMetadata
                 }
             };
             
@@ -2724,7 +2840,8 @@ function createErrorResponse(error, fromProvider) {
                 type: "error",  // 核心区分标记
                 error: {
                     type: getErrorType(statusCode),  // Claude 使用 error.type 作为核心判断
-                    message: errorMessage
+                    message: errorMessage,
+                    ...quotaMetadata
                 }
             };
             
@@ -2734,7 +2851,8 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     code: statusCode,
                     message: errorMessage,
-                    status: getGeminiStatus(statusCode)  // Gemini 使用 status 作为核心判断
+                    status: getGeminiStatus(statusCode),  // Gemini 使用 status 作为核心判断
+                    ...quotaMetadata
                 }
             };
             
@@ -2744,7 +2862,8 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: getErrorType(statusCode)
+                    code: getErrorType(statusCode),
+                    ...quotaMetadata
                 }
             };
     }
@@ -2761,6 +2880,7 @@ export function createStreamErrorResponse(error, fromProvider) {
     const rawStatusCode = error.response?.status || error.status || error.statusCode || error.code || 500;
     const statusCode = ensureValidStatusCode(rawStatusCode);
     const errorMessage = getClientFacingErrorMessage(error, error.message || "An error occurred during streaming.");
+    const quotaMetadata = getQuotaErrorMetadata(error);
     
     // 根据 HTTP 状态码映射错误类型
     const getErrorType = (code) => {
@@ -2789,7 +2909,8 @@ export function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: null
+                    code: null,
+                    ...quotaMetadata
                 }
             };
             return `data: ${JSON.stringify(openaiError)}\n\n`;
@@ -2837,7 +2958,8 @@ export function createStreamErrorResponse(error, fromProvider) {
                 sequence_number: 0,
                 code: getErrorType(statusCode),
                 message: errorMessage,
-                param: null
+                param: null,
+                ...quotaMetadata
             };
             return `event: error\ndata: ${JSON.stringify(responsesError)}\n\n`;
             
@@ -2847,7 +2969,8 @@ export function createStreamErrorResponse(error, fromProvider) {
                 type: "error",
                 error: {
                     type: getErrorType(statusCode),
-                    message: errorMessage
+                    message: errorMessage,
+                    ...quotaMetadata
                 }
             };
             return `event: error\ndata: ${JSON.stringify(claudeError)}\n\n`;
@@ -2860,7 +2983,8 @@ export function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     code: statusCode,
                     message: errorMessage,
-                    status: getGeminiStatus(statusCode)
+                    status: getGeminiStatus(statusCode),
+                    ...quotaMetadata
                 }
             };
             return `data: ${JSON.stringify(geminiError)}\n\n`;
@@ -2871,7 +2995,8 @@ export function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: null
+                    code: null,
+                    ...quotaMetadata
                 }
             };
             return `data: ${JSON.stringify(defaultError)}\n\n`;

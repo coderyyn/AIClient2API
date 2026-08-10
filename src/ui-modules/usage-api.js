@@ -209,6 +209,68 @@ function deriveCodexQuotaHealthFromUsage(currentHealth, usage, now = Date.now())
     return quotaHealth;
 }
 
+function getAntigravityQuotaThreshold(provider, fieldName) {
+    const rawValue = provider?.[fieldName];
+    if (rawValue === undefined || rawValue === null || rawValue === '') return 100;
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value < 0) return 100;
+    if (value === 0) return null;
+    return Math.min(value, 100);
+}
+
+function deriveAntigravityQuotaHealthFromUsage(currentHealth, usage, provider = {}, now = Date.now()) {
+    const quotaHealth = currentHealth && typeof currentHealth === 'object'
+        ? {
+            families: { ...(currentHealth.families || {}) },
+            models: { ...(currentHealth.models || {}) }
+        }
+        : { families: {}, models: {} };
+
+    const familyConfigs = {
+        gemini: {
+            short: ['quota-group:gemini-5h', 'antigravityGeminiMax5hPercent'],
+            weekly: ['quota-group:gemini-weekly', 'antigravityGeminiMaxWeeklyPercent']
+        },
+        thirdParty: {
+            short: ['quota-group:3p-5h', 'antigravityThirdPartyMax5hPercent'],
+            weekly: ['quota-group:3p-weekly', 'antigravityThirdPartyMaxWeeklyPercent']
+        }
+    };
+
+    for (const [family, windows] of Object.entries(familyConfigs)) {
+        const exceeded = [];
+        let observedWindow = false;
+        for (const [windowKind, [itemId, fieldName]] of Object.entries(windows)) {
+            const threshold = getAntigravityQuotaThreshold(provider, fieldName);
+            if (threshold === null) continue;
+            const item = (Array.isArray(usage?.items) ? usage.items : []).find(entry => entry?.id === itemId);
+            const usedPercent = Number(item?.percent ?? item?.used);
+            if (!Number.isFinite(usedPercent)) continue;
+            observedWindow = true;
+            if (usedPercent >= threshold) {
+                exceeded.push({ windowKind, usedPercent, threshold, resetAt: item?.resetAt || null });
+            }
+        }
+
+        if (exceeded.length > 0) {
+            const recoveryTimes = exceeded
+                .map(entry => Date.parse(entry.resetAt || ''))
+                .filter(value => Number.isFinite(value) && value > now);
+            quotaHealth.families[family] = {
+                isHealthy: false,
+                lastErrorTime: quotaHealth.families[family]?.lastErrorTime || new Date(now).toISOString(),
+                lastErrorMessage: exceeded.map(entry => `${entry.windowKind} ${entry.usedPercent.toFixed(1)}%/${entry.threshold}%`).join(', '),
+                scheduledRecoveryTime: recoveryTimes.length > 0 ? new Date(Math.max(...recoveryTimes)).toISOString() : null,
+                source: 'usage_cache'
+            };
+        } else if (observedWindow && quotaHealth.families[family]?.source === 'usage_cache') {
+            delete quotaHealth.families[family];
+        }
+    }
+
+    return quotaHealth;
+}
+
 function getCachedInstancesByUuid(providerCache = {}) {
     const instances = Array.isArray(providerCache.instances) ? providerCache.instances : [];
     return new Map(instances.filter(inst => inst?.uuid).map(inst => [inst.uuid, inst]));
@@ -276,6 +338,7 @@ function mergeProviderUsageWithLastSuccessfulCache(providerType, freshProviderDa
             codexAccountId: instance.codexAccountId || cachedInstance.codexAccountId || null,
             codexEmail: instance.codexEmail || cachedInstance.codexEmail || null,
             codexQuotaHealth: instance.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+            antigravityQuotaHealth: instance.antigravityQuotaHealth || cachedInstance.antigravityQuotaHealth || null,
             configFilePath: instance.configFilePath || cachedInstance.configFilePath || null,
             isHealthy: instance.isHealthy,
             isDisabled: instance.isDisabled,
@@ -335,6 +398,7 @@ function getCachedInstanceUsageFallback(providerType, uuid, instanceResult, cach
         codexAccountId: instanceResult.codexAccountId || cachedInstance.codexAccountId || null,
         codexEmail: instanceResult.codexEmail || cachedInstance.codexEmail || null,
         codexQuotaHealth: instanceResult.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+        antigravityQuotaHealth: instanceResult.antigravityQuotaHealth || cachedInstance.antigravityQuotaHealth || null,
         configFilePath: instanceResult.configFilePath || cachedInstance.configFilePath || null,
         isHealthy: instanceResult.isHealthy,
         isDisabled: instanceResult.isDisabled,
@@ -380,6 +444,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             codexAccountId: provider.codexAccountId || null,
             codexEmail: getProviderCodexEmail(provider),
             codexQuotaHealth: provider.codexQuotaHealth || null,
+            antigravityQuotaHealth: provider.antigravityQuotaHealth || null,
             configFilePath: getProviderConfigFilePath(provider, providerType),
             isHealthy: provider.isHealthy !== false,
             isDisabled: provider.isDisabled === true,
@@ -425,6 +490,8 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
                 providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
+                instanceResult.antigravityQuotaHealth = deriveAntigravityQuotaHealthFromUsage(instanceResult.antigravityQuotaHealth, usage, provider);
+                providerPoolManager?.syncAntigravityQuotaHealth?.(providerType, provider, instanceResult.antigravityQuotaHealth);
                 providerPoolManager?.syncAntigravityPlan?.(providerType, provider, usage?.summary?.plan);
                 result.successCount++;
             } catch (error) {
@@ -509,6 +576,7 @@ function enrichProviderDataWithProviderConfig(providerType, providerData, curren
             codexAccountId: instance.codexAccountId || provider.codexAccountId || null,
             codexEmail: instance.codexEmail || getProviderCodexEmail(provider),
             codexQuotaHealth: instance.codexQuotaHealth || provider.codexQuotaHealth || null,
+            antigravityQuotaHealth: instance.antigravityQuotaHealth || provider.antigravityQuotaHealth || null,
             configFilePath: instance.configFilePath || getProviderConfigFilePath(provider, providerType),
             isHealthy: provider.isHealthy !== false,
             isDisabled: provider.isDisabled === true
@@ -544,11 +612,13 @@ function reformatUsageResults(results) {
                     try {
                         instance.usage = usageService.formatUsage(providerType, instance.usage.raw);
                         instance.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instance.codexQuotaHealth, instance.usage);
+                        instance.antigravityQuotaHealth = deriveAntigravityQuotaHealthFromUsage(instance.antigravityQuotaHealth, instance.usage, instance);
                     } catch (err) {
                         logger.error(`[Usage API] Failed to re-format cached data for ${providerType}:`, err.message);
                     }
                 } else if (instance.success && instance.usage) {
                     instance.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instance.codexQuotaHealth, instance.usage);
+                    instance.antigravityQuotaHealth = deriveAntigravityQuotaHealthFromUsage(instance.antigravityQuotaHealth, instance.usage, instance);
                 }
             }
         }
@@ -573,6 +643,7 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         codexAccountId: provider.codexAccountId || null,
         codexEmail: getProviderCodexEmail(provider),
         codexQuotaHealth: provider.codexQuotaHealth || null,
+        antigravityQuotaHealth: provider.antigravityQuotaHealth || null,
         configFilePath: getProviderConfigFilePath(provider, providerType),
         isHealthy: provider.isHealthy !== false,
         isDisabled: provider.isDisabled === true,
@@ -745,6 +816,8 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
                 providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
+                instanceResult.antigravityQuotaHealth = deriveAntigravityQuotaHealthFromUsage(instanceResult.antigravityQuotaHealth, usage, provider);
+                providerPoolManager?.syncAntigravityQuotaHealth?.(providerType, provider, instanceResult.antigravityQuotaHealth);
                 providerPoolManager?.syncAntigravityPlan?.(providerType, provider, usage?.summary?.plan);
             } catch (error) {
                 instanceResult.error = error.message;

@@ -38,6 +38,7 @@ function mergeInstanceWithLastSuccessfulUsage(incomingInstance, cachedByUuid, ca
         codexAccountId: incomingInstance.codexAccountId || cachedInstance.codexAccountId || null,
         codexEmail: incomingInstance.codexEmail || cachedInstance.codexEmail || null,
         codexQuotaHealth: incomingInstance.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
+        antigravityQuotaHealth: incomingInstance.antigravityQuotaHealth || cachedInstance.antigravityQuotaHealth || null,
         configFilePath: incomingInstance.configFilePath || cachedInstance.configFilePath || null,
         isHealthy: incomingInstance.isHealthy,
         isDisabled: incomingInstance.isDisabled,

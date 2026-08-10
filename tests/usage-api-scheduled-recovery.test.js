@@ -52,6 +52,62 @@ describe('usage api scheduled recovery handling', () => {
         );
     });
 
+    test('derives and syncs Antigravity family quota health without removing model cooldowns', async () => {
+        const provider = {
+            uuid: 'pro-antigravity-quota',
+            customName: 'Pro Antigravity quota',
+            lastKnownAntigravityPlan: 'Pro',
+            isHealthy: true,
+            antigravityGeminiMax5hPercent: 80,
+            antigravityGeminiMaxWeeklyPercent: 90,
+            antigravityThirdPartyMax5hPercent: 80,
+            antigravityThirdPartyMaxWeeklyPercent: 90,
+            antigravityQuotaHealth: {
+                families: {},
+                models: {
+                    'gemini-3.1-flash-image': {
+                        isHealthy: false,
+                        scheduledRecoveryTime: '2099-01-02T00:00:00.000Z',
+                        source: 'upstream_429'
+                    }
+                }
+            }
+        };
+        const syncAntigravityQuotaHealth = jest.fn();
+        getServiceAdapter.mockReturnValue({});
+        usageService.getFormattedUsage.mockResolvedValue({
+            summary: { plan: 'Google AI Pro' },
+            items: [
+                { id: 'quota-group:gemini-5h', percent: 80, resetAt: '2099-01-01T00:00:00.000Z' },
+                { id: 'quota-group:gemini-weekly', percent: 20, resetAt: '2099-01-03T00:00:00.000Z' },
+                { id: 'quota-group:3p-5h', percent: 10, resetAt: '2099-01-01T00:00:00.000Z' },
+                { id: 'quota-group:3p-weekly', percent: 10, resetAt: '2099-01-03T00:00:00.000Z' }
+            ]
+        });
+
+        const usage = await getAllProvidersUsage({}, {
+            providerPools: { 'gemini-antigravity': [provider] },
+            syncAntigravityQuotaHealth
+        });
+
+        const quotaHealth = usage.providers['gemini-antigravity'].instances[0].antigravityQuotaHealth;
+        expect(quotaHealth.families.gemini).toMatchObject({
+            isHealthy: false,
+            scheduledRecoveryTime: '2099-01-01T00:00:00.000Z',
+            source: 'usage_cache'
+        });
+        expect(quotaHealth.families.thirdParty?.isHealthy).not.toBe(false);
+        expect(quotaHealth.models['gemini-3.1-flash-image']).toMatchObject({
+            isHealthy: false,
+            source: 'upstream_429'
+        });
+        expect(syncAntigravityQuotaHealth).toHaveBeenCalledWith(
+            'gemini-antigravity',
+            provider,
+            quotaHealth
+        );
+    });
+
     test('skips disabled providers without surfacing refresh errors', async () => {
         const usage = await getAllProvidersUsage({}, {
             providerPools: {

@@ -20,7 +20,11 @@ const CODEX_QUOTA_PERCENT_FIELDS = new Set([
     'codexGeneralMax5hPercent',
     'codexGeneralMaxWeeklyPercent',
     'codex53Max5hPercent',
-    'codex53MaxWeeklyPercent'
+    'codex53MaxWeeklyPercent',
+    'antigravityGeminiMax5hPercent',
+    'antigravityGeminiMaxWeeklyPercent',
+    'antigravityThirdPartyMax5hPercent',
+    'antigravityThirdPartyMaxWeeklyPercent'
 ]);
 
 function usesManagedModelList(providerType = '') {
@@ -1613,6 +1617,7 @@ function getFieldOrder(provider) {
         'codexMax5hPercent',
         'codexMaxWeeklyPercent',
         'codexQuotaHealth',
+        'antigravityQuotaHealth',
         'codexAccountKey',
         'codexAccountId',
         'codexEmail',

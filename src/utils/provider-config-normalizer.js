@@ -28,7 +28,11 @@ const PROVIDER_NON_NEGATIVE_NUMBER_CONFIG_FIELDS = [
     'codexGeneralMax5hPercent',
     'codexGeneralMaxWeeklyPercent',
     'codex53Max5hPercent',
-    'codex53MaxWeeklyPercent'
+    'codex53MaxWeeklyPercent',
+    'antigravityGeminiMax5hPercent',
+    'antigravityGeminiMaxWeeklyPercent',
+    'antigravityThirdPartyMax5hPercent',
+    'antigravityThirdPartyMaxWeeklyPercent'
 ];
 
 function normalizeStringArrayConfigValue(value) {

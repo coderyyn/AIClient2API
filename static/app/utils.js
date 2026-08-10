@@ -433,6 +433,30 @@ function getProviderTypeFields(providerType) {
                 label: `${t('modal.provider.field.autopushBaseUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'text',
                 placeholder: 'https://autopush-cloudcode-pa.sandbox.googleapis.com'
+            },
+            {
+                id: 'antigravityGeminiMax5hPercent',
+                label: `${t('modal.provider.antigravityGeminiMax5hPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Gemini 5h 已用百分比阈值，默认 100；0 = 不限制'
+            },
+            {
+                id: 'antigravityGeminiMaxWeeklyPercent',
+                label: `${t('modal.provider.antigravityGeminiMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Gemini 周已用百分比阈值，默认 100；0 = 不限制'
+            },
+            {
+                id: 'antigravityThirdPartyMax5hPercent',
+                label: `${t('modal.provider.antigravityThirdPartyMax5hPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Claude+GPT 5h 已用百分比阈值，默认 100；0 = 不限制'
+            },
+            {
+                id: 'antigravityThirdPartyMaxWeeklyPercent',
+                label: `${t('modal.provider.antigravityThirdPartyMaxWeeklyPercent')} <span class="optional-tag">${t('config.optional')}</span>`,
+                type: 'number',
+                placeholder: 'Claude+GPT 周已用百分比阈值，默认 100；0 = 不限制'
             }
         ],
         'openai-iflow': [

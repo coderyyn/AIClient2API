@@ -145,7 +145,9 @@ function makeSafetyRejectionResponse() {
 function makeProviderPoolManager() {
     return {
         releaseSlot: jest.fn(),
-        markProviderUnhealthy: jest.fn()
+        markProviderUnhealthy: jest.fn(),
+        markAntigravityModelQuotaUnhealthy: jest.fn(),
+        markProviderUnhealthyWithRecoveryTime: jest.fn()
     };
 }
 
@@ -375,6 +377,123 @@ describe('/v1/images/edits multipart handling', () => {
         } finally {
             randomSpy.mockRestore();
         }
+    });
+
+    test('returns Antigravity model cooldown selection failures as HTTP 429 with quota metadata', async () => {
+        const error = new Error('All Antigravity providers are cooling down for model gemini-3.1-flash-image');
+        error.status = 429;
+        error.quotaScope = 'model';
+        error.quotaKey = 'gemini-3.1-flash-image';
+        error.nextRecoveryTime = '2026-08-10T10:30:00.000Z';
+        getApiServiceWithFallback.mockRejectedValueOnce(error);
+        const req = makeJsonRequest({
+            model: 'gemini-3.1-flash-image',
+            prompt: 'draw a blue circle'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests(
+            'POST',
+            '/v1/images/generations',
+            req,
+            res,
+            { MODEL_PROVIDER: 'gemini-antigravity' },
+            null,
+            null,
+            null
+        );
+
+        expect(res.statusCode).toBe(429);
+        expect(JSON.parse(res.body).error).toMatchObject({
+            type: 'rate_limit_error',
+            quota_scope: 'model',
+            quota_key: 'gemini-3.1-flash-image',
+            next_recovery_time: '2026-08-10T10:30:00.000Z'
+        });
+    });
+
+    test('cools only the Antigravity image model and reroutes an edit to another account', async () => {
+        const quotaError = new Error('Antigravity quota exhausted');
+        quotaError.imageProviderRetryable = true;
+        quotaError.response = {
+            status: 429,
+            data: [{ error: { details: [{ metadata: { model: 'gemini-3.1-flash-image', quotaResetDelay: '30s' } }] } }]
+        };
+        const firstGenerate = jest.fn().mockRejectedValueOnce(quotaError);
+        const secondGenerate = jest.fn().mockResolvedValueOnce({
+            candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'recovered-image' } }] } }]
+        });
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({ service: { generateContent: firstGenerate }, actualProviderType: 'gemini-antigravity', uuid: 'ag-a' })
+            .mockResolvedValueOnce({ service: { generateContent: secondGenerate }, actualProviderType: 'gemini-antigravity', uuid: 'ag-b' });
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeMultipartRequest([
+            { name: 'model', value: 'gemini-3.1-flash-image' },
+            { name: 'prompt', value: 'edit this image' },
+            { name: 'image', file: true, filename: 'first.png', contentType: 'image/png', value: 'first-image' }
+        ]);
+        const res = makeResponse();
+        const config = {
+            MODEL_PROVIDER: 'gemini-antigravity',
+            REQUEST_MAX_RETRIES: 1,
+            RATE_LIMIT_COOLDOWN_ENABLED: true,
+            RATE_LIMIT_COOLDOWN_MS: 30000,
+            providerPools: { 'gemini-antigravity': [{ uuid: 'ag-a' }, { uuid: 'ag-b' }] }
+        };
+
+        await handleAPIRequests('POST', '/v1/images/edits', req, res, config, null, providerPoolManager, null);
+
+        expect(res.statusCode).toBe(200);
+        expect(providerPoolManager.markAntigravityModelQuotaUnhealthy).toHaveBeenCalledWith(
+            'gemini-antigravity',
+            { uuid: 'ag-a' },
+            'gemini-3.1-flash-image',
+            '429 Too Many Requests - model cooldown',
+            expect.any(Date)
+        );
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(getApiServiceWithFallback).toHaveBeenNthCalledWith(2, expect.anything(), 'gemini-3.1-flash-image', expect.objectContaining({
+            excludeProviderUuids: ['ag-a']
+        }));
+        expect(secondGenerate).toHaveBeenCalledTimes(1);
+    });
+
+    test('preserves the original Antigravity model 429 when retry selection has no alternative account', async () => {
+        const quotaError = new Error('Antigravity quota exhausted');
+        quotaError.imageProviderRetryable = true;
+        quotaError.response = {
+            status: 429,
+            data: [{ error: { details: [{ metadata: {
+                model: 'gemini-3.1-flash-image',
+                quotaResetTimeStamp: '2026-08-11T06:28:29Z'
+            } }] } }]
+        };
+        const firstGenerate = jest.fn().mockRejectedValueOnce(quotaError);
+        getApiServiceWithFallback
+            .mockResolvedValueOnce({ service: { generateContent: firstGenerate }, actualProviderType: 'gemini-antigravity', uuid: 'ag-only' })
+            .mockRejectedValueOnce(new Error('No healthy provider found in pool'));
+        const providerPoolManager = makeProviderPoolManager();
+        const req = makeJsonRequest({
+            model: 'gemini-3.1-flash-image',
+            prompt: 'draw a blue circle'
+        });
+        const res = makeResponse();
+
+        await handleAPIRequests('POST', '/v1/images/generations', req, res, {
+            MODEL_PROVIDER: 'gemini-antigravity',
+            REQUEST_MAX_RETRIES: 1,
+            RATE_LIMIT_COOLDOWN_MS: 30000,
+            providerPools: { 'gemini-antigravity': [{ uuid: 'ag-only' }] }
+        }, null, providerPoolManager, null);
+
+        expect(res.statusCode).toBe(429);
+        expect(JSON.parse(res.body).error).toMatchObject({
+            type: 'rate_limit_error',
+            quota_scope: 'model',
+            quota_key: 'gemini-3.1-flash-image',
+            next_recovery_time: '2026-08-11T06:28:29.000Z'
+        });
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
     });
 
     test.each([

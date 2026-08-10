@@ -89,6 +89,108 @@ function getAntigravityPlanStatusForProvider(providerType, uuid, usageCache, pro
     return { ...lastKnown, source: lastKnown.plan === 'unknown' ? 'unknown' : 'last_known' };
 }
 
+const ANTIGRAVITY_QUOTA_FAMILY = {
+    GEMINI: 'gemini',
+    THIRD_PARTY: 'thirdParty'
+};
+
+function normalizeAntigravityQuotaModel(modelName) {
+    let model = String(modelName || '').trim();
+    if (model.startsWith(`${MODEL_PROVIDER.ANTIGRAVITY}:`)) {
+        model = model.slice(`${MODEL_PROVIDER.ANTIGRAVITY}:`.length);
+    }
+    if (model.startsWith('models/')) model = model.slice('models/'.length);
+    if (model.startsWith('gemini-claude-')) model = model.replace(/^gemini-/, '');
+    return model;
+}
+
+function resolveAntigravityQuotaFamily(modelName) {
+    const model = normalizeAntigravityQuotaModel(modelName).toLowerCase();
+    return model.startsWith('claude-') || model.startsWith('gpt-')
+        ? ANTIGRAVITY_QUOTA_FAMILY.THIRD_PARTY
+        : ANTIGRAVITY_QUOTA_FAMILY.GEMINI;
+}
+
+function getCachedAntigravityUsage(providerType, uuid, usageCache) {
+    const instances = usageCache?.providers?.[providerType]?.instances;
+    const instance = Array.isArray(instances)
+        ? instances.find(entry => (entry?.uuid || entry?.config?.uuid || entry?.providerUuid) === uuid)
+        : null;
+    return instance?.usage || null;
+}
+
+function getAntigravityQuotaLimits(config = {}, family) {
+    const getLimit = value => {
+        if (value === 0 || value === '0') return null;
+        return getPercentLimit(value, 100);
+    };
+    if (family === ANTIGRAVITY_QUOTA_FAMILY.THIRD_PARTY) {
+        return {
+            short: getLimit(config.antigravityThirdPartyMax5hPercent),
+            weekly: getLimit(config.antigravityThirdPartyMaxWeeklyPercent)
+        };
+    }
+    return {
+        short: getLimit(config.antigravityGeminiMax5hPercent),
+        weekly: getLimit(config.antigravityGeminiMaxWeeklyPercent)
+    };
+}
+
+function getAntigravityQuotaItem(usage, family, windowKind) {
+    const bucketId = family === ANTIGRAVITY_QUOTA_FAMILY.THIRD_PARTY
+        ? (windowKind === 'short' ? '3p-5h' : '3p-weekly')
+        : (windowKind === 'short' ? 'gemini-5h' : 'gemini-weekly');
+    return (Array.isArray(usage?.items) ? usage.items : []).find(item =>
+        item?.id === `quota-group:${bucketId}` || item?.bucketId === bucketId
+    ) || null;
+}
+
+function getAntigravityFamilyQuotaStatus(providerType, provider, requestedModel, usageCache, now = Date.now()) {
+    const config = provider?.config || provider || {};
+    const family = resolveAntigravityQuotaFamily(requestedModel);
+    const uuid = config.uuid || provider?.uuid;
+    const usage = getCachedAntigravityUsage(providerType, uuid, usageCache);
+    const limits = getAntigravityQuotaLimits(config, family);
+    const exceeded = [];
+    const warnings = [];
+
+    for (const [windowKind, limit] of Object.entries(limits)) {
+        if (!limit) continue;
+        const item = getAntigravityQuotaItem(usage, family, windowKind);
+        const usedPercent = normalizePercentValue(item?.percent ?? item?.used);
+        if (usedPercent === null) {
+            warnings.push(`${family} ${windowKind} usage unavailable`);
+            continue;
+        }
+        if (usedPercent >= limit) {
+            const resetMs = Date.parse(item?.resetAt || '');
+            exceeded.push({
+                windowKind,
+                usedPercent,
+                limit,
+                recoveryTime: Number.isFinite(resetMs) && resetMs > now ? new Date(resetMs).toISOString() : null
+            });
+        }
+    }
+
+    const validRecoveries = exceeded
+        .map(entry => Date.parse(entry.recoveryTime || ''))
+        .filter(value => Number.isFinite(value) && value > now);
+    return {
+        family,
+        exceeded: exceeded.length > 0,
+        reason: exceeded.map(entry => `${entry.windowKind} ${entry.usedPercent.toFixed(1)}%/${entry.limit}%`).join(', ') || warnings.join('; '),
+        recoveryTime: validRecoveries.length > 0 ? new Date(Math.max(...validRecoveries)).toISOString() : null
+    };
+}
+
+function getActiveAntigravityQuotaState(state, now = Date.now()) {
+    if (state?.isHealthy !== false) return null;
+    const recoveryMs = Date.parse(state.scheduledRecoveryTime || '');
+    if (Number.isFinite(recoveryMs) && now >= recoveryMs) return null;
+    return state;
+}
+
 function getProviderWeight(config = {}) {
     const weight = Number(config.providerWeight ?? config.weight ?? 1);
     return Number.isFinite(weight) && weight > 0 ? weight : 1;
@@ -2181,6 +2283,12 @@ export class ProviderPoolManager {
         }
         if (isAntigravityProviderType(providerType)) {
             availableAndHealthyProviders = this._filterAntigravityProvidersByPlan(providerType, availableAndHealthyProviders, selectionDiagnostics);
+            availableAndHealthyProviders = this._filterAntigravityProvidersByQuota(
+                providerType,
+                availableAndHealthyProviders,
+                requestedModel,
+                selectionDiagnostics
+            );
         }
 
         if (options.acquireSlot === true) {
@@ -2411,6 +2519,94 @@ export class ProviderPoolManager {
         return allowed;
     }
 
+    _filterAntigravityProvidersByQuota(providerType, providers, requestedModel = null, selectionDiagnostics = null) {
+        if (!requestedModel) return providers;
+
+        const usageCache = readFreshUsageCacheSync();
+        const canonicalModel = normalizeAntigravityQuotaModel(requestedModel);
+        const family = resolveAntigravityQuotaFamily(canonicalModel);
+        const now = Date.now();
+        const allowed = [];
+        const filterReasons = {};
+        const recoveryTimes = [];
+        let updated = false;
+
+        const recordReason = reason => {
+            filterReasons[reason] = (filterReasons[reason] || 0) + 1;
+        };
+
+        for (const provider of providers) {
+            const config = provider.config || {};
+            const quotaHealth = config.antigravityQuotaHealth || { families: {}, models: {} };
+            quotaHealth.families = quotaHealth.families || {};
+            quotaHealth.models = quotaHealth.models || {};
+            config.antigravityQuotaHealth = quotaHealth;
+
+            const modelState = getActiveAntigravityQuotaState(quotaHealth.models[canonicalModel], now);
+            if (modelState) {
+                recordReason('model_cooldown');
+                const recoveryMs = Date.parse(modelState.scheduledRecoveryTime || '');
+                if (Number.isFinite(recoveryMs) && recoveryMs > now) recoveryTimes.push(recoveryMs);
+                continue;
+            }
+            if (quotaHealth.models[canonicalModel]) {
+                delete quotaHealth.models[canonicalModel];
+                updated = true;
+            }
+
+            const familyStatus = getAntigravityFamilyQuotaStatus(providerType, provider, canonicalModel, usageCache, now);
+            if (familyStatus.exceeded) {
+                const nextState = {
+                    isHealthy: false,
+                    lastErrorTime: new Date(now).toISOString(),
+                    lastErrorMessage: `${family} quota reached: ${familyStatus.reason}`,
+                    scheduledRecoveryTime: familyStatus.recoveryTime,
+                    source: 'usage_cache'
+                };
+                quotaHealth.families[family] = nextState;
+                updated = true;
+                recordReason(`${family}_quota_exceeded`);
+                const recoveryMs = Date.parse(nextState.scheduledRecoveryTime || '');
+                if (Number.isFinite(recoveryMs) && recoveryMs > now) recoveryTimes.push(recoveryMs);
+                continue;
+            }
+
+            if (quotaHealth.families[family]) {
+                delete quotaHealth.families[family];
+                updated = true;
+            }
+            allowed.push(provider);
+        }
+
+        if (updated) this._debouncedSave(providerType);
+        if (selectionDiagnostics && Object.keys(filterReasons).length > 0) {
+            selectionDiagnostics.filterReasons = {
+                ...(selectionDiagnostics.filterReasons || {}),
+                ...filterReasons
+            };
+        }
+
+        if (allowed.length === 0 && providers.length > 0 && Object.keys(filterReasons).length > 0) {
+            const onlyModelCooldown = Object.keys(filterReasons).every(reason => reason === 'model_cooldown');
+            const error = new Error(
+                onlyModelCooldown
+                    ? `All Antigravity providers are cooling down for model ${canonicalModel}`
+                    : `All Antigravity providers exceeded ${family} quota limits`
+            );
+            error.status = 429;
+            error.code = 429;
+            error.quotaScope = onlyModelCooldown ? 'model' : 'family';
+            error.quotaKey = onlyModelCooldown ? canonicalModel : family;
+            error.filterReasons = filterReasons;
+            if (recoveryTimes.length > 0) {
+                error.nextRecoveryTime = new Date(Math.min(...recoveryTimes)).toISOString();
+            }
+            throw error;
+        }
+
+        return allowed;
+    }
+
     /**
      * 获取一个可用的提供商插槽，支持 Fallback 机制
      */
@@ -2435,6 +2631,7 @@ export class ProviderPoolManager {
             typesToTry.push(...fallbackTypes);
         }
         let codex53QuotaFallbackReason = null;
+        let lastQuotaError = null;
 
         for (const currentType of typesToTry) {
             if (triedTypes.has(currentType)) continue;
@@ -2473,6 +2670,7 @@ export class ProviderPoolManager {
                 }
                 if (err.status === 429) {
                     // 如果是因为 429 (并发/队列满)，尝试下一个 Fallback
+                    if (err.quotaScope) lastQuotaError = err;
                     this._log('info', `Type ${currentType} busy (429), trying next fallback...`);
                     continue;
                 }
@@ -2543,6 +2741,7 @@ export class ProviderPoolManager {
             }
         }
 
+        if (lastQuotaError) throw lastQuotaError;
         return null;
     }
 
@@ -3096,6 +3295,28 @@ export class ProviderPoolManager {
         }
     }
 
+    markAntigravityModelQuotaUnhealthy(providerType, providerConfig, modelName, errorMessage = null, recoveryTime = null) {
+        if (!providerConfig?.uuid || !isAntigravityProviderType(providerType)) return;
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        if (!provider) return;
+
+        const canonicalModel = normalizeAntigravityQuotaModel(modelName);
+        if (!canonicalModel) return;
+        provider.config.antigravityQuotaHealth = provider.config.antigravityQuotaHealth || {};
+        provider.config.antigravityQuotaHealth.families = provider.config.antigravityQuotaHealth.families || {};
+        provider.config.antigravityQuotaHealth.models = provider.config.antigravityQuotaHealth.models || {};
+        provider.config.antigravityQuotaHealth.models[canonicalModel] = {
+            isHealthy: false,
+            lastErrorTime: new Date().toISOString(),
+            lastErrorMessage: errorMessage || null,
+            scheduledRecoveryTime: recoveryTime ? new Date(recoveryTime).toISOString() : null,
+            source: 'upstream_429'
+        };
+        provider.config.lastUsed = new Date().toISOString();
+        this._log('warn', `Marked Antigravity model ${canonicalModel} as cooling down for ${this._getDisplayName(provider.config)} until ${provider.config.antigravityQuotaHealth.models[canonicalModel].scheduledRecoveryTime || 'manual recovery'}`);
+        this._debouncedSave(providerType);
+    }
+
     markCodexQuotaBucketUnhealthy(providerType, providerConfig, bucket, errorMessage = null, recoveryTime = null) {
         if (!providerConfig?.uuid || !isCodexProviderType(providerType)) {
             return;
@@ -3158,6 +3379,26 @@ export class ProviderPoolManager {
         if (providerConfig !== provider.config) {
             providerConfig.codexQuotaHealth = nextQuotaHealth;
         }
+        this._debouncedSave(providerType);
+        return nextQuotaHealth;
+    }
+
+    syncAntigravityQuotaHealth(providerType, providerConfig, quotaHealth) {
+        if (!providerConfig?.uuid || !isAntigravityProviderType(providerType) || !quotaHealth || typeof quotaHealth !== 'object') {
+            return null;
+        }
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        if (!provider) return null;
+
+        const nextQuotaHealth = {
+            families: { ...(quotaHealth.families || {}) },
+            models: { ...(quotaHealth.models || {}) }
+        };
+        if (JSON.stringify(provider.config.antigravityQuotaHealth || null) === JSON.stringify(nextQuotaHealth)) {
+            return provider.config.antigravityQuotaHealth;
+        }
+        provider.config.antigravityQuotaHealth = nextQuotaHealth;
+        if (providerConfig !== provider.config) providerConfig.antigravityQuotaHealth = nextQuotaHealth;
         this._debouncedSave(providerType);
         return nextQuotaHealth;
     }
@@ -3453,6 +3694,31 @@ export class ProviderPoolManager {
                     if (recoveredBucket) {
                         this._debouncedSave(type);
                     }
+                }
+
+                if (isAntigravityProviderType(type) && config.antigravityQuotaHealth && typeof config.antigravityQuotaHealth === 'object') {
+                    let recoveredAntigravityQuota = false;
+                    const families = config.antigravityQuotaHealth.families || {};
+                    const models = config.antigravityQuotaHealth.models || {};
+                    for (const [family, state] of Object.entries(families)) {
+                        const recoveryTime = Date.parse(state?.scheduledRecoveryTime || '');
+                        if (state?.isHealthy === false && Number.isFinite(recoveryTime) && now.getTime() >= recoveryTime) {
+                            delete families[family];
+                            recoveredAntigravityQuota = true;
+                            this._log('info', `Auto-recovered Antigravity family quota ${family} for ${this._getDisplayName(config)}`);
+                        }
+                    }
+                    for (const [model, state] of Object.entries(models)) {
+                        const recoveryTime = Date.parse(state?.scheduledRecoveryTime || '');
+                        if (state?.isHealthy === false && Number.isFinite(recoveryTime) && now.getTime() >= recoveryTime) {
+                            delete models[model];
+                            recoveredAntigravityQuota = true;
+                            this._log('info', `Auto-recovered Antigravity model quota ${model} for ${this._getDisplayName(config)}`);
+                        }
+                    }
+                    config.antigravityQuotaHealth.families = families;
+                    config.antigravityQuotaHealth.models = models;
+                    if (recoveredAntigravityQuota) this._debouncedSave(type);
                 }
             }
         }
