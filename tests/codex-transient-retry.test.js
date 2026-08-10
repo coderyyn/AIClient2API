@@ -9,7 +9,8 @@ jest.mock('../src/utils/logger.js', () => ({
         info: jest.fn(),
         warn: jest.fn(),
         error: jest.fn(),
-        debug: jest.fn()
+        debug: jest.fn(),
+        getCurrentRequestId: jest.fn(() => null)
     }
 }));
 

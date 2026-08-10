@@ -132,6 +132,22 @@ describe('usage manager display source regressions', () => {
         expect(source).not.toContain("${instance.success ? '<i class=\"fas fa-check-circle status-success\"></i>' : '<i class=\"fas fa-times-circle status-error\"></i>'}");
     });
 
+    test('base status follows scheduler health instead of usage refresh outcome', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
+        const functionSource = source.match(/function getBaseStatusState\(instance\) \{[\s\S]*?\n\}/)?.[0];
+        expect(functionSource).toBeTruthy();
+        const getBaseStatusState = new Function('t', `${functionSource}; return getBaseStatusState;`)(key => key);
+
+        expect(getBaseStatusState({ isHealthy: false, success: true })).toMatchObject({
+            isHealthy: false,
+            label: 'usage.card.status.unhealthy'
+        });
+        expect(getBaseStatusState({ isHealthy: true, success: false, lastRefreshError: 'usage refresh failed' })).toMatchObject({
+            isHealthy: true,
+            label: 'usage.card.status.healthy'
+        });
+    });
+
     test('Codex expanded base status badge is independent from quota bucket state', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
 

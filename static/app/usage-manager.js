@@ -404,26 +404,13 @@ function getBaseStatusState(instance) {
             title: t('usage.card.status.disabled')
         };
     }
-    if (instance.lastRefreshError) {
-        return {
-            isHealthy: false,
-            label: t('usage.card.status.unhealthy'),
-            title: instance.lastRefreshError
-        };
-    }
-    if (instance.success) {
-        return {
-            isHealthy: true,
-            label: t('usage.card.status.healthy'),
-            title: t('usage.card.status.healthy')
-        };
-    }
 
     const isHealthy = instance.isHealthy !== false;
     return {
         isHealthy,
         label: t(isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy'),
-        title: instance.error || t(isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')
+        title: instance.lastErrorMessage
+            || t(isHealthy ? 'usage.card.status.healthy' : 'usage.card.status.unhealthy')
     };
 }
 

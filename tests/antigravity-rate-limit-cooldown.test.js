@@ -52,7 +52,77 @@ function createQuotaError({ model = 'gemini-3.1-flash-image', resetDelay = '26h1
     return error;
 }
 
+function createCapacityError() {
+    const error = new Error('Upstream API Error (Status 503): No capacity available for model gemini-3.1-flash-image on the server');
+    error.response = {
+        status: 503,
+        data: [{
+            error: {
+                code: 503,
+                status: 'UNAVAILABLE',
+                message: 'No capacity available for model gemini-3.1-flash-image on the server'
+            }
+        }]
+    };
+    return error;
+}
+
 describe('Antigravity model quota cooldown', () => {
+    test('switches accounts for transient image capacity without marking the account unhealthy', async () => {
+        jest.spyOn(Math, 'random').mockReturnValue(0);
+        const firstService = { generateContent: jest.fn().mockRejectedValue(createCapacityError()) };
+        const secondService = { generateContent: jest.fn().mockResolvedValue({ id: 'antigravity-capacity-retry-success' }) };
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: secondService,
+            uuid: 'provider-ultra-2',
+            actualModel: 'gemini-3.1-flash-image',
+            actualProviderType: 'gemini-antigravity',
+            serviceConfig: {}
+        });
+        const providerPoolManager = {
+            markAntigravityModelQuotaUnhealthy: jest.fn(),
+            markProviderUnhealthyWithRecoveryTime: jest.fn(),
+            markProviderUnhealthy: jest.fn(),
+            markProviderUnhealthyImmediately: jest.fn(),
+            markProviderHealthy: jest.fn(),
+            releaseSlot: jest.fn()
+        };
+        const res = new FakeResponse();
+
+        await handleUnaryRequest(
+            res,
+            firstService,
+            'gemini-3.1-flash-image',
+            { contents: [] },
+            'gemini',
+            'gemini-antigravity',
+            'none',
+            null,
+            providerPoolManager,
+            'provider-ultra-1',
+            'Ultra 1',
+            {
+                CONFIG: { CREDENTIAL_SWITCH_MAX_RETRIES: 1 },
+                maxRetries: 1
+            }
+        );
+
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(
+            expect.anything(),
+            'gemini-3.1-flash-image',
+            expect.objectContaining({
+                excludeProviderUuids: ['provider-ultra-1'],
+                acquireSlot: true
+            })
+        );
+        expect(secondService.generateContent).toHaveBeenCalledTimes(1);
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
+        expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
+        expect(providerPoolManager.markAntigravityModelQuotaUnhealthy).not.toHaveBeenCalled();
+        expect(res.body).toContain('antigravity-capacity-retry-success');
+    });
+
     test('parses compound hour-minute-second quota reset delays', () => {
         const error = createQuotaError();
 

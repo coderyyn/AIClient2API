@@ -85,6 +85,23 @@ function isCodexTransientCredentialError(error) {
     return error?.isCodexOverload === true || error?.isCodexModelCapacity === true;
 }
 
+function isAntigravityTransientCapacityError(error, providerType) {
+    if (providerType !== MODEL_PROVIDER.ANTIGRAVITY || getErrorStatusCode(error) !== 503) {
+        return false;
+    }
+
+    const errorText = [
+        error?.message,
+        extractReadableErrorText(error?.response?.data)
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    return errorText.includes('no capacity available for model')
+        && errorText.includes('on the server');
+}
+
 function getCodexRetryAuditFields(config, error) {
     return {
         requestId: config?._monitorRequestId || logger.getCurrentRequestId() || null,
@@ -1517,9 +1534,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         const status = getErrorStatusCode(error);
         
         // 检查是否应该跳过错误计数（用于 429/5xx 等需要直接切换凭证的情况）
-        const skipErrorCount = error.skipErrorCount === true;
+        const isAntigravityTransientCapacity = isAntigravityTransientCapacityError(error, toProvider);
+        const skipErrorCount = error.skipErrorCount === true || isAntigravityTransientCapacity;
         // 检查是否应该切换凭证（用于 429/5xx/402/403 等情况）
-        const shouldSwitchCredential = error.shouldSwitchCredential === true;
+        const shouldSwitchCredential = error.shouldSwitchCredential === true || isAntigravityTransientCapacity;
         
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
@@ -1567,6 +1585,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
             const isCodexTransient = isCodexTransientCredentialError(error);
+            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity;
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
@@ -1576,8 +1595,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 toProvider
             ].filter(Boolean);
             // Codex 上游容量/过载已由服务端进行受控轮转，避免额外等待；其他类型保留原有抖动。
-            const randomDelay = isCodexTransient ? 0 : Math.floor(Math.random() * 10000);
-            logger.info(`[Stream Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
+            const randomDelay = isProviderTransient ? 0 : Math.floor(Math.random() * 10000);
+            logger.info(`[Stream Retry] Credential switch requested. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
             
             try {
@@ -1805,9 +1824,10 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         const status = getErrorStatusCode(error);
         
         // 检查是否应该跳过错误计数（用于 429/5xx 等需要直接切换凭证的情况）
-        const skipErrorCount = error.skipErrorCount === true;
+        const isAntigravityTransientCapacity = isAntigravityTransientCapacityError(error, toProvider);
+        const skipErrorCount = error.skipErrorCount === true || isAntigravityTransientCapacity;
         // 检查是否应该切换凭证（用于 429/5xx/402/403 等情况）
-        const shouldSwitchCredential = error.shouldSwitchCredential === true;
+        const shouldSwitchCredential = error.shouldSwitchCredential === true || isAntigravityTransientCapacity;
         
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
@@ -1855,6 +1875,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
             const isCodexTransient = isCodexTransientCredentialError(error);
+            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity;
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
                 pooluuid
@@ -1864,8 +1885,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 toProvider
             ].filter(Boolean);
             // Codex 上游容量/过载已由服务端进行受控轮转，避免额外等待；其他类型保留原有抖动。
-            const randomDelay = isCodexTransient ? 0 : Math.floor(Math.random() * 10000);
-            logger.info(`[Unary Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
+            const randomDelay = isProviderTransient ? 0 : Math.floor(Math.random() * 10000);
+            logger.info(`[Unary Retry] Credential switch requested. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
             
             try {
