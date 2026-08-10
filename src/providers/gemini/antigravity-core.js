@@ -991,6 +991,8 @@ export class AntigravityApiService {
         this.oauthCredsFilePath = config.ANTIGRAVITY_OAUTH_CREDS_FILE_PATH;
         this.userAgent = DEFAULT_USER_AGENT; // 支持通用 USER_AGENT 配置
         this.projectId = config.PROJECT_ID;
+        this.tierId = null;
+        this.accountEmail = config.accountEmail || null;
         this.uuid = config.uuid; // 保存 uuid 用于缓存管理
 
         // 多环境降级顺序
@@ -1060,13 +1062,7 @@ export class AntigravityApiService {
         // 仅执行基础的凭证加载
         await this.loadCredentials();
 
-        if (!this.projectId) {
-            this.projectId = await this.discoverProjectAndModels();
-        } else {
-            logger.info(`[Antigravity] Using provided Project ID: ${this.projectId}`);
-            // 获取可用模型
-            await this.fetchAvailableModels();
-        }
+        this.projectId = await this.discoverProjectAndModels();
 
         this.isInitialized = true;
         logger.info(`[Antigravity] Initialization complete. Project ID: ${this.projectId}`);
@@ -1215,12 +1211,10 @@ export class AntigravityApiService {
     }
 
     async discoverProjectAndModels() {
-        if (this.projectId) {
-            logger.info(`[Antigravity] Using pre-configured Project ID: ${this.projectId}`);
-            return this.projectId;
-        }
-
-        logger.info('[Antigravity] Discovering Project ID...');
+        const configuredProjectId = this.projectId;
+        logger.info(configuredProjectId
+            ? `[Antigravity] Probing account entitlements for configured Project ID: ${configuredProjectId}`
+            : '[Antigravity] Discovering Project ID...');
         try {
             const initialProjectId = "";
             // Prepare client metadata
@@ -1230,7 +1224,9 @@ export class AntigravityApiService {
 
             // Call loadCodeAssist to discover the actual project ID
             const loadRequest = {
-                metadata: clientMetadata
+                ...(configuredProjectId ? { cloudaicompanionProject: configuredProjectId } : {}),
+                metadata: clientMetadata,
+                mode: 1
             };
 
             const loadResponse = await this.callApi('loadCodeAssist', loadRequest);
@@ -1251,26 +1247,35 @@ export class AntigravityApiService {
                 }
             }
 
+            const paidTier = loadResponse.paidTier;
+            const currentTier = loadResponse.currentTier;
+            const defaultTier = loadResponse.allowedTiers?.find(tier => tier.isDefault);
+            this.tierId = paidTier?.name
+                || paidTier?.id
+                || currentTier?.id
+                || currentTier?.name
+                || defaultTier?.id
+                || defaultTier?.name
+                || null;
+
             // Check if we already have a project ID from the response
             if (loadResponse.cloudaicompanionProject) {
                 logger.info(`[Antigravity] Discovered existing Project ID: ${loadResponse.cloudaicompanionProject}`);
                 this.projectId = loadResponse.cloudaicompanionProject;
-                
-                // 尝试从 allowedTiers 中获取当前 tierId，如果存在 paidTier 则优先使用 paidTier.id
-                const defaultTier = loadResponse.allowedTiers?.find(tier => tier.isDefault);
-                const baseTier = defaultTier?.id || 'free-tier';
-                this.tierId = loadResponse.paidTier?.name ? `${loadResponse.paidTier.name}(${baseTier.replace('-tier', '')})` : baseTier;
-                
+
                 // 获取可用模型
                 await this.fetchAvailableModels();
                 return loadResponse.cloudaicompanionProject;
             }
 
+            if (configuredProjectId) {
+                this.projectId = configuredProjectId;
+                await this.fetchAvailableModels();
+                return configuredProjectId;
+            }
+
             // If no existing project, we need to onboard
-            const defaultTier = loadResponse.allowedTiers?.find(tier => tier.isDefault);
             const baseTier = defaultTier?.id || 'free-tier';
-            const tierId = loadResponse.paidTier?.name ? `${loadResponse.paidTier.name}(${baseTier.replace('-tier', '')})` : baseTier;
-            this.tierId = tierId;
 
             const onboardRequest = {
                 tier_id: baseTier,
@@ -1305,6 +1310,12 @@ export class AntigravityApiService {
             return discoveredProjectId;
         } catch (error) {
             logger.error('[Antigravity] Failed to discover Project ID:', error.response?.data || error.message);
+            if (configuredProjectId) {
+                logger.warn(`[Antigravity] Entitlement probe failed; continuing with configured Project ID: ${configuredProjectId}`);
+                this.projectId = configuredProjectId;
+                await this.fetchAvailableModels();
+                return configuredProjectId;
+            }
             logger.info('[Antigravity] Falling back to generated Project ID as last resort...');
             const fallbackProjectId = generateProjectID();
             logger.info(`[Antigravity] Generated fallback Project ID: ${fallbackProjectId}`);

@@ -37,6 +37,35 @@ function createUsageService(request) {
 }
 
 describe('Antigravity authoritative quota summary', () => {
+    test('probes paid tier even when a project id is already configured', async () => {
+        const loadResponse = {
+            cloudaicompanionProject: 'project-123',
+            paidTier: { id: 'g1-ultra-tier', name: 'Google AI Ultra' },
+            currentTier: { id: 'free-tier', name: 'Antigravity' },
+            allowedTiers: [{ id: 'free-tier', name: 'Antigravity', isDefault: true }],
+            manageSubscriptionUri: 'https://example.test/?Email=ultra%40example.com'
+        };
+        const service = Object.create(AntigravityApiService.prototype);
+        Object.assign(service, {
+            projectId: 'project-123',
+            tierId: null,
+            accountEmail: null,
+            callApi: jest.fn().mockResolvedValue(loadResponse),
+            fetchAvailableModels: jest.fn().mockResolvedValue({ models: [] })
+        });
+
+        const projectId = await service.discoverProjectAndModels();
+
+        expect(service.callApi).toHaveBeenCalledWith('loadCodeAssist', expect.objectContaining({
+            cloudaicompanionProject: 'project-123'
+        }));
+        expect(projectId).toBe('project-123');
+        expect(service.projectId).toBe('project-123');
+        expect(service.tierId).toBe('Google AI Ultra');
+        expect(service.accountEmail).toBe('ultra@example.com');
+        expect(service.fetchAvailableModels).toHaveBeenCalledTimes(1);
+    });
+
     test('merges retrieveUserQuotaSummary groups into the usage response', async () => {
         const quotaGroups = [
             {

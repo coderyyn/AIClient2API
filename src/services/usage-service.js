@@ -242,7 +242,7 @@ function formatTimestamp(val) {
  * 解析 Tier ID 获取计划名称
  */
 function parseTierId(tierId) {
-    if (!tierId) return 'FREE';
+    if (!tierId) return 'UNKNOWN';
     if (typeof tierId !== 'string') return String(tierId);
     if (tierId.includes('-')) return tierId;
     const parts = tierId.trim().split(/\s+/);

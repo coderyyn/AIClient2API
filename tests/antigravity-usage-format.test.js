@@ -11,6 +11,15 @@ jest.mock('../src/providers/adapter.js', () => ({
 import { formatAntigravityUsage } from '../src/services/usage-service.js';
 
 describe('Antigravity usage formatting', () => {
+    test('shows UNKNOWN instead of FREE when tier discovery is unavailable', () => {
+        const formatted = formatAntigravityUsage({
+            account: 'user@example.com',
+            models: {}
+        });
+
+        expect(formatted.summary.plan).toBe('UNKNOWN');
+    });
+
     test('collapses models with the same quota fingerprint into one shared quota item', () => {
         const formatted = formatAntigravityUsage({
             tierId: 'Antigravity Starter Quota(free)',
