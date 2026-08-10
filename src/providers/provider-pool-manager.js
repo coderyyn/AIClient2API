@@ -3162,6 +3162,34 @@ export class ProviderPoolManager {
         return nextQuotaHealth;
     }
 
+    syncAntigravityPlan(providerType, providerConfig, plan) {
+        const normalizedPlan = String(plan || '').trim();
+        if (
+            !providerConfig?.uuid
+            || !isAntigravityProviderType(providerType)
+            || !normalizedPlan
+            || normalizedPlan.toLowerCase() === 'unknown'
+        ) {
+            return null;
+        }
+
+        const provider = this._findProvider(providerType, providerConfig.uuid);
+        if (!provider) return null;
+        if (provider.config.lastKnownAntigravityPlan === normalizedPlan) {
+            return normalizedPlan;
+        }
+
+        const updatedAt = new Date().toISOString();
+        provider.config.lastKnownAntigravityPlan = normalizedPlan;
+        provider.config.lastKnownAntigravityPlanUpdatedAt = updatedAt;
+        if (providerConfig !== provider.config) {
+            providerConfig.lastKnownAntigravityPlan = normalizedPlan;
+            providerConfig.lastKnownAntigravityPlanUpdatedAt = updatedAt;
+        }
+        this._debouncedSave(providerType);
+        return normalizedPlan;
+    }
+
     /**
      * Marks a provider as healthy.
      * @param {string} providerType - The type of the provider.

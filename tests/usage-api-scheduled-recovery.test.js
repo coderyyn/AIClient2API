@@ -1,4 +1,4 @@
-import { describe, expect, jest, test } from '@jest/globals';
+import { beforeEach, describe, expect, jest, test } from '@jest/globals';
 
 jest.mock('../src/providers/adapter.js', () => ({
     serviceInstances: {},
@@ -15,7 +15,43 @@ import { getServiceAdapter } from '../src/providers/adapter.js';
 import { usageService } from '../src/services/usage-service.js';
 import { getAllProvidersUsage } from '../src/ui-modules/usage-api.js';
 
+beforeEach(() => {
+    jest.clearAllMocks();
+});
+
 describe('usage api scheduled recovery handling', () => {
+    test('syncs the detected Antigravity plan back to the provider pool', async () => {
+        const provider = {
+            uuid: 'ultra-antigravity',
+            customName: 'Ultra Antigravity',
+            lastKnownAntigravityPlan: 'FREE',
+            isHealthy: true
+        };
+        const syncAntigravityPlan = jest.fn();
+        getServiceAdapter.mockReturnValue({});
+        usageService.getFormattedUsage.mockResolvedValue({
+            summary: { plan: 'Ultra' },
+            items: []
+        });
+
+        const usage = await getAllProvidersUsage({}, {
+            providerPools: {
+                'gemini-antigravity': [provider]
+            },
+            syncAntigravityPlan
+        });
+
+        expect(usage.providers['gemini-antigravity'].instances[0]).toMatchObject({
+            success: true,
+            usage: { summary: { plan: 'Ultra' } }
+        });
+        expect(syncAntigravityPlan).toHaveBeenCalledWith(
+            'gemini-antigravity',
+            provider,
+            'Ultra'
+        );
+    });
+
     test('skips disabled providers without surfacing refresh errors', async () => {
         const usage = await getAllProvidersUsage({}, {
             providerPools: {

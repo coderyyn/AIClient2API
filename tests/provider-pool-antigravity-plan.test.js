@@ -61,6 +61,26 @@ afterEach(() => {
 });
 
 describe('provider pool Antigravity subscription plan', () => {
+    test('persists a freshly detected Antigravity plan on the managed provider', () => {
+        const provider = {
+            uuid: 'ultra-plan-sync',
+            customName: 'Ultra plan sync',
+            lastKnownAntigravityPlan: 'FREE'
+        };
+        const pool = createManager([provider]);
+
+        const syncedPlan = pool.syncAntigravityPlan(
+            'gemini-antigravity',
+            provider,
+            'Ultra'
+        );
+
+        expect(syncedPlan).toBe('Ultra');
+        expect(provider.lastKnownAntigravityPlan).toBe('Ultra');
+        expect(provider.lastKnownAntigravityPlanUpdatedAt).toEqual(expect.any(String));
+        expect(pool.pendingSaves.has('gemini-antigravity')).toBe(true);
+    });
+
     test('uses the lowest public Flash model for new and scheduled Antigravity health checks', () => {
         expect(getProviderMappingByDirName('antigravity').defaultCheckModel).toBe('gemini-2.5-flash-lite');
         expect(ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS['gemini-antigravity'])

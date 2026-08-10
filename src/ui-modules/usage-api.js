@@ -425,6 +425,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
                 providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
+                providerPoolManager?.syncAntigravityPlan?.(providerType, provider, usage?.summary?.plan);
                 result.successCount++;
             } catch (error) {
                 instanceResult.error = error.message;
@@ -744,6 +745,7 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
                 providerPoolManager?.syncCodexQuotaHealth?.(providerType, provider, instanceResult.codexQuotaHealth);
+                providerPoolManager?.syncAntigravityPlan?.(providerType, provider, usage?.summary?.plan);
             } catch (error) {
                 instanceResult.error = error.message;
             }
