@@ -98,6 +98,16 @@ function getCodexRetryAuditFields(config, error) {
     };
 }
 
+function shouldRecordRetryAudit(error) {
+    return isCodexTransientCredentialError(error) || getErrorStatusCode(error) === 429;
+}
+
+function getRetryAuditKind(error) {
+    if (error?.isCodexModelCapacity === true) return 'capacity';
+    if (error?.isCodexOverload === true) return 'overload';
+    return 'rate_limit';
+}
+
 function getClientFacingErrorMessage(error, fallbackMessage) {
     if (error?.isCodexModelCapacity === true) {
         return '[上游 Codex] 所选模型当前容量不足，已自动重试可用凭证后仍不可用，请稍后重试';
@@ -1477,10 +1487,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     allowExcludedProviderFallback: isCodexTransient,
                     selectionDiagnostics
                 });
-                if (isCodexTransient) {
+                if (shouldRecordRetryAudit(error)) {
                     codexTransientRetryObservability.record({
                         ...getCodexRetryAuditFields(CONFIG, error),
-                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        kind: getRetryAuditKind(error),
                         model,
                         providerUuid: pooluuid,
                         attempt: currentRetry + 1,
@@ -1531,10 +1541,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     logger.info(`[Stream Retry] No healthy credential available for retry.`);
                 }
             } catch (retryError) {
-                if (isCodexTransient) {
+                if (shouldRecordRetryAudit(error)) {
                     codexTransientRetryObservability.record({
                         ...getCodexRetryAuditFields(CONFIG, error),
-                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        kind: getRetryAuditKind(error),
                         model,
                         providerUuid: pooluuid,
                         attempt: currentRetry + 1,
@@ -1765,10 +1775,10 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     allowExcludedProviderFallback: isCodexTransient,
                     selectionDiagnostics
                 });
-                if (isCodexTransient) {
+                if (shouldRecordRetryAudit(error)) {
                     codexTransientRetryObservability.record({
                         ...getCodexRetryAuditFields(CONFIG, error),
-                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        kind: getRetryAuditKind(error),
                         model,
                         providerUuid: pooluuid,
                         attempt: currentRetry + 1,
@@ -1817,10 +1827,10 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     logger.info(`[Unary Retry] No healthy credential available for retry.`);
                 }
             } catch (retryError) {
-                if (isCodexTransient) {
+                if (shouldRecordRetryAudit(error)) {
                     codexTransientRetryObservability.record({
                         ...getCodexRetryAuditFields(CONFIG, error),
-                        kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
+                        kind: getRetryAuditKind(error),
                         model,
                         providerUuid: pooluuid,
                         attempt: currentRetry + 1,
