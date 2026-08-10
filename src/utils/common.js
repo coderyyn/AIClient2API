@@ -85,6 +85,19 @@ function isCodexTransientCredentialError(error) {
     return error?.isCodexOverload === true || error?.isCodexModelCapacity === true;
 }
 
+function getCodexRetryAuditFields(config, error) {
+    return {
+        requestId: config?._monitorRequestId || logger.getCurrentRequestId() || null,
+        httpStatus: getErrorStatusCode(error),
+        retryAfterMs: getRetryAfterMs(error),
+        auditEnabled: config?.CODEX_RETRY_AUDIT_ENABLED,
+        auditDirectory: config?.CODEX_RETRY_AUDIT_DIR,
+        auditMaxFileSize: config?.CODEX_RETRY_AUDIT_MAX_FILE_SIZE,
+        auditMaxFiles: config?.CODEX_RETRY_AUDIT_MAX_FILES,
+        auditRetentionDays: config?.CODEX_RETRY_AUDIT_RETENTION_DAYS
+    };
+}
+
 function getClientFacingErrorMessage(error, fallbackMessage) {
     if (error?.isCodexModelCapacity === true) {
         return '[上游 Codex] 所选模型当前容量不足，已自动重试可用凭证后仍不可用，请稍后重试';
@@ -1466,6 +1479,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 });
                 if (isCodexTransient) {
                     codexTransientRetryObservability.record({
+                        ...getCodexRetryAuditFields(CONFIG, error),
                         kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
                         model,
                         providerUuid: pooluuid,
@@ -1519,6 +1533,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             } catch (retryError) {
                 if (isCodexTransient) {
                     codexTransientRetryObservability.record({
+                        ...getCodexRetryAuditFields(CONFIG, error),
                         kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
                         model,
                         providerUuid: pooluuid,
@@ -1752,6 +1767,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 });
                 if (isCodexTransient) {
                     codexTransientRetryObservability.record({
+                        ...getCodexRetryAuditFields(CONFIG, error),
                         kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
                         model,
                         providerUuid: pooluuid,
@@ -1803,6 +1819,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             } catch (retryError) {
                 if (isCodexTransient) {
                     codexTransientRetryObservability.record({
+                        ...getCodexRetryAuditFields(CONFIG, error),
                         kind: error.isCodexModelCapacity ? 'capacity' : 'overload',
                         model,
                         providerUuid: pooluuid,

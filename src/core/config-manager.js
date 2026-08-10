@@ -190,6 +190,11 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         LOG_MAX_FILE_SIZE: 10485760,
         LOG_MAX_FILES: 10,
         LOG_RETENTION_DAYS: 7,
+        CODEX_RETRY_AUDIT_ENABLED: true,
+        CODEX_RETRY_AUDIT_DIR: 'configs/retry-audit',
+        CODEX_RETRY_AUDIT_MAX_FILE_SIZE: 25 * 1024 * 1024,
+        CODEX_RETRY_AUDIT_MAX_FILES: 7,
+        CODEX_RETRY_AUDIT_RETENTION_DAYS: 7,
         TLS_SIDECAR_ENABLED: false, // 启用 Go uTLS sidecar（需要编译 tls-sidecar 二进制）
         TLS_SIDECAR_ENABLED_PROVIDERS: [], // 启用 TLS Sidecar 的提供商列表
         TLS_SIDECAR_PORT: 9090,     // sidecar 监听端口
