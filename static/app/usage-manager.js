@@ -9,6 +9,43 @@ let currentProviderConfigs = null;
 let usagePageDataPromise = null;
 let accountUsageSummaryByKey = new Map();
 let accountUsageSummaryMeta = null;
+const USAGE_REFRESH_POLL_INTERVAL_MS = 1500;
+const USAGE_REFRESH_WAIT_TIMEOUT_MS = 150000;
+
+function sleepForUsageRefresh(delayMs) {
+    return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+async function fetchUsageSnapshot() {
+    const response = await fetch('/api/usage', { method: 'GET', headers: getAuthHeaders() });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+}
+
+export async function waitForUsageRefreshCompletion({
+    fetchUsage = fetchUsageSnapshot,
+    sleep = sleepForUsageRefresh,
+    now = () => Date.now(),
+    intervalMs = USAGE_REFRESH_POLL_INTERVAL_MS,
+    timeoutMs = USAGE_REFRESH_WAIT_TIMEOUT_MS
+} = {}) {
+    const deadline = now() + timeoutMs;
+    let data = null;
+
+    while (true) {
+        data = await fetchUsage();
+        if (!data?.refreshPending) {
+            return { completed: true, data };
+        }
+        if (now() + intervalMs >= deadline) {
+            return { completed: false, data };
+        }
+        await sleep(intervalMs);
+    }
+}
 
 /**
  * 更新提供商配置
@@ -127,7 +164,7 @@ export async function refreshUsage() {
         // 使用更明显的反馈：显示加载中的 Toast
         showToast(t('usage.loading'), 'info');
         
-        const [response, accountUsageSummary] = await Promise.all([
+        const [response, initialAccountUsageSummary] = await Promise.all([
             fetch('/api/usage?refresh=true', { method: 'GET', headers: getAuthHeaders() }),
             loadAccountUsageSummary()
         ]);
@@ -136,7 +173,26 @@ export async function refreshUsage() {
             throw new Error(errorData.error?.message || `HTTP ${response.status}`);
         }
         
-        const data = await response.json();
+        let data = await response.json();
+        let accountUsageSummary = initialAccountUsageSummary;
+
+        if (data.refreshPending) {
+            showToast(t('common.info'), t('usage.refreshStarted'), 'info');
+            const refreshResult = await waitForUsageRefreshCompletion();
+            data = refreshResult.data || data;
+
+            if (!refreshResult.completed) {
+                updateAccountUsageSummaryCache(accountUsageSummary);
+                showUsageRefreshErrors(data.refreshErrors);
+                renderUsageData(data, document.getElementById('usageContent'));
+                updateTimeInfo(data);
+                showToast(t('common.info'), t('usage.refreshStillRunning'), 'info');
+                return;
+            }
+
+            accountUsageSummary = await loadAccountUsageSummary();
+        }
+
         updateAccountUsageSummaryCache(accountUsageSummary);
         showUsageRefreshErrors(data.refreshErrors);
         

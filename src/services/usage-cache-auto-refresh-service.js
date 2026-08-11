@@ -128,6 +128,10 @@ export function startUsageCacheAutoRefreshService(config, providerPoolManager) {
     globalThis.reloadUsageCacheAutoRefreshTimer = (interval) => service.start(interval);
     globalThis.stopUsageCacheAutoRefreshTimer = () => service.stop();
     globalThis.runUsageCacheAutoRefreshNow = () => service.refresh();
+    globalThis.getUsageCacheAutoRefreshStatus = () => ({
+        isRunning: service.isRunning,
+        interval: service.activeInterval
+    });
 
     if (!normalized.enabled) {
         logger.info('[Usage Cache Auto Refresh] Disabled');

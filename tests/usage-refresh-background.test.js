@@ -63,6 +63,7 @@ describe('usage refresh request', () => {
 
     afterEach(() => {
         delete globalThis.runUsageCacheAutoRefreshNow;
+        delete globalThis.getUsageCacheAutoRefreshStatus;
     });
 
     test('returns cached usage immediately while the full refresh continues in background', async () => {
@@ -89,5 +90,20 @@ describe('usage refresh request', () => {
         expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
         expect(usageService.formatUsage).not.toHaveBeenCalled();
         expect(readUsageCache).not.toHaveBeenCalled();
+    });
+
+    test('reports an active background refresh on subsequent cached reads', async () => {
+        globalThis.getUsageCacheAutoRefreshStatus = jest.fn(() => ({ isRunning: true }));
+        const req = { url: '/api/usage', headers: { host: 'localhost' } };
+        const res = createResponse();
+
+        await handleGetUsage(req, res, {}, { providerPools: {} });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body)).toMatchObject({
+            fromCache: true,
+            refreshPending: true
+        });
+        expect(globalThis.getUsageCacheAutoRefreshStatus).toHaveBeenCalledTimes(1);
     });
 });

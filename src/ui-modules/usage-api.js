@@ -96,6 +96,15 @@ function sendUsageResponse(res, payload, timings, requestStartedAt) {
     res.end(body);
 }
 
+function isUsageRefreshPending() {
+    try {
+        return globalThis.getUsageCacheAutoRefreshStatus?.()?.isRunning === true;
+    } catch (error) {
+        logger.warn('[Usage API] Failed to read background refresh status:', error.message);
+        return false;
+    }
+}
+
 
 /**
  * 获取所有支持用量查询的提供商的用量信息
@@ -847,12 +856,16 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
             const cachedData = await measureUsagePhase(timings, 'readDisplayMs', () => readUsageDisplayCache());
             if (cachedData) {
                 logger.debug('[Usage API] Returning cached usage data');
-                    usageResults = { ...cachedData, fromCache: true };
-                    await measureUsagePhase(timings, 'enrichMs', () =>
-                        enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager)
-                    );
-                }
+                usageResults = {
+                    ...cachedData,
+                    fromCache: true,
+                    refreshPending: isUsageRefreshPending()
+                };
+                await measureUsagePhase(timings, 'enrichMs', () =>
+                    enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager)
+                );
             }
+        }
 
         if (!usageResults) {
             // 缓存不存在或需要刷新，重新查询
