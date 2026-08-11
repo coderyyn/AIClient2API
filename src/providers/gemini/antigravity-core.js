@@ -50,6 +50,7 @@ const ANTIGRAVITY_EMPTY_TEXT_PLACEHOLDER = '.';
 // 首字节与空闲分开计时：thinking 模型首字节可能较慢，但长时间无新数据即视为连接已死。
 const ANTIGRAVITY_STREAM_FIRST_BYTE_TIMEOUT_MS = 180000;
 const ANTIGRAVITY_STREAM_IDLE_TIMEOUT_MS = 90000;
+const ANTIGRAVITY_USAGE_TIMEOUT_MS = 15000;
 
 // 上游偶尔以非 SSE 的 JSON 数组返回整个响应，需缓存原始行才能回退解析。
 // 超过该行数认为不是「一次性 JSON 响应」，放弃缓存以免长流吃内存。
@@ -1926,7 +1927,8 @@ export class AntigravityApiService {
                         'User-Agent': this.userAgent
                     },
                     responseType: 'json',
-                    body: JSON.stringify({ project: this.projectId })
+                    body: JSON.stringify({ project: this.projectId }),
+                    timeout: getAntigravityUsageTimeoutMs(this.config)
                 };
 
                 this._applySidecar(requestOptions);
@@ -1968,7 +1970,8 @@ export class AntigravityApiService {
                         'User-Agent': this.userAgent
                     },
                     responseType: 'json',
-                    body: JSON.stringify(this.projectId ? { project: this.projectId } : {})
+                    body: JSON.stringify(this.projectId ? { project: this.projectId } : {}),
+                    timeout: getAntigravityUsageTimeoutMs(this.config)
                 };
 
                 this._applySidecar(requestOptions);
@@ -1985,4 +1988,11 @@ export class AntigravityApiService {
         return null;
     }
 
+}
+
+function getAntigravityUsageTimeoutMs(config = {}) {
+    const configured = Number(config.ANTIGRAVITY_USAGE_TIMEOUT_MS);
+    return Number.isFinite(configured) && configured > 0
+        ? configured
+        : ANTIGRAVITY_USAGE_TIMEOUT_MS;
 }

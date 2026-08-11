@@ -25,6 +25,7 @@ function createUsageService(request) {
     const service = Object.create(AntigravityApiService.prototype);
     Object.assign(service, {
         isInitialized: true,
+        config: {},
         baseURLs: ['https://daily.example.test'],
         projectId: 'project-123',
         tierId: 'Antigravity Pro',
@@ -95,6 +96,20 @@ describe('Antigravity authoritative quota summary', () => {
         });
         expect(result.quotaGroups).toEqual(quotaGroups);
         expect(result.models).toEqual({ 'gemini-3-flash': {} });
+    });
+
+    test('bounds both Antigravity usage requests with the configured timeout', async () => {
+        const request = jest.fn()
+            .mockResolvedValueOnce({ data: { models: { 'gemini-3-flash': {} } } })
+            .mockResolvedValueOnce({ data: { groups: [] } });
+        const service = createUsageService(request);
+        service.config.ANTIGRAVITY_USAGE_TIMEOUT_MS = 1234;
+
+        await service.getUsageLimits();
+
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(request.mock.calls[0][0]).toMatchObject({ timeout: 1234 });
+        expect(request.mock.calls[1][0]).toMatchObject({ timeout: 1234 });
     });
 
     test('keeps fetchAvailableModels usage available when quota summary lookup fails', async () => {
