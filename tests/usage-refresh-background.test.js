@@ -14,13 +14,14 @@ jest.mock('../src/services/usage-service.js', () => ({
 
 jest.mock('../src/ui-modules/usage-cache.js', () => ({
     readUsageCache: jest.fn(),
+    readUsageDisplayCache: jest.fn(),
     writeUsageCache: jest.fn(),
     readProviderUsageCache: jest.fn(),
     updateProviderUsageCache: jest.fn()
 }));
 
 import { usageService } from '../src/services/usage-service.js';
-import { readUsageCache } from '../src/ui-modules/usage-cache.js';
+import { readUsageCache, readUsageDisplayCache } from '../src/ui-modules/usage-cache.js';
 import { handleGetUsage } from '../src/ui-modules/usage-api.js';
 
 function createResponse() {
@@ -41,7 +42,7 @@ function createResponse() {
 describe('usage refresh request', () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        readUsageCache.mockResolvedValue({
+        readUsageDisplayCache.mockResolvedValue({
             timestamp: '2026-08-11T00:00:00.000Z',
             providers: {
                 'gemini-antigravity': {
@@ -86,5 +87,7 @@ describe('usage refresh request', () => {
         });
         expect(globalThis.runUsageCacheAutoRefreshNow).toHaveBeenCalledTimes(1);
         expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
+        expect(usageService.formatUsage).not.toHaveBeenCalled();
+        expect(readUsageCache).not.toHaveBeenCalled();
     });
 });

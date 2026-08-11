@@ -6,7 +6,38 @@ import path from 'path';
 
 // 用量缓存文件路径
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
+const USAGE_DISPLAY_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-display-cache.json');
+const USAGE_DISPLAY_CACHE_SCHEMA_VERSION = 1;
 export const DEFAULT_USAGE_CACHE_TTL_MS = 60 * 60 * 1000;
+
+let inMemoryDisplayCache = null;
+
+export function buildUsageDisplaySnapshot(usageData = {}) {
+    const providers = {};
+    for (const [providerType, providerData] of Object.entries(usageData.providers || {})) {
+        providers[providerType] = {
+            ...providerData,
+            instances: Array.isArray(providerData?.instances)
+                ? providerData.instances.map(instance => {
+                    if (!instance?.usage || typeof instance.usage !== 'object') return { ...instance };
+                    const { raw: _raw, ...displayUsage } = instance.usage;
+                    return { ...instance, usage: displayUsage };
+                })
+                : providerData?.instances
+        };
+    }
+
+    return { ...usageData, providers };
+}
+
+function createDisplayCacheEnvelope(usageData) {
+    return {
+        schemaVersion: USAGE_DISPLAY_CACHE_SCHEMA_VERSION,
+        sourceTimestamp: usageData?.timestamp || null,
+        generatedAt: new Date().toISOString(),
+        data: buildUsageDisplaySnapshot(usageData)
+    };
+}
 
 function getCachedInstancesByUuid(providerCache = {}) {
     const instances = Array.isArray(providerCache.instances) ? providerCache.instances : [];
@@ -120,6 +151,19 @@ function isUsageCacheFresh(cache, { maxAgeMs = DEFAULT_USAGE_CACHE_TTL_MS, now =
     return nowMs - cachedAt <= maxAgeMs;
 }
 
+function readDisplayEnvelopeData(envelope, options = {}) {
+    if (!envelope?.data || envelope.schemaVersion !== USAGE_DISPLAY_CACHE_SCHEMA_VERSION) return null;
+    const timestampedData = {
+        ...envelope.data,
+        timestamp: envelope.data.timestamp || envelope.sourceTimestamp
+    };
+    if (!isUsageCacheFresh(timestampedData, options)) {
+        if (!options.allowStale) return null;
+        return { ...timestampedData, stale: true };
+    }
+    return timestampedData;
+}
+
 /**
  * 读取用量缓存文件
  * @param {Object} [options] - 缓存读取选项
@@ -150,14 +194,54 @@ export async function readUsageCache(options = {}) {
 }
 
 /**
+ * 读取供管理页面使用的轻量快照。进程内命中时不再读取或解析完整 raw cache。
+ */
+export async function readUsageDisplayCache(options = {}) {
+    try {
+        const memoryData = readDisplayEnvelopeData(inMemoryDisplayCache, options);
+        if (memoryData) return memoryData;
+
+        if (existsSync(USAGE_DISPLAY_CACHE_FILE)) {
+            const content = await fs.readFile(USAGE_DISPLAY_CACHE_FILE, 'utf8');
+            const envelope = JSON.parse(content);
+            const displayData = readDisplayEnvelopeData(envelope, options);
+            if (displayData) {
+                inMemoryDisplayCache = envelope;
+                return displayData;
+            }
+        }
+
+        // 升级兼容：只有 raw cache 时迁移一次，不访问上游额度接口。
+        const rawCache = await readUsageCache(options);
+        if (!rawCache) return null;
+        const envelope = createDisplayCacheEnvelope(rawCache);
+        await atomicWriteFile(USAGE_DISPLAY_CACHE_FILE, JSON.stringify(envelope), { encoding: 'utf8', mode: 0o600 });
+        inMemoryDisplayCache = envelope;
+        return readDisplayEnvelopeData(envelope, options);
+    } catch (error) {
+        logger.warn('[Usage Cache] Failed to read usage display cache:', error.message);
+        return null;
+    }
+}
+
+/**
  * 写入用量缓存文件
  * @param {Object} usageData - 用量数据
  */
 export async function writeUsageCache(usageData) {
     try {
         const safeUsageData = await mergeUsageDataWithExistingLastSuccessfulUsage(usageData);
+        await fs.mkdir(path.dirname(USAGE_CACHE_FILE), { recursive: true });
         await atomicWriteFile(USAGE_CACHE_FILE, JSON.stringify(safeUsageData, null, 2), { encoding: 'utf8', mode: 0o600 });
         logger.info('[Usage Cache] Usage data cached to', USAGE_CACHE_FILE);
+        try {
+            const displayEnvelope = createDisplayCacheEnvelope(safeUsageData);
+            await atomicWriteFile(USAGE_DISPLAY_CACHE_FILE, JSON.stringify(displayEnvelope), { encoding: 'utf8', mode: 0o600 });
+            inMemoryDisplayCache = displayEnvelope;
+            logger.debug('[Usage Cache] Usage display snapshot updated');
+        } catch (displayError) {
+            logger.error('[Usage Cache] Failed to write usage display cache:', displayError.message);
+        }
     } catch (error) {
         logger.error('[Usage Cache] Failed to write usage cache:', error.message);
     }

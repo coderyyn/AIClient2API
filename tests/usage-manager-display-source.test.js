@@ -207,7 +207,7 @@ describe('usage manager display source regressions', () => {
 
         expect(source).toContain('function enrichUsageResultsWithProviderConfig(results, currentConfig, providerPoolManager)');
         expect(source).toContain('function enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager)');
-        expect(source).toContain('enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);');
+        expect(source).toContain('enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager)');
         expect(source).toContain('enrichProviderDataWithProviderConfig(providerType, usageResults, currentConfig, providerPoolManager);');
     });
 });

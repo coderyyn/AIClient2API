@@ -2,7 +2,7 @@ import { CONFIG } from '../core/config-manager.js';
 import logger from '../utils/logger.js';
 import { serviceInstances, getServiceAdapter } from '../providers/adapter.js';
 import { usageService } from '../services/usage-service.js';
-import { readUsageCache, writeUsageCache, readProviderUsageCache, updateProviderUsageCache } from './usage-cache.js';
+import { readUsageCache, readUsageDisplayCache, writeUsageCache, readProviderUsageCache, updateProviderUsageCache } from './usage-cache.js';
 import { PROVIDER_MAPPINGS } from '../utils/provider-utils.js';
 import { MODEL_PROVIDER, getRequestBody } from '../utils/common.js';
 import path from 'path';
@@ -26,6 +26,43 @@ const supportedProviders = [
     MODEL_PROVIDER.GROK_WEB,
     MODEL_PROVIDER.GROK_CLI
 ];
+
+const USAGE_API_SLOW_PHASE_MS = 200;
+const USAGE_API_LARGE_RESPONSE_BYTES = 300 * 1024;
+
+async function measureUsagePhase(timings, name, operation) {
+    const startedAt = performance.now();
+    try {
+        return await operation();
+    } finally {
+        timings[name] = performance.now() - startedAt;
+    }
+}
+
+function sendUsageResponse(res, payload, timings, requestStartedAt) {
+    const stringifyStartedAt = performance.now();
+    const body = JSON.stringify(payload);
+    timings.stringifyMs = performance.now() - stringifyStartedAt;
+    const bytes = Buffer.byteLength(body, 'utf8');
+    const processingMs = performance.now() - requestStartedAt;
+    const timingSummary = Object.entries(timings)
+        .map(([name, value]) => `${name}=${value.toFixed(1)}ms`)
+        .join(', ');
+    const message = `[Usage API] GET /api/usage ${timingSummary}, processing=${processingMs.toFixed(1)}ms, bytes=${bytes}`;
+    if (processingMs >= USAGE_API_SLOW_PHASE_MS || bytes >= USAGE_API_LARGE_RESPONSE_BYTES) {
+        logger.warn(message);
+    } else {
+        logger.debug(message);
+    }
+
+    res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    });
+    res.end(body);
+}
 
 
 /**
@@ -732,6 +769,8 @@ export async function handleGetSupportedProviders(req, res) {
  * 获取所有提供商的用量限制
  */
 export async function handleGetUsage(req, res, currentConfig, providerPoolManager) {
+    const requestStartedAt = performance.now();
+    const timings = {};
     try {
         // 解析查询参数，检查是否需要强制刷新
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -740,9 +779,11 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
         let usageResults;
         
         if (refresh) {
-            const cachedData = await readUsageCache({ maxAgeMs: null, allowStale: true });
+            const cachedData = await measureUsagePhase(timings, 'readDisplayMs', () =>
+                readUsageDisplayCache({ maxAgeMs: null, allowStale: true })
+            );
             if (cachedData) {
-                logger.info('[Usage API] Returning cached usage data while refreshing in background');
+                logger.debug('[Usage API] Returning cached usage data while refreshing in background');
                 const refreshRunner = globalThis.runUsageCacheAutoRefreshNow;
                 const refreshPending = typeof refreshRunner === 'function';
                 if (refreshPending) {
@@ -751,18 +792,19 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
                         .catch(error => logger.error('[Usage API] Background usage refresh failed:', error));
                 }
                 usageResults = { ...cachedData, fromCache: true, refreshPending };
-                reformatUsageResults(usageResults);
-                enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);
+                await measureUsagePhase(timings, 'enrichMs', () =>
+                    enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager)
+                );
             }
         } else {
             // 优先读取缓存
-            const cachedData = await readUsageCache();
+            const cachedData = await measureUsagePhase(timings, 'readDisplayMs', () => readUsageDisplayCache());
             if (cachedData) {
-                logger.info('[Usage API] Returning cached usage data');
+                logger.debug('[Usage API] Returning cached usage data');
                     usageResults = { ...cachedData, fromCache: true };
-                    // 使用最新的格式化逻辑处理缓存的原始数据
-                    reformatUsageResults(usageResults);
-                    enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);
+                    await measureUsagePhase(timings, 'enrichMs', () =>
+                        enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager)
+                    );
                 }
             }
 
@@ -785,13 +827,7 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
             serverTime: new Date().toISOString()
         };
         
-        res.writeHead(200, { 
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-        });
-        res.end(JSON.stringify(finalResults));
+        sendUsageResponse(res, finalResults, timings, requestStartedAt);
         return true;
     } catch (error) {
         logger.error('[UI API] Failed to get usage:', error);
