@@ -113,8 +113,10 @@ function isUsageRefreshPending() {
  * @returns {Promise<Object>} 所有提供商的用量信息
  */
 export async function getAllProvidersUsage(currentConfig, providerPoolManager) {
+    const refreshStartedAt = new Date().toISOString();
     const results = {
-        timestamp: new Date().toISOString(),
+        refreshStartedAt,
+        timestamp: null,
         providers: {}
     };
 
@@ -142,6 +144,9 @@ export async function getAllProvidersUsage(currentConfig, providerPoolManager) {
     for (const result of usageResults) {
         results.providers[result.providerType] = result.data;
     }
+
+    // timestamp 表示完整快照生成完成时间，而不是开始采集时间。
+    results.timestamp = new Date().toISOString();
 
     return results;
 }

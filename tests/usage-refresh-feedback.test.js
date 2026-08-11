@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals';
+import fs from 'fs';
+import path from 'path';
 
 describe('usage refresh feedback', () => {
     beforeAll(() => {
@@ -61,5 +63,52 @@ describe('usage refresh feedback', () => {
             data: { refreshPending: true, timestamp: 'old' }
         });
         expect(fetchUsage).toHaveBeenCalledTimes(2);
+    });
+
+    test('keeps visible button feedback for the entire refresh', async () => {
+        const usageManager = await import('../static/app/usage-manager.js');
+        expect(typeof usageManager.setUsageRefreshButtonState).toBe('function');
+        const button = {
+            disabled: false,
+            innerHTML: '<i class="fas fa-sync-alt"></i> <span>刷新用量</span>',
+            dataset: {}
+        };
+
+        usageManager.setUsageRefreshButtonState(button, true);
+        expect(button.disabled).toBe(true);
+        expect(button.innerHTML).toContain('fa-spin');
+        expect(button.innerHTML).toContain('正在刷新');
+
+        usageManager.setUsageRefreshButtonState(button, false);
+        expect(button.disabled).toBe(false);
+        expect(button.innerHTML).toContain('刷新用量');
+        expect(button.innerHTML).not.toContain('fa-spin');
+    });
+
+    test('styles the disabled refresh button as an active wait state', () => {
+        const css = fs.readFileSync(path.join(process.cwd(), 'static/components/section-usage.css'), 'utf8').replace(/\r\n/g, '\n');
+        expect(css).toContain('#refreshUsageBtn:disabled');
+        expect(css).toContain('cursor: wait');
+    });
+
+    test('allows refresh success feedback to remain visible longer than the default toast', async () => {
+        jest.useFakeTimers();
+        const remove = jest.fn();
+        const toastContainer = { appendChild: jest.fn() };
+        globalThis.document = {
+            createElement: jest.fn(() => ({ className: '', innerHTML: '', remove })),
+            getElementById: jest.fn(() => toastContainer),
+            querySelector: jest.fn(() => null)
+        };
+        const { showToast } = await import('../static/app/utils.js');
+
+        showToast('成功', '刷新成功', 'success', 6000);
+        jest.advanceTimersByTime(3000);
+        expect(remove).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(3000);
+        expect(remove).toHaveBeenCalledTimes(1);
+
+        delete globalThis.document;
+        jest.useRealTimers();
     });
 });

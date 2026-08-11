@@ -364,6 +364,13 @@
     text-transform: uppercase; letter-spacing: 0.05em;
 }
 
+#refreshUsageBtn:disabled {
+    opacity: 0.72;
+    cursor: wait;
+    transform: none;
+    box-shadow: none;
+}
+
 .account-usage-summary {
     background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
 }

@@ -91,4 +91,30 @@ describe('usage refresh account isolation', () => {
         releases.get('c')();
         await refreshPromise;
     });
+
+    test('records the snapshot timestamp after all account queries complete', async () => {
+        jest.setSystemTime(new Date('2026-08-11T14:46:00.000Z'));
+        let releaseUsage;
+        usageService.getFormattedUsage.mockImplementation(() => new Promise(resolve => {
+            releaseUsage = resolve;
+        }));
+        const config = {
+            USAGE_REFRESH_ACCOUNT_TIMEOUT_MS: 30_000,
+            providerPools: {
+                [PROVIDER_TYPE]: [{ uuid: 'delayed', isHealthy: true }]
+            }
+        };
+
+        const refreshPromise = getAllProvidersUsage(config, null);
+        await Promise.resolve();
+        expect(releaseUsage).toBeDefined();
+
+        jest.setSystemTime(new Date('2026-08-11T14:46:16.000Z'));
+        releaseUsage({ summary: { plan: 'Ultra' }, items: [] });
+        await jest.advanceTimersByTimeAsync(0);
+        const result = await refreshPromise;
+
+        expect(result.refreshStartedAt).toBe('2026-08-11T14:46:00.000Z');
+        expect(result.timestamp).toBe('2026-08-11T14:46:16.000Z');
+    });
 });

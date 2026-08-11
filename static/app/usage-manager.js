@@ -47,6 +47,22 @@ export async function waitForUsageRefreshCompletion({
     }
 }
 
+export function setUsageRefreshButtonState(button, refreshing) {
+    if (!button) return;
+
+    if (refreshing) {
+        if (!button.dataset.idleHtml) button.dataset.idleHtml = button.innerHTML;
+        button.disabled = true;
+        button.innerHTML = `<i class="fas fa-sync-alt fa-spin"></i> <span>${t('usage.refreshing')}</span>`;
+        return;
+    }
+
+    button.disabled = false;
+    if (button.dataset.idleHtml) {
+        button.innerHTML = button.dataset.idleHtml;
+    }
+}
+
 /**
  * 更新提供商配置
  * @param {Array} configs - 提供商配置列表
@@ -158,12 +174,9 @@ export async function loadUsage() {
  */
 export async function refreshUsage() {
     const refreshBtn = document.getElementById('refreshUsageBtn');
-    if (refreshBtn) refreshBtn.disabled = true;
+    setUsageRefreshButtonState(refreshBtn, true);
 
     try {
-        // 使用更明显的反馈：显示加载中的 Toast
-        showToast(t('usage.loading'), 'info');
-        
         const [response, initialAccountUsageSummary] = await Promise.all([
             fetch('/api/usage?refresh=true', { method: 'GET', headers: getAuthHeaders() }),
             loadAccountUsageSummary()
@@ -201,12 +214,12 @@ export async function refreshUsage() {
         updateTimeInfo(data);
         
         // 成功提示
-        showToast(t('common.refresh.success'), 'success');
+        showToast(t('common.success'), t('common.refresh.success'), 'success', 6000);
     } catch (error) {
         console.error('刷新用量失败:', error);
         showToast(t('common.error'), error.message || t('common.requestFailed'), 'error');
     } finally {
-        if (refreshBtn) refreshBtn.disabled = false;
+        setUsageRefreshButtonState(refreshBtn, false);
     }
 }
 
