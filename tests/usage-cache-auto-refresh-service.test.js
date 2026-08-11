@@ -13,6 +13,33 @@ afterEach(() => {
 });
 
 describe('usage cache auto refresh service shutdown', () => {
+    test('concurrent refresh callers reuse the active refresh result', async () => {
+        let releaseUsage;
+        const usageBarrier = new Promise(resolve => {
+            releaseUsage = resolve;
+        });
+        const fetchUsage = jest.fn(() => usageBarrier);
+        const service = new UsageCacheAutoRefreshService({
+            config: {},
+            providerPoolManager: {},
+            fetchUsage,
+            persistUsage: jest.fn().mockResolvedValue()
+        });
+
+        const firstRefresh = service.refresh();
+        await Promise.resolve();
+        const secondRefresh = service.refresh();
+
+        expect(fetchUsage).toHaveBeenCalledTimes(1);
+        releaseUsage({ providers: { test: { totalCount: 1 } } });
+
+        await expect(firstRefresh).resolves.toMatchObject({ skipped: false });
+        await expect(secondRefresh).resolves.toMatchObject({
+            skipped: false,
+            usageData: { providers: { test: { totalCount: 1 } } }
+        });
+    });
+
     test('factory preserves startupRun=true when the repeating interval is started', async () => {
         const refresh = jest.spyOn(UsageCacheAutoRefreshService.prototype, 'refresh').mockResolvedValue({ skipped: false });
         const service = startUsageCacheAutoRefreshService({

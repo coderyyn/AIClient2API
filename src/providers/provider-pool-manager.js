@@ -580,7 +580,7 @@ export class ProviderPoolManager {
         this.logLevel = options.logLevel || 'info'; // 'debug', 'info', 'warn', 'error'
         
         // 添加防抖机制，避免频繁的文件 I/O 操作
-        this.saveDebounceTime = options.saveDebounceTime || 1000; // 默认1秒防抖
+        this.saveDebounceTime = options.saveDebounceTime ?? 10000; // 默认10秒批量落盘
         this.saveTimer = null;
         this.pendingSaves = new Set(); // 记录待保存的 providerType
         
@@ -3475,7 +3475,7 @@ export class ProviderPoolManager {
                 this._logHealthStatusChange(providerType, provider.config, 'unhealthy', 'healthy', null);
             }
             
-            this._log('info', `Marked provider as healthy: ${this._getDisplayName(provider.config)} for type ${providerType}${resetUsageCount ? ' (usage count reset)' : ''}`);
+            this._log('debug', `Marked provider as healthy: ${this._getDisplayName(provider.config)} for type ${providerType}${resetUsageCount ? ' (usage count reset)' : ''}`);
             
             this._debouncedSave(providerType);
         }
@@ -4091,16 +4091,18 @@ export class ProviderPoolManager {
     _debouncedSave(providerType) {
         // 将待保存的 providerType 添加到集合中
         this.pendingSaves.add(providerType);
-        
-        // 清除之前的定时器
-        if (this.saveTimer) {
-            clearTimeout(this.saveTimer);
-        }
+
+        // 固定批次窗口：持续流量不会不断推迟落盘，也不会每秒重写完整文件。
+        if (this.saveTimer) return;
         
         // 设置新的定时器
         this.saveTimer = setTimeout(() => {
             this._flushPendingSaves();
         }, this.saveDebounceTime);
+    }
+
+    async flushPendingSaves() {
+        await this._flushPendingSaves();
     }
     
     /**

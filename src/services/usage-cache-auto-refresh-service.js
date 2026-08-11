@@ -49,31 +49,36 @@ export class UsageCacheAutoRefreshService {
         this.timer = null;
         this.startupTimer = null;
         this.isRunning = false;
+        this.activeRefreshPromise = null;
         this.idleWaiters = new Set();
         this.activeInterval = null;
     }
 
-    async refresh() {
-        if (this.isRunning) {
-            this.log.debug('[Usage Cache Auto Refresh] Skipping - previous run still in progress');
-            return { skipped: true };
+    refresh() {
+        if (this.activeRefreshPromise) {
+            this.log.debug('[Usage Cache Auto Refresh] Reusing active refresh');
+            return this.activeRefreshPromise;
         }
 
         this.isRunning = true;
-        try {
-            this.log.info('[Usage Cache Auto Refresh] Fetching fresh usage data');
-            const usageData = await this.fetchUsage(this.config, this.providerPoolManager);
-            await this.persistUsage(usageData);
-            this.log.info('[Usage Cache Auto Refresh] Usage cache refreshed');
-            return { skipped: false, usageData };
-        } catch (error) {
-            this.log.error('[Usage Cache Auto Refresh] Refresh failed:', error);
-            return { skipped: false, error };
-        } finally {
-            this.isRunning = false;
-            for (const resolve of this.idleWaiters) resolve();
-            this.idleWaiters.clear();
-        }
+        this.activeRefreshPromise = (async () => {
+            try {
+                this.log.info('[Usage Cache Auto Refresh] Fetching fresh usage data');
+                const usageData = await this.fetchUsage(this.config, this.providerPoolManager);
+                await this.persistUsage(usageData);
+                this.log.info('[Usage Cache Auto Refresh] Usage cache refreshed');
+                return { skipped: false, usageData };
+            } catch (error) {
+                this.log.error('[Usage Cache Auto Refresh] Refresh failed:', error);
+                return { skipped: false, error };
+            } finally {
+                this.isRunning = false;
+                this.activeRefreshPromise = null;
+                for (const resolve of this.idleWaiters) resolve();
+                this.idleWaiters.clear();
+            }
+        })();
+        return this.activeRefreshPromise;
     }
 
     start(interval) {

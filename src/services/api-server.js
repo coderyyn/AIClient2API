@@ -186,6 +186,7 @@ async function stopBackgroundServices() {
     await stopOne('provider refresh queue', async () => {
         const providerPoolManager = getProviderPoolManager();
         await providerPoolManager?.shutdownRefreshQueue();
+        await providerPoolManager?.flushPendingSaves?.();
     });
 
     await stopOne('scheduled health check', async () => {

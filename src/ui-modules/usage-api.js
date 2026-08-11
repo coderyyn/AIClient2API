@@ -29,6 +29,38 @@ const supportedProviders = [
 
 const USAGE_API_SLOW_PHASE_MS = 200;
 const USAGE_API_LARGE_RESPONSE_BYTES = 300 * 1024;
+const DEFAULT_USAGE_REFRESH_ACCOUNT_TIMEOUT_MS = 15_000;
+const DEFAULT_USAGE_REFRESH_CONCURRENCY_PER_PROVIDER = 2;
+
+function normalizePositiveInteger(value, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function withUsageAccountTimeout(promise, timeoutMs, providerType, uuid) {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(new Error(`Usage refresh timed out after ${timeoutMs}ms for ${providerType}:${uuid}`));
+        }, timeoutMs);
+        if (timeoutId.unref) timeoutId.unref();
+    });
+    return Promise.race([Promise.resolve(promise), timeoutPromise])
+        .finally(() => clearTimeout(timeoutId));
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+    const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (nextIndex < items.length) {
+            const index = nextIndex++;
+            results[index] = await worker(items[index], index);
+        }
+    });
+    await Promise.all(runners);
+    return results;
+}
 
 async function measureUsagePhase(timings, name, operation) {
     const startedAt = performance.now();
@@ -469,8 +501,17 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
 
     result.totalCount = providers.length;
 
-    // 遍历所有提供商实例获取用量
-    for (const provider of providers) {
+    const accountTimeoutMs = normalizePositiveInteger(
+        currentConfig.USAGE_REFRESH_ACCOUNT_TIMEOUT_MS,
+        DEFAULT_USAGE_REFRESH_ACCOUNT_TIMEOUT_MS
+    );
+    const concurrency = normalizePositiveInteger(
+        currentConfig.USAGE_REFRESH_CONCURRENCY_PER_PROVIDER,
+        DEFAULT_USAGE_REFRESH_CONCURRENCY_PER_PROVIDER
+    );
+
+    // 受控并发获取同一 provider 类型下的实例，避免单账号串行阻塞全部刷新。
+    result.instances = await mapWithConcurrency(providers, concurrency, async (provider) => {
         const providerKey = providerType + (provider.uuid || '');
         let adapter = serviceInstances[providerKey];
         
@@ -504,7 +545,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
         } else if (!adapter) {
             // Service instance not initialized, try auto-initialization
             try {
-                logger.info(`[Usage API] Auto-initializing service adapter for ${providerType}: ${provider.uuid}`);
+                logger.debug(`[Usage API] Auto-initializing service adapter for ${providerType}: ${provider.uuid}`);
                 // Build configuration object
                 const serviceConfig = {
                     ...CONFIG,
@@ -515,14 +556,18 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             } catch (initError) {
                 logger.error(`[Usage API] Failed to initialize adapter for ${providerType}: ${provider.uuid}:`, initError.message);
                 instanceResult.error = `Service instance initialization failed: ${initError.message}`;
-                result.errorCount++;
             }
         }
         
         // If adapter exists (including just initialized), and no error, try to get usage
         if (adapter && !instanceResult.error) {
             try {
-                const usage = await usageService.getFormattedUsage(providerType, provider.uuid);
+                const usage = await withUsageAccountTimeout(
+                    usageService.getFormattedUsage(providerType, provider.uuid),
+                    accountTimeoutMs,
+                    providerType,
+                    provider.uuid
+                );
                 instanceResult.success = true;
                 instanceResult.usage = usage;
                 instanceResult.codexQuotaHealth = deriveCodexQuotaHealthFromUsage(instanceResult.codexQuotaHealth, usage);
@@ -530,15 +575,16 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
                 instanceResult.antigravityQuotaHealth = deriveAntigravityQuotaHealthFromUsage(instanceResult.antigravityQuotaHealth, usage, provider);
                 providerPoolManager?.syncAntigravityQuotaHealth?.(providerType, provider, instanceResult.antigravityQuotaHealth);
                 providerPoolManager?.syncAntigravityPlan?.(providerType, provider, usage?.summary?.plan);
-                result.successCount++;
             } catch (error) {
                 instanceResult.error = error.message;
-                result.errorCount++;
             }
         }
 
-        result.instances.push(instanceResult);
-    }
+        return instanceResult;
+    });
+
+    result.successCount = result.instances.filter(instance => instance.success).length;
+    result.errorCount = result.instances.filter(instance => !instance.success && !instance.skipped).length;
 
     return result;
 }
