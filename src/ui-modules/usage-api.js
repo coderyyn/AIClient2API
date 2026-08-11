@@ -739,7 +739,22 @@ export async function handleGetUsage(req, res, currentConfig, providerPoolManage
         
         let usageResults;
         
-        if (!refresh) {
+        if (refresh) {
+            const cachedData = await readUsageCache({ maxAgeMs: null, allowStale: true });
+            if (cachedData) {
+                logger.info('[Usage API] Returning cached usage data while refreshing in background');
+                const refreshRunner = globalThis.runUsageCacheAutoRefreshNow;
+                const refreshPending = typeof refreshRunner === 'function';
+                if (refreshPending) {
+                    Promise.resolve()
+                        .then(() => refreshRunner())
+                        .catch(error => logger.error('[Usage API] Background usage refresh failed:', error));
+                }
+                usageResults = { ...cachedData, fromCache: true, refreshPending };
+                reformatUsageResults(usageResults);
+                enrichUsageResultsWithProviderConfig(usageResults, currentConfig, providerPoolManager);
+            }
+        } else {
             // 优先读取缓存
             const cachedData = await readUsageCache();
             if (cachedData) {
