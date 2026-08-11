@@ -517,6 +517,9 @@ export function formatAntigravityUsage(usageData) {
         for (const group of Array.isArray(usageData.quotaGroups) ? usageData.quotaGroups : []) {
             if (!group || typeof group !== 'object') continue;
             const groupName = group.displayName || group.id || 'Quota group';
+            const conciseGroupName = /gemini/i.test(groupName)
+                ? 'Gemini'
+                : (/claude/i.test(groupName) && /gpt/i.test(groupName) ? 'Claude + GPT' : groupName);
 
             for (const bucket of Array.isArray(group.buckets) ? group.buckets : []) {
                 if (!bucket || typeof bucket !== 'object') continue;
@@ -527,17 +530,18 @@ export function formatAntigravityUsage(usageData) {
                 const remainingPercent = Number((normalizedRemaining * 100).toFixed(6));
                 const percent = Number((100 - remainingPercent).toFixed(6));
                 const bucketId = bucket.bucketId || `${groupName}:${bucket.window || authoritativeItems.length}`;
-                const bucketName = bucket.displayName
-                    || (bucket.window === 'weekly' ? 'Weekly Limit Remaining' : bucket.window === '5h' ? 'Five Hour Limit Remaining' : bucketId);
+                const bucketName = bucket.window === 'weekly'
+                    ? 'Weekly Limit'
+                    : (bucket.window === '5h' ? '5h Limit' : (bucket.displayName || bucketId));
 
                 authoritativeItems.push({
                     id: `quota-group:${bucketId}`,
-                    label: `${groupName} · ${bucketName}`,
+                    label: `${conciseGroupName} · ${bucketName}`,
                     used: percent,
                     limit: 100,
                     percent,
                     remainingPercent,
-                    displayValue: `${remainingPercent.toFixed(1)}%`,
+                    displayValue: `${percent.toFixed(1)}%`,
                     unit: 'percent',
                     status: getStatus(percent),
                     resetAt: formatTimestamp(bucket.resetTime),
@@ -555,13 +559,16 @@ export function formatAntigravityUsage(usageData) {
         const avgUsedPercent = modelItems.length > 0
             ? modelItems.reduce((total, item) => total + item.percent, 0) / modelItems.length
             : 0;
+        const geminiWeeklyItem = authoritativeItems.find(item => item.id === 'quota-group:gemini-weekly');
+        const summaryUsedPercent = geminiWeeklyItem?.percent ?? avgUsedPercent;
         const plan = parseTierId(usageData.tierId);
 
         return {
             summary: {
-                usedPercent: avgUsedPercent,
-                status: getStatus(avgUsedPercent),
-                resetAt: formatTimestamp(maxResetAt),
+                label: geminiWeeklyItem?.label,
+                usedPercent: summaryUsedPercent,
+                status: getStatus(summaryUsedPercent),
+                resetAt: geminiWeeklyItem?.resetAt || formatTimestamp(maxResetAt),
                 plan,
                 planClass: getPlanClass(plan),
                 unit: 'percent'

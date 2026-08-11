@@ -98,30 +98,35 @@ describe('Antigravity usage formatting', () => {
 
         const authoritativeItems = formatted.items.filter(item => item.source === 'retrieveUserQuotaSummary');
         expect(authoritativeItems).toHaveLength(3);
+        expect(formatted.summary).toMatchObject({
+            label: 'Gemini · Weekly Limit',
+            usedPercent: 10,
+            resetAt: '2026-08-11T04:53:25.000Z'
+        });
         expect(authoritativeItems).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 id: 'quota-group:gemini-5h',
-                label: 'Gemini Models · Five Hour Limit Remaining',
+                label: 'Gemini · 5h Limit',
                 percent: 25,
                 remainingPercent: 75,
-                displayValue: '75.0%',
+                displayValue: '25.0%',
                 windowKind: 'short',
                 resetAt: '2026-08-06T22:01:21.000Z'
             }),
             expect.objectContaining({
                 id: 'quota-group:gemini-weekly',
-                label: 'Gemini Models · Weekly Limit Remaining',
+                label: 'Gemini · Weekly Limit',
                 percent: 10,
                 remainingPercent: 90,
-                displayValue: '90.0%',
+                displayValue: '10.0%',
                 windowKind: 'weekly'
             }),
             expect.objectContaining({
                 id: 'quota-group:3p-weekly',
-                label: 'Claude and GPT models · Weekly Limit Remaining',
+                label: 'Claude + GPT · Weekly Limit',
                 percent: 0,
                 remainingPercent: 100,
-                displayValue: '100.0%',
+                displayValue: '0.0%',
                 windowKind: 'weekly'
             })
         ]));

@@ -26,6 +26,13 @@ describe('usage manager display source regressions', () => {
         expect(renderBlock).toContain("t('usage.card.dataDelayed')");
     });
 
+    test('quota detail section uses concise usage wording', () => {
+        const i18n = fs.readFileSync(path.join(process.cwd(), 'static/app/i18n.js'), 'utf8').replace(/\r\n/g, '\n');
+
+        expect(i18n).toContain("'usage.card.quotaDetails': '额度使用'");
+        expect(i18n).toContain("'usage.card.quotaDetails': 'Quota Usage'");
+    });
+
     test('Token telemetry consolidates matching local update hours and shows outlier differences', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
         const i18n = fs.readFileSync(path.join(process.cwd(), 'static/app/i18n.js'), 'utf8').replace(/\r\n/g, '\n');
