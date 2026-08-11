@@ -22,9 +22,15 @@ RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o tls-sid
 # 选择20-alpine版本以满足undici包的要求（需要Node.js >=20.18.1）
 FROM node:20-alpine
 
+ARG APP_REVISION=unknown
+ARG APP_BUILD_DATE=unknown
+
 # 设置标签
 LABEL maintainer="AIClient2API Team"
 LABEL description="Docker image for AIClient2API server"
+LABEL yyn.base_commit=$APP_REVISION
+LABEL yyn.build_date=$APP_BUILD_DATE
+LABEL yyn.build_source=git-archive
 
 # 代理参数仅用于构建时，不持久化到最终镜像
 ARG HTTP_PROXY
@@ -35,6 +41,8 @@ RUN apk add --no-cache tar git procps
 
 # 设置工作目录
 WORKDIR /app
+
+RUN printf '%s\n' "$APP_REVISION" > /app/REVISION
 
 # 复制package.json和package-lock.json（如果存在）
 COPY package*.json ./

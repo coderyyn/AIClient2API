@@ -1,0 +1,46 @@
+import { describe, expect, test } from '@jest/globals';
+import fs from 'fs';
+import path from 'path';
+
+function read(relativePath) {
+    return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
+describe('production image provenance and blue-green preflight', () => {
+    test('Docker image embeds the requested source revision', () => {
+        const dockerfile = read('Dockerfile');
+        const buildScript = read('scripts/ops/build-image.sh');
+
+        expect(dockerfile).toContain('ARG APP_REVISION=unknown');
+        expect(dockerfile).toContain('LABEL yyn.base_commit=$APP_REVISION');
+        expect(dockerfile).toContain('/app/REVISION');
+        expect(buildScript).toContain('--build-arg APP_REVISION="$COMMIT"');
+        expect(buildScript).toContain('docker image inspect');
+        expect(buildScript).toContain('yyn.base_commit');
+    });
+
+    test('blue-green helper is dry-run by default and does not publish OAuth ports', () => {
+        const script = read('scripts/ops/blue-green-deploy.sh');
+
+        expect(script).toContain('APPLY=0');
+        expect(script).toContain('PHASE=plan');
+        expect(script).toContain('127.0.0.1:${CANDIDATE_PORT}:3000');
+        expect(script).toContain('yyn.base_commit');
+        expect(script).toContain('nginx -t');
+        expect(script).toContain('refusing unsafe snapshot path');
+        expect(script).not.toMatch(/-p\s+1455:1455/);
+        expect(script).not.toMatch(/-p\s+8085-8087/);
+        expect(script).not.toMatch(/-p\s+19876-19880/);
+        expect(script).not.toMatch(/-p\s+56121:56121/);
+    });
+
+    test('operations guide documents stateful and OAuth cutover boundaries', () => {
+        const guide = read('docs/ops-blue-green-deploy.md');
+
+        expect(guide).toContain('单写者');
+        expect(guide).toContain('OAuth');
+        expect(guide).toContain('不等于严格无缝双活');
+        expect(guide).toContain('max-size');
+        expect(guide).toContain('nginx -t');
+    });
+});

@@ -14,8 +14,10 @@
 set -eu
 
 GIT_REF=${1:-HEAD}
-COMMIT=$(git rev-parse --short "$GIT_REF")
-IMAGE_TAG=${2:-aiclient2api:customized-branch-$COMMIT-$(date +%Y%m%d)}
+COMMIT=$(git rev-parse "$GIT_REF")
+SHORT_COMMIT=$(git rev-parse --short "$GIT_REF")
+BUILD_DATE=$(date -Iseconds)
+IMAGE_TAG=${2:-aiclient2api:customized-branch-$SHORT_COMMIT-$(date +%Y%m%d)}
 
 BUILD_ARGS=""
 if [ -n "${BUILD_HTTP_PROXY:-}" ]; then
@@ -32,11 +34,19 @@ echo "building $IMAGE_TAG"
 # shellcheck disable=SC2086
 docker build \
   $BUILD_ARGS \
+  --build-arg APP_REVISION="$COMMIT" \
+  --build-arg APP_BUILD_DATE="$BUILD_DATE" \
   --label "yyn.base_commit=$COMMIT" \
   --label "yyn.build_source=git-archive" \
-  --label "yyn.build_date=$(date -Iseconds)" \
+  --label "yyn.build_date=$BUILD_DATE" \
   -t "$IMAGE_TAG" \
   "$TMP_DIR"
+
+ACTUAL_COMMIT=$(docker image inspect --format '{{ index .Config.Labels "yyn.base_commit" }}' "$IMAGE_TAG")
+[ "$ACTUAL_COMMIT" = "$COMMIT" ] || {
+  echo "image revision mismatch: expected=$COMMIT actual=$ACTUAL_COMMIT" >&2
+  exit 1
+}
 
 echo "built $IMAGE_TAG from commit $COMMIT"
 echo "next: docker save/scp/load, rename old container as timestamped backup, start new, verify /health"
