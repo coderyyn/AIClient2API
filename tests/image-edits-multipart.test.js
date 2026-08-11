@@ -483,6 +483,7 @@ describe('/v1/images/edits multipart handling', () => {
     });
 
     test('preserves the original Antigravity model 429 when retry selection has no alternative account', async () => {
+        jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-11T06:00:00Z'));
         const quotaError = new Error('Antigravity quota exhausted');
         quotaError.imageProviderRetryable = true;
         quotaError.response = {
