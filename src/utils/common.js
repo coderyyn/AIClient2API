@@ -102,6 +102,22 @@ function isAntigravityTransientCapacityError(error, providerType) {
         && errorText.includes('on the server');
 }
 
+function normalizeAntigravityCapacityExhaustion(error, providerType, requestedModel) {
+    if (!isAntigravityTransientCapacityError(error, providerType)) {
+        return false;
+    }
+
+    error.isAntigravityModelCapacity = true;
+    error.status = 429;
+    error.statusCode = 429;
+    error.code = 429;
+    error.quotaScope = 'model';
+    error.quotaKey = requestedModel || error.quotaKey;
+    error.response = error.response || {};
+    error.response.status = 429;
+    return true;
+}
+
 function getCodexRetryAuditFields(config, error) {
     return {
         requestId: config?._monitorRequestId || logger.getCurrentRequestId() || null,
@@ -126,6 +142,9 @@ function getRetryAuditKind(error) {
 }
 
 function getClientFacingErrorMessage(error, fallbackMessage) {
+    if (error?.isAntigravityModelCapacity === true) {
+        return '[上游 Antigravity] 所选模型当前容量不足，已自动重试可用账号后仍不可用，请稍后重试';
+    }
     if (error?.isCodexModelCapacity === true) {
         return '[上游 Codex] 所选模型当前容量不足，已自动重试可用凭证后仍不可用，请稍后重试';
     }
@@ -1517,6 +1536,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         if (anyDataSent) {
             logger.info(`[Stream Retry] Cannot retry: data already sent to client`);
             // 直接发送错误并结束
+            normalizeAntigravityCapacityExhaustion(error, toProvider, model);
             const errorPayload = createStreamErrorResponse(error, fromProvider);
             if (!res.writableEnded) {
                 try {
@@ -1683,6 +1703,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         }
 
         // 使用新方法创建符合 fromProvider 格式的流式错误响应
+        normalizeAntigravityCapacityExhaustion(error, toProvider, model);
         const errorPayload = createStreamErrorResponse(error, fromProvider);
         if (!clientDisconnected.value && !res.writableEnded) {
             try {
@@ -1971,6 +1992,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         }
 
         // 使用新方法创建符合 fromProvider 格式的错误响应
+        normalizeAntigravityCapacityExhaustion(error, toProvider, model);
         const errorResponse = createErrorResponse(error, fromProvider);
         const rawStatusCode = error.status || error.code || (error.response && error.response.status) || 500;
         const statusCode = ensureValidStatusCode(rawStatusCode);

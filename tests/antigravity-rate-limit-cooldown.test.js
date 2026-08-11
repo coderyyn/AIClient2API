@@ -15,8 +15,11 @@ class FakeResponse {
     constructor() {
         this.body = '';
         this.writableEnded = false;
+        this.statusCode = null;
     }
-    writeHead() {}
+    writeHead(statusCode) {
+        this.statusCode = statusCode;
+    }
     end(chunk = '') {
         this.body += String(chunk);
         this.writableEnded = true;
@@ -121,6 +124,43 @@ describe('Antigravity model quota cooldown', () => {
         expect(providerPoolManager.markProviderUnhealthyWithRecoveryTime).not.toHaveBeenCalled();
         expect(providerPoolManager.markAntigravityModelQuotaUnhealthy).not.toHaveBeenCalled();
         expect(res.body).toContain('antigravity-capacity-retry-success');
+    });
+
+    test('returns HTTP 429 when every alternative is unavailable after an Antigravity capacity error', async () => {
+        jest.spyOn(Math, 'random').mockReturnValue(0);
+        const firstService = { generateContent: jest.fn().mockRejectedValue(createCapacityError()) };
+        mockGetApiServiceWithFallback.mockRejectedValueOnce(new Error('No healthy provider found in pool'));
+        const providerPoolManager = {
+            markAntigravityModelQuotaUnhealthy: jest.fn(),
+            markProviderUnhealthyWithRecoveryTime: jest.fn(),
+            markProviderUnhealthy: jest.fn(),
+            markProviderUnhealthyImmediately: jest.fn(),
+            markProviderHealthy: jest.fn(),
+            releaseSlot: jest.fn()
+        };
+        const res = new FakeResponse();
+
+        await handleUnaryRequest(
+            res,
+            firstService,
+            'gemini-3.1-flash-image',
+            { contents: [] },
+            'gemini',
+            'gemini-antigravity',
+            'none',
+            null,
+            providerPoolManager,
+            'provider-ultra-1',
+            'Ultra 1',
+            { CONFIG: { CREDENTIAL_SWITCH_MAX_RETRIES: 1 }, maxRetries: 1 }
+        );
+
+        expect(res.statusCode).toBe(429);
+        expect(JSON.parse(res.body).error).toMatchObject({
+            code: 429,
+            status: 'RESOURCE_EXHAUSTED'
+        });
+        expect(providerPoolManager.markProviderUnhealthy).not.toHaveBeenCalled();
     });
 
     test('parses compound hour-minute-second quota reset delays', () => {

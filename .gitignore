@@ -25,3 +25,9 @@ model-usage-stats.json
 AGENTS.md
 src/plugins-user/
 
+# Local plans, runtime audit data, and generated outputs
+.plans/archive/
+configs/request-audit-analysis/
+configs/retry-audit/
+outputs/
+
