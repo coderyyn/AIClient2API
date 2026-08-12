@@ -77,6 +77,49 @@ describe('provider pool Redis coordination', () => {
         expect(coordinationOptions.affinityKey).toContain('prompt-cache:test');
     });
 
+    test('routes a globally hot Codex affinity request to the selected shard without replacing its base affinity', async () => {
+        const coordinator = {
+            recordHotRequest: jest.fn(async () => ({ count: 3 })),
+            acquire: jest.fn(async candidates => ({
+                leaseId: 'hot-lease',
+                providerType: candidates[0].providerType,
+                uuid: candidates[0].uuid
+            })),
+            release: jest.fn(async () => true)
+        };
+        const manager = new ProviderPoolManager({
+            'openai-codex-oauth': [
+                { uuid: 'codex-hot', isHealthy: true, usageCount: 500, concurrencyLimit: 2, lastKnownCodexPlan: 'pro' },
+                { uuid: 'codex-cold-a', isHealthy: true, usageCount: 1, concurrencyLimit: 2, lastKnownCodexPlan: 'pro' },
+                { uuid: 'codex-cold-b', isHealthy: true, usageCount: 2, concurrencyLimit: 2, lastKnownCodexPlan: 'pro' }
+            ]
+        }, {
+            coordination: coordinator,
+            persistenceEnabled: false,
+            globalConfig: {
+                CODEX_STICKY_HOT_SHARD_ENABLED: true,
+                CODEX_STICKY_HOT_SHARD_MIN_REQUESTS: 3,
+                CODEX_STICKY_HOT_SHARD_WINDOW_MS: 60000,
+                CODEX_STICKY_HOT_SHARD_MAX_SHARDS: 3
+            }
+        });
+
+        await requestContext.run({ requestId: 'request-hot-1' }, async () => {
+            await manager.acquireSlot('openai-codex-oauth', 'gpt-5.4', {
+                stickyProviderKey: 'session:hot',
+                shardDiscriminator: 'turn-1'
+            });
+        });
+
+        expect(coordinator.recordHotRequest).toHaveBeenCalledWith(
+            expect.stringContaining('session:hot'),
+            expect.objectContaining({ observationId: 'request-hot-1', windowMs: 60000 })
+        );
+        const [, coordinationOptions] = coordinator.acquire.mock.calls[0];
+        expect(coordinationOptions.affinityKey).toContain('session:hot');
+        expect(coordinationOptions.routedProviderKey).toMatch(/^openai-codex-oauth:codex-cold-/);
+    });
+
     test('mixed pools acquire one global lease without using local active counters', async () => {
         const coordinator = {
             acquire: jest.fn(async candidates => ({

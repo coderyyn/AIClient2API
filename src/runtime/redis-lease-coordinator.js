@@ -20,6 +20,7 @@ local candidates = cjson.decode(ARGV[5])
 local affinity_token = ARGV[8] or ''
 local affinity_key = affinity_token ~= '' and (KEYS[1] .. ':affinity:' .. affinity_token) or nil
 local affinity_provider_key = affinity_key and redis.call('GET', affinity_key) or nil
+local routed_provider_key = ARGV[10] or ''
 local boot_id = redis.call('GET', KEYS[1] .. ':recovery:boot')
 if not boot_id or boot_id ~= ARGV[7] then
   return cjson.encode({ coordinationRestarted = true, bootId = boot_id })
@@ -61,6 +62,22 @@ if affinity_candidate then
 elseif affinity_key and affinity_provider_key then
   redis.call('DEL', affinity_key)
 end
+local affinity_binding_key = best and best.key or nil
+if routed_provider_key ~= '' then
+  for _, candidate in ipairs(candidates) do
+    if candidate.key == routed_provider_key then
+      local routed_active_key = KEYS[1] .. ':active:' .. candidate.key
+      local routed_now_ms = tonumber(ARGV[6])
+      redis.call('ZREMRANGEBYSCORE', routed_active_key, '-inf', routed_now_ms)
+      local routed_active = tonumber(redis.call('ZCARD', routed_active_key) or '0')
+      local routed_limit = tonumber(candidate.concurrencyLimit or 0)
+      if routed_limit <= 0 or routed_active < routed_limit then
+        best = candidate
+      end
+      break
+    end
+  end
+end
 if best == nil then return nil end
 local active_key = KEYS[1] .. ':active:' .. best.key
 redis.call('ZADD', active_key, tonumber(ARGV[6]) + ttl_ms, lease_id)
@@ -70,7 +87,7 @@ redis.call('HSET', lease_key, 'epoch', epoch, 'providerKey', best.key, 'workerId
 redis.call('PEXPIRE', lease_key, ttl_ms)
 if affinity_key then
   if not affinity_provider_key or not affinity_candidate then
-    redis.call('SET', affinity_key, best.key, 'PX', tonumber(ARGV[9]))
+    redis.call('SET', affinity_key, affinity_binding_key or best.key, 'PX', tonumber(ARGV[9]))
   else
     redis.call('PEXPIRE', affinity_key, tonumber(ARGV[9]))
   end
@@ -156,6 +173,21 @@ local fence_key = KEYS[1] .. ':refresh-fence:' .. ARGV[1]
 return tonumber(redis.call('GET', fence_key) or '0') == tonumber(ARGV[2]) and 1 or 0
 `;
 
+const RECORD_HOT_REQUEST_SCRIPT = `
+local namespace = KEYS[1]
+local affinity_hash = ARGV[1]
+local observation_hash = ARGV[2]
+local now_ms = tonumber(ARGV[3])
+local window_ms = tonumber(ARGV[4])
+local ttl_ms = tonumber(ARGV[5])
+local hot_key = namespace .. ':hot:' .. affinity_hash
+local cutoff = now_ms - window_ms
+redis.call('ZREMRANGEBYSCORE', hot_key, '-inf', cutoff)
+redis.call('ZADD', hot_key, 'NX', now_ms, observation_hash)
+redis.call('PEXPIRE', hot_key, ttl_ms)
+return cjson.encode({ count = redis.call('ZCARD', hot_key), ttlMs = ttl_ms })
+`;
+
 function normalizeCandidate(candidate, priority) {
     const providerType = String(candidate.providerType || '');
     const uuid = String(candidate.uuid || '');
@@ -201,7 +233,7 @@ export class RedisLeaseCoordinator {
         }
     }
 
-    async acquire(candidates, { affinityKey = '' } = {}) {
+    async acquire(candidates, { affinityKey = '', routedProviderKey = '' } = {}) {
         if (!this.bootId || !this.ready || this.recovering) await this.synchronize();
         if (!this.ready || this.recovering) throw new CoordinationUnavailableError('Runtime coordination is recovering');
         const normalized = (candidates || []).map(normalizeCandidate).filter(item => item.providerType && item.uuid);
@@ -216,7 +248,8 @@ export class RedisLeaseCoordinator {
             String(Date.now()),
             this.bootId || '',
             hashAffinityKey(affinityKey),
-            String(this.affinityTtlMs)
+            String(this.affinityTtlMs),
+            String(routedProviderKey || '')
         ]);
         if (!result) return null;
         const lease = typeof result === 'string' ? JSON.parse(result) : result;
@@ -236,6 +269,24 @@ export class RedisLeaseCoordinator {
             providerKey: `${lease.providerType}:${lease.uuid}`
         });
         return lease;
+    }
+
+    async recordHotRequest(affinityKey, { observationId = '', now = Date.now(), windowMs = 60 * 60 * 1000, bucketMs = 10000 } = {}) {
+        const normalizedAffinityKey = String(affinityKey || '');
+        const normalizedObservationId = String(observationId || randomUUID());
+        if (!normalizedAffinityKey) return { count: 0 };
+        const safeWindowMs = Math.max(1000, Number(windowMs) || 60 * 60 * 1000);
+        const safeBucketMs = Math.max(1000, Math.min(safeWindowMs, Number(bucketMs) || 10000));
+        const ttlMs = safeWindowMs + (safeBucketMs * 2);
+        const result = await this._eval('record-hot-request', RECORD_HOT_REQUEST_SCRIPT, [
+            hashAffinityKey(normalizedAffinityKey),
+            hashAffinityKey(normalizedObservationId),
+            String(Number(now) || Date.now()),
+            String(safeWindowMs),
+            String(ttlMs)
+        ]);
+        const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+        return { count: Number(parsed?.count || 0), ttlMs };
     }
 
     async release(leaseId) {

@@ -10,17 +10,34 @@ class InMemoryRedisExecutor {
         this.bootId = 'boot-1';
         this.readyWorkers = new Set();
         this.affinity = new Map();
+        this.hotRequests = new Map();
+        this.scriptCalls = [];
     }
 
     async evalScript(name, _script, keys, args) {
         if (!this.available) throw new Error('redis unavailable');
+        this.scriptCalls.push({ name, keys, args });
+        if (name === 'record-hot-request') {
+            const [affinityHash, observationHash, nowMs, windowMs, ttlMs] = args;
+            const key = `${keys[0]}:hot:${affinityHash}`;
+            const cutoff = Number(nowMs) - Number(windowMs);
+            const observations = this.hotRequests.get(key) || new Map();
+            for (const [member, timestamp] of observations.entries()) {
+                if (timestamp <= cutoff) observations.delete(member);
+            }
+            if (!observations.has(observationHash)) {
+                observations.set(observationHash, Number(nowMs));
+            }
+            this.hotRequests.set(key, observations);
+            return JSON.stringify({ count: observations.size, ttlMs: Number(ttlMs) });
+        }
         if (name === 'acquire-provider-lease') {
-            const [epoch, leaseId, ttlMs, workerId, candidatesJson, _nowMs, observedBootId, affinityKey = ''] = args;
+            const [epoch, leaseId, ttlMs, workerId, candidatesJson, _nowMs, observedBootId, affinityKey = '', _affinityTtlMs, routedProviderKey = ''] = args;
             if (observedBootId !== this.bootId) return JSON.stringify({ coordinationRestarted: true, bootId: this.bootId });
             const candidates = JSON.parse(candidatesJson);
             const mappedKey = affinityKey ? this.affinity.get(affinityKey) : null;
             const mapped = mappedKey && candidates.find(candidate => candidate.key === mappedKey);
-            const selected = (mapped && (mapped.concurrencyLimit <= 0 || (this.active.get(mapped.key) || 0) < mapped.concurrencyLimit))
+            const baseSelected = (mapped && (mapped.concurrencyLimit <= 0 || (this.active.get(mapped.key) || 0) < mapped.concurrencyLimit))
                 ? mapped
                 : candidates
                 .filter(candidate => candidate.concurrencyLimit <= 0 || (this.active.get(candidate.key) || 0) < candidate.concurrencyLimit)
@@ -31,9 +48,15 @@ class InMemoryRedisExecutor {
                     if (activeDiff !== 0) return activeDiff;
                     return Number(a.priority || 0) - Number(b.priority || 0);
                 })[0];
+            const routed = routedProviderKey
+                ? candidates.find(candidate => candidate.key === routedProviderKey)
+                : null;
+            const selected = routed && (routed.concurrencyLimit <= 0 || (this.active.get(routed.key) || 0) < routed.concurrencyLimit)
+                ? routed
+                : baseSelected;
             if (!selected) return null;
             this.active.set(selected.key, (this.active.get(selected.key) || 0) + 1);
-            if (affinityKey && !mapped) this.affinity.set(affinityKey, selected.key);
+            if (affinityKey && !mapped && baseSelected) this.affinity.set(affinityKey, baseSelected.key);
             this.leases.set(leaseId, { epoch, providerKey: selected.key, workerId, ttlMs: Number(ttlMs) });
             return JSON.stringify({ leaseId, providerType: selected.providerType, uuid: selected.uuid });
         }
@@ -150,6 +173,81 @@ describe('RedisLeaseCoordinator', () => {
         await first.release(firstLease.leaseId);
         const recovered = await second.acquire(candidates, { affinityKey: 'session:one' });
         expect(recovered.uuid).toBe('affinity');
+    });
+
+    test('keeps the base affinity binding when a hot request is temporarily routed to a shard', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const candidates = [
+            { providerType: 'p', uuid: 'base', concurrencyLimit: 2, preferred: true },
+            { providerType: 'p', uuid: 'shard', concurrencyLimit: 2 }
+        ];
+
+        const routed = await coordinator.acquire(candidates, {
+            affinityKey: 'session:hot',
+            routedProviderKey: 'p:shard'
+        });
+
+        expect(routed.uuid).toBe('shard');
+        expect([...redis.affinity.values()]).toEqual(['p:base']);
+        await coordinator.release(routed.leaseId);
+        const base = await coordinator.acquire(candidates, { affinityKey: 'session:hot' });
+        expect(base.uuid).toBe('base');
+    });
+
+    test('counts one hot affinity request globally across workers and deduplicates retries', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const first = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const second = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w2' });
+
+        await expect(first.recordHotRequest('session:secret', {
+            observationId: 'request-1',
+            now: 1000,
+            windowMs: 60000
+        })).resolves.toMatchObject({ count: 1 });
+        await expect(second.recordHotRequest('session:secret', {
+            observationId: 'request-1',
+            now: 1001,
+            windowMs: 60000
+        })).resolves.toMatchObject({ count: 1 });
+        await expect(second.recordHotRequest('session:secret', {
+            observationId: 'request-2',
+            now: 1002,
+            windowMs: 60000
+        })).resolves.toMatchObject({ count: 2 });
+
+        const calls = redis.scriptCalls.filter(call => call.name === 'record-hot-request');
+        expect(calls).toHaveLength(3);
+        expect(JSON.stringify(calls)).not.toContain('session:secret');
+        expect(JSON.stringify(calls)).not.toContain('request-1');
+    });
+
+    test('expires hot request observations outside the configured window', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+
+        await coordinator.recordHotRequest('session:one', {
+            observationId: 'old-request',
+            now: 1000,
+            windowMs: 10000
+        });
+        const result = await coordinator.recordHotRequest('session:one', {
+            observationId: 'new-request',
+            now: 11001,
+            windowMs: 10000
+        });
+
+        expect(result.count).toBe(1);
+    });
+
+    test('fails closed when global hot request counting cannot reach Redis', async () => {
+        const redis = new InMemoryRedisExecutor();
+        redis.available = false;
+        const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+
+        await expect(coordinator.recordHotRequest('session:one', {
+            observationId: 'request-1'
+        })).rejects.toBeInstanceOf(CoordinationUnavailableError);
     });
 
 

@@ -679,6 +679,35 @@ export class ProviderPoolManager {
         return { count, config };
     }
 
+    _getCodexHotObservationId(stickyProviderKey, options = {}) {
+        if (options.hotRequestObservationId) return String(options.hotRequestObservationId);
+        const store = requestContext.getStore();
+        if (store.requestId) return String(store.requestId);
+        store.codexHotObservationIds = store.codexHotObservationIds || new Map();
+        if (!store.codexHotObservationIds.has(stickyProviderKey)) {
+            store.codexHotObservationIds.set(
+                stickyProviderKey,
+                `selection:${crypto.randomUUID()}`
+            );
+        }
+        return store.codexHotObservationIds.get(stickyProviderKey);
+    }
+
+    async _getCodexStickyHotRequestCount(stickyProviderKey, options = {}, now = Date.now()) {
+        const config = this._getCodexStickyHotShardConfig();
+        if (!config.enabled) return { count: 0, config };
+        if (this.coordination?.recordHotRequest) {
+            const result = await this.coordination.recordHotRequest(stickyProviderKey, {
+                observationId: this._getCodexHotObservationId(stickyProviderKey, options),
+                now,
+                windowMs: config.windowMs,
+                bucketMs: Math.min(CODEX_HOT_KEY_BUCKET_MS, Math.max(1000, config.windowMs))
+            });
+            return { count: Number(result?.count || 0), config };
+        }
+        return this._recordCodexStickyHotRequest(stickyProviderKey, now);
+    }
+
     _getCodexHotShardCount(requestCount, providerCount, config) {
         if (!config.enabled || providerCount < 2 || requestCount < config.minRequests) {
             return 1;
@@ -844,12 +873,16 @@ export class ProviderPoolManager {
         });
     }
 
-    _selectCodexHotShardProvider(providers, providerType, requestedModel, options, now) {
+    async _selectCodexHotShardProvider(providers, providerType, requestedModel, options, now) {
         if (!options.stickyProviderKey || !isCodexProviderType(providerType)) {
             return null;
         }
 
-        const { count, config } = this._recordCodexStickyHotRequest(options.stickyProviderKey, now);
+        const { count, config } = await this._getCodexStickyHotRequestCount(
+            `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`,
+            options,
+            now
+        );
         const shardCount = this._getCodexHotShardCount(count, providers.length, config);
         if (shardCount <= 1) {
             return null;
@@ -2114,13 +2147,23 @@ export class ProviderPoolManager {
      */
     async acquireSlot(providerType, requestedModel = null, options = {}) {
         if (this.coordination) {
+            const healthyProviders = this._getHealthyProvidersForType(providerType, requestedModel, options);
             const ordered = this._orderCoordinatedCandidates(
-                this._getHealthyProvidersForType(providerType, requestedModel, options),
+                healthyProviders,
                 providerType,
                 requestedModel,
                 options
             );
             const hasStickyAffinity = Boolean(options.stickyProviderKey) && isCodexProviderType(providerType);
+            const hotShardProvider = hasStickyAffinity
+                ? await this._selectCodexHotShardProvider(
+                    healthyProviders,
+                    providerType,
+                    requestedModel,
+                    options,
+                    Date.now()
+                )
+                : null;
             const candidates = ordered.map((provider, index) => ({
                     providerType,
                     uuid: provider.uuid || provider.config?.uuid,
@@ -2129,7 +2172,10 @@ export class ProviderPoolManager {
                 }));
             const lease = hasStickyAffinity
                 ? await this.coordination.acquire(candidates, {
-                    affinityKey: `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
+                    affinityKey: `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`,
+                    routedProviderKey: hotShardProvider
+                        ? `${providerType}:${hotShardProvider.uuid || hotShardProvider.config?.uuid}`
+                        : ''
                 })
                 : await this.coordination.acquire(candidates);
             if (!lease) return null;
@@ -2282,8 +2328,8 @@ export class ProviderPoolManager {
         this._isSelecting[providerType] = true;
         
         try {
-            // 在锁内部执行同步选择
-            return this._doSelectProvider(providerType, requestedModel, attemptOptions);
+            // 在锁内部串行执行选择；Redis 热度统计可能需要异步协调
+            return await this._doSelectProvider(providerType, requestedModel, attemptOptions);
         } finally {
             this._isSelecting[providerType] = false;
             if (callerDiagnostics && attemptDiagnostics) {
@@ -2317,10 +2363,10 @@ export class ProviderPoolManager {
     }
 
     /**
-     * 实际执行 provider 选择的内部方法（同步执行，由锁保护）
+     * 实际执行 provider 选择的内部方法（由锁保护）
      * @private
      */
-    _doSelectProvider(providerType, requestedModel, options) {
+    async _doSelectProvider(providerType, requestedModel, options) {
         const availableProviders = this.providerStatus[providerType] || [];
         const selectionDiagnostics = options.selectionDiagnostics;
         if (selectionDiagnostics) {
@@ -2448,7 +2494,7 @@ export class ProviderPoolManager {
                 requestedModel
             );
         } else if (!selected && options.stickyProviderKey && isCodexProviderType(providerType)) {
-            selected = this._selectCodexHotShardProvider(
+            selected = await this._selectCodexHotShardProvider(
                 availableAndHealthyProviders,
                 providerType,
                 requestedModel,
