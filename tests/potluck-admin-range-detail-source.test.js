@@ -134,6 +134,59 @@ describe('API Potluck admin range and key detail UI source', () => {
         expect(block).not.toContain('其他账号');
     });
 
+    test('admin provider account view uses dynamic tabs with Codex-first selection and stable fallback', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('let selectedProviderAccountName = null');
+        expect(source).toContain('function getProviderDisplayName(providerName)');
+        expect(source).toContain("'openai-codex-oauth': 'Codex'");
+        expect(source).toContain("'gemini-antigravity': 'Gemini'");
+        expect(source).toContain('function resolveSelectedProviderAccountName(providers)');
+        expect(source).toContain("providers.find(provider => provider.name === 'openai-codex-oauth')");
+        expect(source).toContain('providers.some(provider => provider.name === selectedProviderAccountName)');
+        expect(source).toContain('function selectProviderAccount(providerName)');
+        expect(source).toContain('selectedProviderAccountName = providerName');
+        expect(source).toContain("container.querySelector('.provider-account-tab[aria-selected=\"true\"]')?.focus()");
+        expect(source).toContain('renderProviderAccountTokenTree(');
+        expect(source).toContain('provider-account-tabs');
+        expect(source).toContain('provider-account-panel');
+
+        const renderStart = source.indexOf('function renderProviderAccountTokenTree(elementId, providers, accounts, totalTokens)');
+        expect(renderStart).toBeGreaterThanOrEqual(0);
+        const renderEnd = source.indexOf('function renderDistribution', renderStart);
+        expect(renderEnd).toBeGreaterThan(renderStart);
+        const renderBlock = source.slice(renderStart, renderEnd);
+
+        expect(renderBlock).toContain('.filter(provider => usageTokens(provider.summary) > 0)');
+        expect(renderBlock).toContain('const selectedProviderName = resolveSelectedProviderAccountName(sorted)');
+        expect(renderBlock).toContain('const selectedProvider = sorted.find(provider => provider.name === selectedProviderName)');
+        expect(renderBlock).toContain('getProviderDisplayName(provider.name)');
+        expect(renderBlock).toContain('provider.accounts.length');
+        expect(renderBlock).toContain('formatPercentShare(providerTokens, denominator)');
+        expect(renderBlock).toContain('renderProviderAccountRows(selectedProvider)');
+        expect(renderBlock).not.toContain('const topData = sorted.slice(0, 5)');
+        expect(renderBlock).not.toContain('其他 Provider');
+    });
+
+    test('admin provider tabs expose accessible selection and keyboard navigation', () => {
+        const source = loadPotluckSource();
+
+        expect(source).toContain('role="tablist"');
+        expect(source).toContain('role="tab"');
+        expect(source).toContain('aria-selected="${selected}"');
+        expect(source).toContain('aria-controls="providerAccountPanel"');
+        expect(source).toContain('role="tabpanel"');
+        expect(source).toContain('id="providerAccountPanel"');
+        expect(source).toContain('function handleProviderAccountTabKeydown(event, providerName)');
+        expect(source).toContain("event.key === 'ArrowRight'");
+        expect(source).toContain("event.key === 'ArrowLeft'");
+        expect(source).toContain("event.key === 'Home'");
+        expect(source).toContain("event.key === 'End'");
+        expect(source).not.toContain("document.querySelector('.provider-account-tab[aria-selected=\"true\"]')?.focus()");
+        expect(source).toContain('overflow-x: auto');
+        expect(source).toContain('.provider-account-tab:focus-visible');
+    });
+
     test('admin dashboard scopes value conversion controls to the key list and 35 day key detail history', () => {
         const source = loadPotluckSource();
 

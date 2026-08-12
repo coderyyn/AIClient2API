@@ -181,6 +181,45 @@
             border-radius: var(--radius-full);
         }
         .provider-account-tree { gap: 12px; }
+        .provider-account-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding: 2px 1px 6px;
+            overflow-x: auto;
+            scrollbar-width: thin;
+        }
+        .provider-account-tab {
+            flex: 0 0 auto;
+            min-height: 34px;
+            padding: 7px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .provider-account-tab:hover {
+            color: var(--primary-color);
+            border-color: var(--primary-30);
+            background: var(--primary-10);
+        }
+        .provider-account-tab[aria-selected="true"] {
+            color: #ffffff;
+            border-color: var(--primary-color);
+            background: var(--primary-color);
+            box-shadow: var(--shadow-sm);
+        }
+        .provider-account-tab:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+        .provider-account-panel { min-width: 0; }
         .provider-account-node {
             padding: 14px 14px 12px;
             background: linear-gradient(180deg, rgba(255,255,255,0.9), var(--bg-primary));
@@ -1513,6 +1552,8 @@
         let currentStats = null;
         let currentUsageRange = '7d';
         let currentCustomRange = { from: '', to: '' };
+        let selectedProviderAccountName = null;
+        let providerAccountViewState = { elementId: null, providers: {}, accounts: {}, totalTokens: 0 };
         let currentRangeBounds = { from: '', to: '' };
         const ACTUAL_VALUE_MODE = 'actual';
         let currentConversionModel = ACTUAL_VALUE_MODE;
@@ -2475,6 +2516,63 @@
                 .sort((a, b) => usageTokens(b.summary) - usageTokens(a.summary));
         }
 
+        function getProviderDisplayName(providerName) {
+            const labels = {
+                'openai-codex-oauth': 'Codex',
+                'gemini-antigravity': 'Gemini'
+            };
+            return labels[providerName] || providerName;
+        }
+
+        function orderProviderAccountTabs(providers) {
+            return providers.slice().sort((a, b) => {
+                if (a.name === 'openai-codex-oauth') return -1;
+                if (b.name === 'openai-codex-oauth') return 1;
+                return usageTokens(b.summary) - usageTokens(a.summary);
+            });
+        }
+
+        function resolveSelectedProviderAccountName(providers) {
+            if (providers.some(provider => provider.name === selectedProviderAccountName)) {
+                return selectedProviderAccountName;
+            }
+            const codexProvider = providers.find(provider => provider.name === 'openai-codex-oauth');
+            selectedProviderAccountName = codexProvider?.name || providers[0]?.name || null;
+            return selectedProviderAccountName;
+        }
+
+        function selectProviderAccount(providerName) {
+            if (!providerAccountViewState.elementId) return;
+            selectedProviderAccountName = providerName;
+            renderProviderAccountTokenTree(
+                providerAccountViewState.elementId,
+                providerAccountViewState.providers,
+                providerAccountViewState.accounts,
+                providerAccountViewState.totalTokens
+            );
+            const container = document.getElementById(providerAccountViewState.elementId);
+            container.querySelector('.provider-account-tab[aria-selected="true"]')?.focus();
+        }
+
+        function handleProviderAccountTabKeydown(event, providerName) {
+            const providers = orderProviderAccountTabs(buildProviderAccountTokenTree(
+                providerAccountViewState.providers,
+                providerAccountViewState.accounts
+            )).filter(provider => usageTokens(provider.summary) > 0);
+            const currentIndex = providers.findIndex(provider => provider.name === providerName);
+            if (currentIndex < 0) return;
+
+            let nextIndex = currentIndex;
+            if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % providers.length;
+            else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + providers.length) % providers.length;
+            else if (event.key === 'Home') nextIndex = 0;
+            else if (event.key === 'End') nextIndex = providers.length - 1;
+            else return;
+
+            event.preventDefault();
+            selectProviderAccount(providers[nextIndex].name);
+        }
+
         function rollupProviderCostFromAccounts(provider) {
             if (!provider?.accounts?.length) return provider;
             const cost = { actualUsd: 0, convertedUsd: 0, missingPriceTokens: 0 };
@@ -2521,7 +2619,9 @@
 
         function renderProviderAccountTokenTree(elementId, providers, accounts, totalTokens) {
             const container = document.getElementById(elementId);
-            const sorted = buildProviderAccountTokenTree(providers, accounts);
+            providerAccountViewState = { elementId, providers, accounts, totalTokens };
+            const sorted = orderProviderAccountTabs(buildProviderAccountTokenTree(providers, accounts))
+                .filter(provider => usageTokens(provider.summary) > 0);
             const denominator = Number(totalTokens || 0);
 
             if (denominator <= 0 || sorted.length === 0) {
@@ -2529,52 +2629,45 @@
                 return;
             }
 
-            const topData = sorted.slice(0, 5);
-            container.innerHTML = topData.map(provider => {
-                const calls = usageCount(provider.summary);
+            const selectedProviderName = resolveSelectedProviderAccountName(sorted);
+            const selectedProvider = sorted.find(provider => provider.name === selectedProviderName);
+            const selectedIndex = sorted.findIndex(provider => provider.name === selectedProviderName);
+            const providerTokens = usageTokens(selectedProvider.summary);
+            const calls = usageCount(selectedProvider.summary);
+            const percentText = formatPercentShare(providerTokens, denominator);
+            const barWidth = Math.max(1, Math.min(100, (providerTokens / denominator) * 100));
+
+            const tabs = sorted.map((provider, index) => {
+                const selected = provider.name === selectedProviderName;
                 const tokens = usageTokens(provider.summary);
-                const percentText = formatPercentShare(tokens, denominator);
-                const barWidth = Math.max(1, Math.min(100, (tokens / denominator) * 100));
-                return `
+                const share = formatPercentShare(tokens, denominator);
+                return `<button class="provider-account-tab" type="button" role="tab" id="providerAccountTab${index}" aria-selected="${selected}" aria-controls="providerAccountPanel" tabindex="${selected ? 0 : -1}">${escapeHtml(getProviderDisplayName(provider.name))} · ${provider.accounts.length} · ${share}</button>`;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="provider-account-tabs" role="tablist" aria-label="Provider 账号用量">${tabs}</div>
+                <div class="provider-account-panel" id="providerAccountPanel" role="tabpanel" aria-labelledby="providerAccountTab${selectedIndex}">
                     <div class="distribution-item provider-account-node">
                         <div class="dist-info">
-                            <span class="dist-name" title="${escapeHtml(provider.name)}">${escapeHtml(provider.name)}</span>
-                            <span class="dist-count">${formatTokenCompact(tokens)} Tokens (${percentText})${provider.summary?.cost ? ` · ${formatDisplayCost(provider.summary.cost)}` : ''}</span>
+                            <span class="dist-name" title="${escapeHtml(selectedProvider.name)}">${escapeHtml(selectedProvider.name)}</span>
+                            <span class="dist-count">${formatTokenCompact(providerTokens)} Tokens (${percentText})${selectedProvider.summary?.cost ? ` · ${formatDisplayCost(selectedProvider.summary.cost)}` : ''}</span>
                         </div>
                         <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(calls)} 次${provider.accounts.length ? ` · ${provider.accounts.length} 个账号` : ''}</span>
+                            <span class="dist-count">${formatNumber(calls)} 次${selectedProvider.accounts.length ? ` · ${selectedProvider.accounts.length} 个账号` : ''}</span>
                         </div>
                         <div class="dist-bar">
                             <div class="dist-fill" style="width: ${barWidth}%"></div>
                         </div>
-                        ${renderProviderAccountRows(provider)}
+                        ${renderProviderAccountRows(selectedProvider)}
                     </div>
-                `;
-            }).join('');
+                </div>
+            `;
 
-            if (sorted.length > 5) {
-                const other = sorted.slice(5).reduce((sum, provider) => {
-                    sum.calls += usageCount(provider.summary);
-                    sum.tokens += usageTokens(provider.summary);
-                    return sum;
-                }, { calls: 0, tokens: 0 });
-                const percentText = formatPercentShare(other.tokens, denominator);
-                const barWidth = Math.max(1, Math.min(100, (other.tokens / denominator) * 100));
-                container.innerHTML += `
-                    <div class="distribution-item provider-account-node">
-                        <div class="dist-info">
-                            <span class="dist-name" style="font-style: italic;">其他 Provider (${sorted.length - 5} 个)</span>
-                            <span class="dist-count">${formatTokenCompact(other.tokens)} Tokens (${percentText})</span>
-                        </div>
-                        <div class="dist-info" style="margin-top: -2px;">
-                            <span class="dist-count">${formatNumber(other.calls)} 次</span>
-                        </div>
-                        <div class="dist-bar">
-                            <div class="dist-fill" style="width: ${barWidth}%; background: #94a3b8;"></div>
-                        </div>
-                    </div>
-                `;
-            }
+            container.querySelectorAll('.provider-account-tab').forEach((tab, index) => {
+                const providerName = sorted[index].name;
+                tab.addEventListener('click', () => selectProviderAccount(providerName));
+                tab.addEventListener('keydown', event => handleProviderAccountTabKeydown(event, providerName));
+            });
         }
 
         function renderDistribution(elementId, data, total, options = {}) {
