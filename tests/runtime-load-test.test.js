@@ -7,7 +7,8 @@ import {
     parseMemInfo,
     parseWindowsMemory,
     shouldStopAfterStage,
-    summarizeSamples
+    summarizeSamples,
+    waitForRuntimeMetricsAdvance
 } from '../scripts/runtime/runtime-load-test.js';
 
 describe('runtime load test helpers', () => {
@@ -88,6 +89,23 @@ describe('runtime load test helpers', () => {
             output: { bytes: 800, backpressureMs: 5 },
             process: { eventLoopDelay: { p95: 15, p99: 22, max: 30 }, maxEventLoopUtilization: 0.4 }
         });
+    });
+
+    test('waits for a newer worker metrics snapshot before calculating stage deltas', async () => {
+        const snapshots = [
+            { requests: { total: 10 } },
+            { requests: { total: 10 } },
+            { requests: { total: 11 } }
+        ];
+        const fetchSnapshot = jest.fn(async () => snapshots.shift() || null);
+        const wait = jest.fn(async () => {});
+
+        await expect(waitForRuntimeMetricsAdvance(
+            { requests: { total: 10 } },
+            { fetchSnapshot, wait, timeoutMs: 1000, pollMs: 10 }
+        )).resolves.toEqual({ requests: { total: 11 } });
+        expect(fetchSnapshot).toHaveBeenCalledTimes(3);
+        expect(wait).toHaveBeenCalledTimes(2);
     });
 
     test('stops after data corruption, repeated 429, resource pressure, or latency collapse', () => {

@@ -296,13 +296,31 @@ async function runStage(kind, concurrency, options) {
     const sampler = startResourceSampler(options);
     const samples = await Promise.all(Array.from({ length: concurrency }, (_, index) => runner(options, index + 1)));
     const resources = await sampler.stop();
-    const runtimeAfter = await fetchRuntimeMetrics(options);
+    const runtimeAfter = runtimeBefore
+        ? await waitForRuntimeMetricsAdvance(runtimeBefore, { fetchSnapshot: () => fetchRuntimeMetrics(options) })
+        : await fetchRuntimeMetrics(options);
     const runtime = runtimeBefore && runtimeAfter ? diffRuntimeMetrics(runtimeBefore, runtimeAfter) : null;
     return { ...summarizeSamples(samples, Date.now() - startedAt), concurrency, resources, runtime, samples };
 }
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function waitForRuntimeMetricsAdvance(before, options) {
+    const fetchSnapshot = options.fetchSnapshot;
+    const wait = options.wait || sleep;
+    const timeoutMs = Math.max(0, Number(options.timeoutMs ?? 6500));
+    const pollMs = Math.max(1, Number(options.pollMs ?? 250));
+    const attempts = Math.max(1, Math.ceil(timeoutMs / pollMs) + 1);
+    const beforeTotal = Number(before?.requests?.total || 0);
+    let latest = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        latest = await fetchSnapshot();
+        if (!latest || Number(latest.requests?.total || 0) > beforeTotal) return latest;
+        if (attempt < attempts - 1) await wait(pollMs);
+    }
+    return latest;
 }
 
 async function fetchRuntimeMetrics(options) {
