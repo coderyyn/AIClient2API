@@ -1,4 +1,4 @@
-import { performance } from 'perf_hooks';
+import { monitorEventLoopDelay, performance } from 'perf_hooks';
 
 function percentile(values, percentage) {
     if (values.length === 0) return 0;
@@ -20,6 +20,8 @@ function summarize(values) {
 export class RuntimeMetrics {
     constructor(options = {}) {
         this.now = options.now || (() => performance.now());
+        this.eventLoopDelay = options.eventLoopDelay || monitorEventLoopDelay({ resolution: 20 });
+        this.eventLoopDelay.enable?.();
         this.sampleProcess = options.sampleProcess || (() => {
             const memory = process.memoryUsage();
             return {
@@ -64,15 +66,23 @@ export class RuntimeMetrics {
     snapshot() {
         const stages = {};
         for (const [name, samples] of this.stageSamples.entries()) stages[name] = summarize(samples);
+        const eventLoopDelay = {
+            p95: Number(this.eventLoopDelay.percentile?.(95) || 0) / 1e6,
+            p99: Number(this.eventLoopDelay.percentile?.(99) || 0) / 1e6,
+            max: Number(this.eventLoopDelay.max || 0) / 1e6
+        };
+        this.eventLoopDelay.reset?.();
         return {
             requests: structuredClone(this.requests),
             stages,
             output: { ...this.output },
             inFlight: this.inFlight,
-            process: this.sampleProcess()
+            process: {
+                ...this.sampleProcess(),
+                eventLoopDelay
+            }
         };
     }
 }
 
 export const runtimeMetrics = new RuntimeMetrics();
-

@@ -128,6 +128,7 @@ import 'dotenv/config'; // Import dotenv and configure it
 import '../converters/register-converters.js'; // 注册所有转换器
 import { getProviderPoolManager } from './service-manager.js';
 import { isRetryableNetworkError } from '../utils/common.js';
+import { runtimeMetrics } from '../runtime/runtime-metrics.js';
 
 // 检测是否作为子进程运行
 const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
@@ -140,6 +141,7 @@ let serverInstance = null;
 let codexPrewarmService = null;
 let usageCacheAutoRefreshService = null;
 let heartbeatTimerId = null;
+let runtimeMetricsTimerId = null;
 let startupPromise = Promise.resolve();
 const requestActivityTracker = createAsyncActivityTracker();
 const heartbeatActivityTracker = createAsyncActivityTracker();
@@ -191,6 +193,13 @@ async function stopBackgroundServices() {
             heartbeatTimerId = null;
         }
         await heartbeatActivityTracker.waitForIdle();
+    });
+
+    await stopOne('runtime metrics reporting', async () => {
+        if (runtimeMetricsTimerId) {
+            clearInterval(runtimeMetricsTimerId);
+            runtimeMetricsTimerId = null;
+        }
     });
 
     await stopOne('provider refresh queue', async () => {
@@ -522,6 +531,11 @@ async function startServer() {
             logger.info(`[Runtime] Coordination recovery barrier ready: ${coordinationStatus.readyWorkers}/${runtimeCoordination.expectedWorkers}`);
         }
         if (IS_WORKER_PROCESS) {
+            sendToMaster({ type: 'runtime_metrics', snapshot: runtimeMetrics.snapshot() });
+            runtimeMetricsTimerId = setInterval(() => {
+                sendToMaster({ type: 'runtime_metrics', snapshot: runtimeMetrics.snapshot() });
+            }, 5000);
+            runtimeMetricsTimerId.unref?.();
             sendToMaster({ type: 'ready', pid: process.pid });
         }
                 finishStartup();

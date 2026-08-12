@@ -23,7 +23,7 @@ describe('runtime proxy', () => {
         proxy = http.createServer(createRuntimeProxyHandler({
             controlTarget: { host: '127.0.0.1', port: controlPort },
             executionTargets: [{ host: '127.0.0.1', port: executionPort }],
-            getRuntimeStatus: () => ({ status: 'healthy', executionWorkers: 3, persistenceBacklog: 0 })
+            getRuntimeStatus: () => ({ status: 'healthy', executionWorkers: 3, persistenceBacklog: 0, metrics: { inFlight: 2 } })
         }));
         proxyPort = await listen(proxy);
     });
@@ -42,6 +42,6 @@ describe('runtime proxy', () => {
     test('serves runtime topology health from the master without involving a worker', async () => {
         const response = await fetch(`http://127.0.0.1:${proxyPort}/runtime/health`);
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toMatchObject({ status: 'healthy', executionWorkers: 3, persistenceBacklog: 0 });
+        await expect(response.json()).resolves.toMatchObject({ status: 'healthy', executionWorkers: 3, persistenceBacklog: 0, metrics: { inFlight: 2 } });
     });
 });

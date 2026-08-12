@@ -3,6 +3,7 @@ import {
     fingerprintCredentialManifest
 } from '../src/runtime/credential-manifest.js';
 import { RuntimeMetrics } from '../src/runtime/runtime-metrics.js';
+import { aggregateWorkerMetrics } from '../src/runtime/multi-worker-runtime.js';
 import { Readable } from 'stream';
 import requestContext from '../src/utils/context.js';
 import { getRequestBody } from '../src/utils/common.js';
@@ -53,8 +54,15 @@ describe('runtime observability baseline', () => {
 
     test('runtime metrics report request stages and process pressure without payloads', () => {
         let now = 100;
+        const eventLoopDelay = {
+            max: 25_000_000,
+            percentile: value => value === 95 ? 12_000_000 : 20_000_000,
+            enable: jest.fn(),
+            reset: jest.fn()
+        };
         const metrics = new RuntimeMetrics({
             now: () => now,
+            eventLoopDelay,
             sampleProcess: () => ({ rss: 1000, heapUsed: 500, eventLoopUtilization: 0.25 })
         });
         const request = metrics.beginRequest({ workerId: 'execution-1', kind: 'image' });
@@ -79,6 +87,8 @@ describe('runtime observability baseline', () => {
         expect(snapshot.output.bytes).toBe(4096);
         expect(snapshot.output.backpressureMs).toBe(7);
         expect(snapshot.process.rss).toBe(1000);
+        expect(snapshot.process.eventLoopDelay).toEqual({ p95: 12, p99: 20, max: 25 });
+        expect(eventLoopDelay.reset).toHaveBeenCalledTimes(1);
         expect(JSON.stringify(snapshot)).not.toContain('requestBody');
     });
 
@@ -94,5 +104,30 @@ describe('runtime observability baseline', () => {
 
         await expect(parsed).resolves.toEqual({ ok: true });
         expect(marks).toContain('bodyParsed');
+    });
+
+    test('aggregates worker request distribution and pressure without payloads', () => {
+        const snapshots = new Map([
+            ['execution-1', {
+                requests: { total: 5, success: 4, failed: 1, byWorker: { 'execution-1': 5 }, byKind: { model: 3, image: 2 } },
+                output: { bytes: 100, backpressureMs: 7 },
+                inFlight: 2,
+                process: { rss: 1000, heapUsed: 500, eventLoopUtilization: 0.2, eventLoopDelay: { p95: 12, p99: 20, max: 25 } }
+            }],
+            ['execution-2', {
+                requests: { total: 7, success: 7, failed: 0, byWorker: { 'execution-2': 7 }, byKind: { model: 7 } },
+                output: { bytes: 200, backpressureMs: 3 },
+                inFlight: 1,
+                process: { rss: 1200, heapUsed: 600, eventLoopUtilization: 0.3, eventLoopDelay: { p95: 15, p99: 22, max: 30 } }
+            }]
+        ]);
+
+        expect(aggregateWorkerMetrics(snapshots)).toEqual({
+            requests: { total: 12, success: 11, failed: 1, byWorker: { 'execution-1': 5, 'execution-2': 7 }, byKind: { model: 10, image: 2 } },
+            output: { bytes: 300, backpressureMs: 10 },
+            inFlight: 3,
+            process: { rss: 2200, heapUsed: 1100, maxEventLoopUtilization: 0.3, eventLoopDelay: { p95: 15, p99: 22, max: 30 } }
+        });
+        expect(JSON.stringify(aggregateWorkerMetrics(snapshots))).not.toMatch(/prompt|imageData|credential/i);
     });
 });
