@@ -29,6 +29,12 @@ export { broadcastEvent, initializeUIManagement, handleUploadOAuthCredentials, u
  * @param {http.ServerResponse} res - The HTTP response object
  */
 export async function serveStaticFiles(pathParam, res) {
+    if (pathParam === '/favicon.ico') {
+        res.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
+        res.end('');
+        return true;
+    }
+
     // 1. 尝试从系统 static 目录服务
     let filePath = path.join(process.cwd(), 'static', pathParam === '/' || pathParam === '/index.html' ? 'index.html' : pathParam.replace('/static/', ''));
 
