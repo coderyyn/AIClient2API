@@ -313,7 +313,9 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
 
     configSelects.forEach(select => {
         const key = select.dataset.configKey;
-        providerConfig[key] = key === 'PROXY_ID' ? select.value : select.value === 'true';
+        providerConfig[key] = (key === 'PROXY_ID' || key === 'codexFingerprintMode')
+            ? select.value
+            : select.value === 'true';
     });
 
     if (usesManagedModelList(providerType)) {
@@ -1318,6 +1320,32 @@ function renderProviderConfig(provider) {
     
     // 先渲染基础配置字段（customName、checkModelName 和 checkHealth）
     let html = '<div class="form-grid">';
+
+    // Codex 指纹配置之外的运行时状态只读展示；不渲染原始 ID/token。
+    if (currentProviderType === 'openai-codex-oauth') {
+        const mode = provider.codexFingerprintMode || 'session';
+        const globalEnabled = window.currentSafeConfig?.CODEX_FINGERPRINT_ENABLED !== false;
+        const migrated = provider.codexFingerprintMigrated === true;
+        const audit = provider.codexFingerprintAudit && typeof provider.codexFingerprintAudit === 'object'
+            ? provider.codexFingerprintAudit : {};
+        const rewrittenAt = audit.rewrittenAt || t('modal.provider.codexFingerprintNever');
+        const result = audit.rewritten === true
+            ? t('modal.provider.codexFingerprintRewritten')
+            : (audit.rewritten === false ? t('modal.provider.codexFingerprintPreserved') : t('modal.provider.codexFingerprintNever'));
+        html += `
+            <div class="form-grid full-width codex-fingerprint-status" data-codex-fingerprint-status="true">
+                <div class="config-item">
+                    <label>${escapeHtml(t('modal.provider.codexFingerprintStatus'))}</label>
+                    <div class="form-text">
+                        ${escapeHtml(t('modal.provider.codexFingerprintMode'))}: <strong>${escapeHtml(mode)}</strong>
+                        · ${escapeHtml(t('modal.provider.codexFingerprintGlobal'))}: <strong>${escapeHtml(globalEnabled ? t('modal.provider.codexFingerprintOn') : t('modal.provider.codexFingerprintOffStatus'))}</strong>
+                        · ${escapeHtml(t('modal.provider.codexFingerprintMigrated'))}: <strong>${escapeHtml(migrated ? t('modal.provider.codexFingerprintYes') : t('modal.provider.codexFingerprintNo'))}</strong>
+                        · ${escapeHtml(t('modal.provider.codexFingerprintRewrittenAt'))}: <strong>${escapeHtml(String(rewrittenAt))}</strong>
+                        · ${escapeHtml(t('modal.provider.codexFingerprintLastResult'))}: <strong>${escapeHtml(result)}</strong>
+                    </div>
+                </div>
+            </div>`;
+    }
     const baseFields = getProviderBaseFields(currentProviderType);
     
     baseFields.forEach(fieldKey => {
@@ -1392,6 +1420,17 @@ function renderProviderConfig(provider) {
         
         if (field1Def.type === 'proxy-select') {
             html += renderProxySelectField(field1Key, field1Label, field1Value, true);
+        } else if (field1Def.type === 'select') {
+            const actualValue = field1Value || field1Def.value || 'session';
+            html += `
+                <div class="config-item">
+                    <label>${field1Label}</label>
+                    <select class="form-control" data-config-key="${field1Key}" data-config-value="${actualValue}" disabled>
+                        ${(field1Def.options || []).map(option => `<option value="${option.value}" ${actualValue === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
+                    </select>
+                    ${field1Def.help ? `<small class="form-text">${field1Def.help}</small>` : ''}
+                </div>
+            `;
         } else if (field1Def.type === 'boolean') {
             const actualValue = field1Value !== undefined ? field1Value : false;
             const isEnabled = actualValue === true || actualValue === 'true';
@@ -1471,6 +1510,17 @@ function renderProviderConfig(provider) {
             
             if (field2Def.type === 'proxy-select') {
                 html += renderProxySelectField(field2Key, field2Label, field2Value, true);
+            } else if (field2Def.type === 'select') {
+                const actualValue = field2Value || field2Def.value || 'session';
+                html += `
+                    <div class="config-item">
+                        <label>${field2Label}</label>
+                        <select class="form-control" data-config-key="${field2Key}" data-config-value="${actualValue}" disabled>
+                            ${(field2Def.options || []).map(option => `<option value="${option.value}" ${actualValue === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
+                        </select>
+                        ${field2Def.help ? `<small class="form-text">${field2Def.help}</small>` : ''}
+                    </div>
+                `;
             } else if (field2Def.type === 'boolean') {
                 const actualValue = field2Value !== undefined ? field2Value : false;
                 const isEnabled = actualValue === true || actualValue === 'true';
@@ -1621,6 +1671,9 @@ function getFieldOrder(provider) {
         'codexAccountKey',
         'codexAccountId',
         'codexEmail',
+        'codexFingerprintVersion',
+        'codexFingerprintMigrated',
+        'codexFingerprintAudit',
         'accountIdentity',
         'providerUuids',
         'weight'
@@ -2111,6 +2164,17 @@ function addDynamicConfigFields(form, providerType) {
                         <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
                     </div>
                 `;
+            } else if (field1.type === 'select') {
+                const selected = field1.value || 'session';
+                fields += `
+                    <div class="form-group">
+                        <label>${field1.label}</label>
+                        <select id="new${field1.id}" class="form-control">
+                            ${(field1.options || []).map(option => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
+                        </select>
+                        ${field1.help ? `<small class="form-text">${field1.help}</small>` : ''}
+                    </div>
+                `;
             } else if (field1.type === 'boolean') {
                 const isEnabled = field1.value === true || field1.value === 'true';
                 fields += `
@@ -2173,6 +2237,17 @@ function addDynamicConfigFields(form, providerType) {
                                 ${renderProxySelectOptions(field2.value || '')}
                             </select>
                             <small class="form-text">${escapeHtml(t('modal.proxyPool.providerHint'))}</small>
+                        </div>
+                    `;
+                } else if (field2.type === 'select') {
+                    const selected = field2.value || 'session';
+                    fields += `
+                        <div class="form-group">
+                            <label>${field2.label}</label>
+                            <select id="new${field2.id}" class="form-control">
+                                ${(field2.options || []).map(option => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
+                            </select>
+                            ${field2.help ? `<small class="form-text">${field2.help}</small>` : ''}
                         </div>
                     `;
                 } else if (field2.type === 'boolean') {

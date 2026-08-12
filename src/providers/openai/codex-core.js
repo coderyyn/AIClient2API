@@ -12,6 +12,14 @@ import {MODEL_PROVIDER, formatExpiryLog, normalizeProviderErrorMessage} from '..
 import {getProxyConfigForProvider} from '../../utils/proxy-utils.js';
 import {getProviderModels} from '../provider-models.js';
 import {getProvidedPromptCacheKey, resolveCodexSessionId} from './codex-session-utils.js';
+import {
+    CODEX_FINGERPRINT_CONTEXT_KEY,
+    applyCodexFingerprintClientMetadata,
+    applyCodexFingerprintHeaders,
+    extractOriginalCodexSessionId,
+    resolveCodexFingerprintIds
+} from './codex-fingerprint.js';
+import { recordCodexFingerprintAudit } from './codex-fingerprint-audit.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
@@ -171,6 +179,53 @@ function applyImageToolOptions(imageToolConfig, options) {
     }
 }
 
+function sanitizeCodexReasoningInput(input) {
+    if (!Array.isArray(input)) return input;
+    return input.map(item => {
+        if (!item || typeof item !== 'object' || item.type !== 'reasoning') return item;
+        const sanitized = { ...item };
+        delete sanitized.id;
+        if (!Array.isArray(sanitized.summary)) sanitized.summary = [];
+        return sanitized;
+    });
+}
+
+function parseRejectedFieldError(error) {
+    if (error?.response?.status !== 400) return null;
+    let payload = error.response.data;
+    if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch { return null; }
+    }
+    const upstreamError = payload?.error || payload;
+    const code = String(upstreamError?.code || '').trim().toLowerCase();
+    const message = String(upstreamError?.message || '').trim();
+    if (!['unknown_parameter', 'unsupported_parameter'].includes(code) &&
+        !/unknown\s+parameter|unsupported\s+parameter/i.test(message)) {
+        return null;
+    }
+    const explicitParam = String(upstreamError?.param || '').trim();
+    if (explicitParam) return explicitParam;
+    return message.match(/(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?([^"'\s.]+(?:\[\d+\]\.[a-z_]+)?)/i)?.[1] || null;
+}
+
+function removeRejectedResponsesField(body, error) {
+    const param = String(parseRejectedFieldError(error) || '').trim().toLowerCase();
+    if (!param) return false;
+    if (param === 'max_output_tokens' && Object.prototype.hasOwnProperty.call(body, 'max_output_tokens')) {
+        delete body.max_output_tokens;
+        return true;
+    }
+    const namespaceMatch = param.match(/^input\[(\d+)\]\.namespace$/);
+    if (!namespaceMatch || !Array.isArray(body.input)) return false;
+    const item = body.input[Number(namespaceMatch[1])];
+    if (!item || typeof item !== 'object' || !['function_call', 'tool_call', 'custom_tool_call', 'mcp_tool_call'].includes(item.type)) {
+        return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(item, 'namespace')) return false;
+    delete item.namespace;
+    return true;
+}
+
 /**
  * Codex API 服务类
  */
@@ -195,10 +250,38 @@ export class CodexApiService {
         this.startCacheCleanup();
 
         this.imageGenTool = {type: 'image_generation', output_format: 'png'};
+        this.fingerprintRequestState = new WeakMap();
     }
 
     _applySidecar(axiosConfig) {
         return configureTLSSidecar(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API, this.baseUrl);
+    }
+
+    resolveFingerprintState(requestBody) {
+        if (!requestBody || typeof requestBody !== 'object') {
+            return { inboundHeaders: {}, ids: null };
+        }
+        const cached = this.fingerprintRequestState.get(requestBody);
+        if (cached) return cached;
+
+        const context = requestBody[CODEX_FINGERPRINT_CONTEXT_KEY];
+        const inboundHeaders = context?.inboundCodexHeaders && typeof context.inboundCodexHeaders === 'object'
+            ? { ...context.inboundCodexHeaders }
+            : {};
+        const originalClientSessionId = String(
+            context?.originalClientSessionId || extractOriginalCodexSessionId(inboundHeaders, requestBody) || ''
+        ).trim();
+        const state = {
+            inboundHeaders,
+            ids: resolveCodexFingerprintIds({
+                providerConfig: this.config,
+                globalConfig: this.config,
+                originalClientSessionId
+            })
+        };
+        recordCodexFingerprintAudit(this.config, state.ids, state.ids?.mode || 'off');
+        this.fingerprintRequestState.set(requestBody, state);
+        return state;
     }
 
     /**
@@ -359,10 +442,12 @@ export class CodexApiService {
         }
 
         const url = `${this.baseUrl}/responses`;
-        const body = await this.prepareRequestBody(selectedModel, requestBody, true);
-        const headers = this.buildHeaders(body.prompt_cache_key, true);
+        const fingerprintState = this.resolveFingerprintState(requestBody);
+        const body = await this.prepareRequestBody(selectedModel, requestBody, true, fingerprintState.ids);
+        const headers = this.buildHeaders(body.prompt_cache_key, true, fingerprintState);
 
         let overloadRetryCount = 0;
+        let rejectedFieldRetryCount = 0;
         while (true) {
             try {
                 const config = {
@@ -384,6 +469,11 @@ export class CodexApiService {
                 return this.parseNonStreamResponse(response.data);
             } catch (error) {
                 error.origin = error.origin || 'upstream_codex';
+                if (rejectedFieldRetryCount < 1 && removeRejectedResponsesField(body, error)) {
+                    rejectedFieldRetryCount += 1;
+                    logger.warn('[Codex] Upstream rejected an allowlisted Responses field; retrying once with that field removed');
+                    continue;
+                }
                 if (error.isCodexOverload && !error.responseModel) {
                     error.responseModel = selectedModel;
                 }
@@ -452,10 +542,12 @@ export class CodexApiService {
         }
 
         const url = `${this.baseUrl}/responses`;
-        const body = await this.prepareRequestBody(selectedModel, requestBody, true);
-        const headers = this.buildHeaders(body.prompt_cache_key, true);
+        const fingerprintState = this.resolveFingerprintState(requestBody);
+        const body = await this.prepareRequestBody(selectedModel, requestBody, true, fingerprintState.ids);
+        const headers = this.buildHeaders(body.prompt_cache_key, true, fingerprintState);
 
         let overloadRetryCount = 0;
+        let rejectedFieldRetryCount = 0;
         while (true) {
             const bufferedPrelude = [];
             let responseId = null;
@@ -503,6 +595,11 @@ export class CodexApiService {
                 return;
             } catch (error) {
                 error.origin = error.origin || 'upstream_codex';
+                if (!hasVisibleOutput && rejectedFieldRetryCount < 1 && removeRejectedResponsesField(body, error)) {
+                    rejectedFieldRetryCount += 1;
+                    logger.warn('[Codex] Upstream rejected an allowlisted Responses field; retrying stream once with that field removed');
+                    continue;
+                }
                 if (responseSnapshot) {
                     error.responseSnapshot = {
                         ...responseSnapshot,
@@ -551,7 +648,7 @@ export class CodexApiService {
     /**
      * 构建请求头
      */
-    buildHeaders(cacheId, stream = true) {
+    buildHeaders(cacheId, stream = true, fingerprintState = null) {
         const headers = {
             'version': CODEX_VERSION,
             'x-codex-beta-features': 'powershell_utf8',
@@ -565,10 +662,29 @@ export class CodexApiService {
             'Connection': 'Keep-Alive'
         };
 
+        const inboundHeaders = fingerprintState?.inboundHeaders || {};
+        for (const name of [
+            'x-codex-turn-metadata', 'x-codex-window-id', 'x-codex-installation-id',
+            'x-client-request-id', 'session-id', 'session_id', 'thread-id'
+        ]) {
+            const value = inboundHeaders[name] ?? inboundHeaders[name.toLowerCase()];
+            if (value !== undefined && value !== null && String(value).trim()) {
+                headers[name] = String(value);
+            }
+        }
         // 设置 Conversation_id 和 Session_id
         if (cacheId) {
             headers['Conversation_id'] = cacheId;
-            headers['Session_id'] = cacheId;
+            const hasInboundSessionUnderscore = Object.keys(inboundHeaders)
+                .some(name => name.toLowerCase() === 'session_id');
+            if (!hasInboundSessionUnderscore) {
+                headers['Session_id'] = cacheId;
+            }
+        }
+
+        // 必须最后改写，避免大小写不敏感的 HTTP 客户端将 Session_id 覆盖到 session_id。
+        if (fingerprintState?.ids) {
+            applyCodexFingerprintHeaders(headers, fingerprintState.ids);
         }
 
         // 根据是否流式设置 Accept 头
@@ -601,7 +717,7 @@ export class CodexApiService {
     /**
      * 准备请求体
      */
-    async prepareRequestBody(model, requestBody, stream) {
+    async prepareRequestBody(model, requestBody, stream, fingerprintIds = null) {
         // 明确会话维度：优先 OpenAI metadata，其次 Codex CLI client_metadata
         const sessionId = resolveCodexSessionId(requestBody);
 
@@ -617,11 +733,16 @@ export class CodexApiService {
         const effectiveUpstreamModel = isImageModel ? 'gpt-5.4' : upstreamModel;
 
         const cleanedBody = {...requestBody};
+        if (fingerprintIds) {
+            applyCodexFingerprintClientMetadata(cleanedBody, fingerprintIds);
+        }
+        delete cleanedBody[CODEX_FINGERPRINT_CONTEXT_KEY];
         delete cleanedBody.metadata;
         delete cleanedBody.previous_response_id;
         delete cleanedBody.prompt_cache_retention;
         delete cleanedBody.safety_identifier;
         delete cleanedBody.stream_options;
+        cleanedBody.input = sanitizeCodexReasoningInput(cleanedBody.input);
 
         // 【关键修复】确保传给上游的模型名称不带 -fast 后缀
         // 即使 originalRequestBody 中已经带了 model，这里也必须覆盖

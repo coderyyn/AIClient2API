@@ -223,6 +223,7 @@ function getFieldLabel(key) {
         'codexGeneralMaxWeeklyPercent': t('modal.provider.codexGeneralMaxWeeklyPercent') + ' ' + t('config.optional'),
         'codex53Max5hPercent': t('modal.provider.codex53Max5hPercent') + ' ' + t('config.optional'),
         'codex53MaxWeeklyPercent': t('modal.provider.codex53MaxWeeklyPercent') + ' ' + t('config.optional'),
+        'codexFingerprintMode': t('modal.provider.codexFingerprintMode'),
         'PROXY_URL': t('modal.provider.proxyUrl') + ' ' + t('config.optional'),
         'PROXY_REQUIRED': t('modal.provider.proxyRequired') + ' ' + t('config.optional'),
         'PROXY_ID': t('modal.provider.proxyId') + ' ' + t('config.optional'),
@@ -476,6 +477,19 @@ function getProviderTypeFields(providerType) {
             }
         ],
         'openai-codex-oauth': [
+            {
+                id: 'codexFingerprintMode',
+                label: t('modal.provider.codexFingerprintMode'),
+                type: 'select',
+                value: 'session',
+                options: [
+                    { value: 'off', label: t('modal.provider.codexFingerprintOff') },
+                    { value: 'device', label: t('modal.provider.codexFingerprintDevice') },
+                    { value: 'session', label: t('modal.provider.codexFingerprintSession') },
+                    { value: 'full', label: t('modal.provider.codexFingerprintFull') }
+                ],
+                help: t('modal.provider.codexFingerprintHelp')
+            },
             {
                 id: 'CODEX_OAUTH_CREDS_FILE_PATH',
                 label: t('modal.provider.field.oauthPath'),

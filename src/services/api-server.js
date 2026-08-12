@@ -17,6 +17,7 @@ import { registerWorkerShutdownHandlers } from './worker-shutdown-handlers.js';
 import { createRuntimeCoordination } from '../runtime/runtime-coordination.js';
 import { waitForCoordinationReady } from '../runtime/runtime-coordination-readiness.js';
 import { RuntimeEventConsumer } from '../runtime/runtime-event-consumer.js';
+import { migrateCodexFingerprintProviderPoolsFile } from '../utils/codex-fingerprint-migration.js';
 
 /**
  * @license
@@ -252,6 +253,17 @@ async function startServer() {
     // Initialize configuration
     await initializeConfig(process.argv.slice(2), 'configs/config.json');
     if (startupShutdownGate.shouldAbort('TLS sidecar startup')) return null;
+
+    if (!IS_EXECUTION_WORKER) {
+        const migration = await migrateCodexFingerprintProviderPoolsFile({
+            config: CONFIG,
+            persistenceEnabled: true,
+            logger
+        });
+        if (migration.changed) {
+            logger.info(`[Codex Fingerprint] Provider migration applied: modes=${migration.migratedCount}, versioned=${migration.versionedCount}, invalid=${migration.invalidCount}, backup=${migration.backupPath ? 'created' : 'unavailable'}`);
+        }
+    }
     
     // 自动关联 configs 目录中的配置文件到对应的提供商
     // logger.info('[Initialization] Checking for unlinked provider configs...');

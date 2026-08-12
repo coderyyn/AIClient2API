@@ -15,7 +15,34 @@ import {
     resolveCodexOverloadFailoverKey
 } from '../providers/openai/codex-overload-failover.js';
 import { codexTransientRetryObservability } from '../providers/openai/codex-transient-observability.js';
+import {
+    CODEX_FINGERPRINT_CONTEXT_KEY,
+    extractOriginalCodexSessionId
+} from '../providers/openai/codex-fingerprint.js';
 import requestContext from './context.js';
+
+const CODEX_FINGERPRINT_HEADER_NAMES = Object.freeze([
+    'x-codex-turn-metadata',
+    'x-codex-window-id',
+    'x-codex-installation-id',
+    'x-client-request-id',
+    'session-id',
+    'session_id',
+    'thread-id'
+]);
+
+export function extractInboundCodexFingerprintContext(req, requestBody = {}) {
+    const inboundCodexHeaders = {};
+    for (const name of CODEX_FINGERPRINT_HEADER_NAMES) {
+        const value = req?.headers?.[name];
+        if (value === undefined || value === null || Array.isArray(value)) continue;
+        inboundCodexHeaders[name] = String(value);
+    }
+    return {
+        inboundCodexHeaders,
+        originalClientSessionId: extractOriginalCodexSessionId(inboundCodexHeaders, requestBody)
+    };
+}
 
 // ==================== 时间与时区 ====================
 
@@ -2174,6 +2201,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
 
     CONFIG._codexCacheAffinityScope = extractCodexCacheAffinityScope(originalRequestBody);
     CONFIG._codexOverloadFailoverKey = resolveCodexOverloadFailoverKey(CONFIG._codexCacheAffinityScope);
+    const inboundCodexFingerprintContext = extractInboundCodexFingerprintContext(req, originalRequestBody);
 
     const clientProviderMap = {
         [ENDPOINT_TYPE.OPENAI_CHAT]: MODEL_PROTOCOL_PREFIX.OPENAI,
@@ -2266,6 +2294,9 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     // 1. Convert request body from client format to backend format, if necessary.
     // 使用浅拷贝以避免直接变异 originalRequestBody，保持原始数据的纯净性以供后续钩子使用
     let processedRequestBody = { ...originalRequestBody };
+    if (isCodexProvider(toProvider)) {
+        processedRequestBody[CODEX_FINGERPRINT_CONTEXT_KEY] = inboundCodexFingerprintContext;
+    }
 
     // 将 _monitorRequestId 注入到 requestBody 中，以便在 service 内部访问
     if (CONFIG._monitorRequestId) {

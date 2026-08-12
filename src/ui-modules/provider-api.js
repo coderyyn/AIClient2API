@@ -13,6 +13,8 @@ import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { normalizeProviderConfigFields } from '../utils/provider-config-normalizer.js';
+import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
+import { getCodexFingerprintAudit } from '../providers/openai/codex-fingerprint-audit.js';
 
 
 
@@ -60,6 +62,9 @@ function sanitizeProviderData(provider, maskSensitive = false) {
         name = name.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
         name = name.replace(/&[#\w]+;/g, '');
         sanitized.customName = name.trim();
+    }
+    if (sanitized.uuid && sanitized.codexFingerprintMode) {
+        sanitized.codexFingerprintAudit = getCodexFingerprintAudit(sanitized.uuid);
     }
     return sanitized;
 }
@@ -504,7 +509,10 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         }
         
         // 过滤掉脱敏字段
-        const filteredConfig = normalizeProviderConfigFields(filterMaskedData(providerConfig));
+        const filteredConfig = normalizeCodexFingerprintProviderConfig(
+            providerType,
+            normalizeProviderConfigFields(filterMaskedData(providerConfig))
+        );
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];
@@ -606,7 +614,10 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         const existingProvider = providers[providerIndex];
         
         // 过滤掉传入配置中的脱敏占位符，避免覆盖真实数据
-        const filteredConfig = normalizeProviderConfigFields(filterMaskedData(providerConfig));
+        const filteredConfig = normalizeCodexFingerprintProviderConfig(
+            providerType,
+            normalizeProviderConfigFields(filterMaskedData(providerConfig))
+        );
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];
@@ -1429,13 +1440,14 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
             }
 
             // Create new provider config based on provider type
-            const newProvider = createProviderConfig({
+            let newProvider = createProviderConfig({
                 credPathKey,
                 credPath: formatSystemPath(currentFilePath),
                 defaultCheckModel,
                 needsProjectId: providerMapping.needsProjectId,
                 urlKeys: urlKeys
             });
+            newProvider = normalizeCodexFingerprintProviderConfig(providerType, newProvider);
 
             providerPools[providerType].push(newProvider);
             linkedProviders.push({ providerType, provider: newProvider });

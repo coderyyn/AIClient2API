@@ -28,4 +28,14 @@ describe('provider modal source regressions', () => {
         expect(hiddenFieldsBlock).toContain("'codexMax5hPercent'");
         expect(hiddenFieldsBlock).toContain("'codexMaxWeeklyPercent'");
     });
+
+    test('Codex provider detail includes a redacted fingerprint status summary', () => {
+        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/modal.js'), 'utf8').replace(/\r\n/g, '\n');
+        expect(source).toContain("currentProviderType === 'openai-codex-oauth'");
+        expect(source).toContain('data-codex-fingerprint-status="true"');
+        expect(source).toContain('provider.codexFingerprintAudit');
+        expect(source).toContain('window.currentSafeConfig?.CODEX_FINGERPRINT_ENABLED');
+        expect(source).not.toContain('installationId');
+        expect(source).not.toContain('sessionId');
+    });
 });

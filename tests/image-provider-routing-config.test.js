@@ -71,3 +71,18 @@ describe('Codex image size normalization configuration', () => {
         expect(config.IMAGE_ASPECT_MISMATCH_THRESHOLD).toBe(0.10);
     });
 });
+
+describe('Codex OAuth fingerprint configuration', () => {
+    test('defaults to enabled and round-trips through the admin config API and UI', () => {
+        const source = readFileSync('src/core/config-manager.js', 'utf8');
+        const configApi = readFileSync('src/ui-modules/config-api.js', 'utf8');
+        const html = readFileSync('static/components/section-config.html', 'utf8');
+        const manager = readFileSync('static/app/config-manager.js', 'utf8');
+
+        expect(source).toContain('CODEX_FINGERPRINT_ENABLED: true');
+        expect(source).toContain('--codex-fingerprint-enabled');
+        expect(configApi).toContain('CODEX_FINGERPRINT_ENABLED');
+        expect(manager).toContain('CODEX_FINGERPRINT_ENABLED');
+        expect(html).toContain('codexFingerprintEnabled');
+    });
+});

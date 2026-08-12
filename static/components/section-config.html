@@ -268,6 +268,21 @@
                 <hr>
 
                 <div class="config-inline-heading">
+                    <span data-i18n="config.advanced.codexFingerprintTitle">Codex OAuth 设备指纹</span>
+                    <small data-i18n="config.advanced.codexFingerprintNote">全局紧急开关。关闭后所有 Codex OAuth 账号运行时等价于 off，但不会删除账号保存的模式。</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="config.advanced.codexFingerprintEnabled">启用设备指纹收敛</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="codexFingerprintEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <hr>
+
+                <div class="config-inline-heading">
                     <span data-i18n="config.advanced.imageSizeNormalizationTitle">Codex 生图尺寸归一化</span>
                     <small data-i18n="config.advanced.imageSizeNormalizationNote">为 Codex Images 请求追加最小比例约束，并将比例偏差在阈值内的结果缩放到精确请求尺寸；偏差过大时返回中文错误。</small>
                 </div>

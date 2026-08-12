@@ -20,6 +20,7 @@ import { MODEL_PROVIDER } from '../utils/constants.js';
 import { getProviderModels } from '../providers/provider-models.js';
 import { codexOverloadFailoverStore } from '../providers/openai/codex-overload-failover.js';
 import { readGeminiCredentialEmail } from '../utils/gemini-account.js';
+import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
@@ -521,7 +522,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
         }
         
         // 创建新的提供商配置
-        const newProvider = {
+        let newProvider = {
             ...createProviderConfig({
                 credPathKey,
                 credPath: formatSystemPath(relativePath),
@@ -533,6 +534,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
             ...pickProviderDefaults(providerDefaults)
         };
         if (isCodexProviderType(providerType)) {
+            newProvider = normalizeCodexFingerprintProviderConfig(providerType, newProvider);
             applyCodexIdentityToProvider(newProvider, codexIdentity);
         }
         
@@ -596,7 +598,7 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                             }
                         }
                         // 使用公共方法创建新的提供商配置
-                        const newProvider = createProviderConfig({
+                        let newProvider = createProviderConfig({
                             credPathKey,
                             credPath: formatSystemPath(relativePath),
                             defaultCheckModel,
@@ -607,6 +609,7 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                             newProvider.accountEmail = customName;
                         }
                         if (isCodexProviderType(providerType)) {
+                            newProvider = normalizeCodexFingerprintProviderConfig(providerType, newProvider);
                             applyCodexIdentityToProvider(newProvider, codexIdentity);
                         }
                         

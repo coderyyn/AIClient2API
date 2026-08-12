@@ -52,6 +52,18 @@ function normalizeLogRetentionDays(config) {
     config.LOG_RETENTION_DAYS = configuredDays ?? 7;
 }
 
+function normalizeCodexFingerprintEnabled(config) {
+    const envValue = process.env.CODEX_FINGERPRINT_ENABLED;
+    if (envValue !== undefined) {
+        const normalized = String(envValue).trim().toLowerCase();
+        if (['true', '1', 'yes', 'on'].includes(normalized)) config.CODEX_FINGERPRINT_ENABLED = true;
+        else if (['false', '0', 'no', 'off'].includes(normalized)) config.CODEX_FINGERPRINT_ENABLED = false;
+    }
+    if (config.CODEX_FINGERPRINT_ENABLED === undefined || config.CODEX_FINGERPRINT_ENABLED === null) {
+        config.CODEX_FINGERPRINT_ENABLED = true;
+    }
+}
+
 function normalizeConfiguredProviders(config) {
     const fallbackProvider = MODEL_PROVIDER.GEMINI_CLI;
     const dedupedProviders = [];
@@ -142,6 +154,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         IMAGE_SIZE_NORMALIZATION_ENABLED: true, // Codex Images 接口是否将返回图片缩放到请求尺寸
         IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true, // Codex 生图提示词是否追加最小画幅比例约束
         IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10, // 原图与目标长宽比偏差超过此值时拒绝拉伸
+        CODEX_FINGERPRINT_ENABLED: true, // Codex OAuth 出站设备指纹收敛总开关，默认启用 session 模式
         IMAGE_SIZE_MAX_PIXELS: 8388608, // 后处理允许的最大目标总像素（约 4K UHD）
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CODEX_STICKY_HOT_SHARD_ENABLED: true, // Codex sticky 热 key 是否自动拆分到多个账号
@@ -248,6 +261,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--image-prompt-aspect-constraint-enabled', configKey: 'IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED', type: 'bool' },
         { flag: '--image-aspect-mismatch-threshold', configKey: 'IMAGE_ASPECT_MISMATCH_THRESHOLD', type: 'float' },
         { flag: '--image-size-max-pixels', configKey: 'IMAGE_SIZE_MAX_PIXELS', type: 'int' },
+        { flag: '--codex-fingerprint-enabled', configKey: 'CODEX_FINGERPRINT_ENABLED', type: 'bool' },
         { flag: '--codex-potluck-sticky-provider-enabled', configKey: 'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-enabled', configKey: 'CODEX_STICKY_HOT_SHARD_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-window-ms', configKey: 'CODEX_STICKY_HOT_SHARD_WINDOW_MS', type: 'int' },
@@ -330,6 +344,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
 
     normalizeRequestBodyMaxBytes(currentConfig);
     normalizeLogRetentionDays(currentConfig);
+    normalizeCodexFingerprintEnabled(currentConfig);
     normalizeConfiguredProviders(currentConfig);
     currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD = normalizeAspectMismatchThreshold(
         currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD

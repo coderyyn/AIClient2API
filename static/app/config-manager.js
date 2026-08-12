@@ -413,6 +413,8 @@ async function loadConfiguration() {
         }
 
         const data = await window.apiClient.get('/config');
+        // 供 Provider 详情弹窗展示 Codex 指纹全局状态（只读脱敏配置）。
+        window.currentSafeConfig = data;
 
         // 初始化替换规则 UI
         initReplacementsUI();
@@ -500,6 +502,7 @@ async function loadConfiguration() {
         const imagePromptAspectConstraintEnabledEl = document.getElementById('imagePromptAspectConstraintEnabled');
         const imageAspectMismatchThresholdEl = document.getElementById('imageAspectMismatchThreshold');
         const imageSizeMaxPixelsEl = document.getElementById('imageSizeMaxPixels');
+        const codexFingerprintEnabledEl = document.getElementById('codexFingerprintEnabled');
         const codexPotluckStickyProviderEnabledEl = document.getElementById('codexPotluckStickyProviderEnabled');
 
         if (systemPromptFilePathEl) systemPromptFilePathEl.value = data.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
@@ -520,6 +523,7 @@ async function loadConfiguration() {
         if (imagePromptAspectConstraintEnabledEl) imagePromptAspectConstraintEnabledEl.checked = data.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED !== false;
         if (imageAspectMismatchThresholdEl) imageAspectMismatchThresholdEl.value = data.IMAGE_ASPECT_MISMATCH_THRESHOLD ?? 0.10;
         if (imageSizeMaxPixelsEl) imageSizeMaxPixelsEl.value = data.IMAGE_SIZE_MAX_PIXELS ?? 8388608;
+        if (codexFingerprintEnabledEl) codexFingerprintEnabledEl.checked = data.CODEX_FINGERPRINT_ENABLED !== false;
         if (codexPotluckStickyProviderEnabledEl) codexPotluckStickyProviderEnabledEl.checked = data.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED || false;
         
         if (cronNearMinutesEl) cronNearMinutesEl.value = data.CRON_NEAR_MINUTES || 1;
@@ -745,6 +749,7 @@ async function saveConfiguration(options = {}) {
     config.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED = document.getElementById('imagePromptAspectConstraintEnabled')?.checked !== false;
     config.IMAGE_ASPECT_MISMATCH_THRESHOLD = parseFloat(document.getElementById('imageAspectMismatchThreshold')?.value || 0.10);
     config.IMAGE_SIZE_MAX_PIXELS = parseInt(document.getElementById('imageSizeMaxPixels')?.value || 8388608);
+    config.CODEX_FINGERPRINT_ENABLED = document.getElementById('codexFingerprintEnabled')?.checked !== false;
     config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = document.getElementById('codexPotluckStickyProviderEnabled')?.checked || false;
     config.CRON_NEAR_MINUTES = parseInt(document.getElementById('cronNearMinutes')?.value || 1);
     config.CRON_REFRESH_TOKEN = document.getElementById('cronRefreshToken')?.checked || false;
