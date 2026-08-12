@@ -1757,10 +1757,12 @@ export class ProviderPoolManager {
 
         if (this.coordination) {
             const ordered = this._orderCoordinatedCandidates(candidates, providerType, requestedModel, options);
-            const lease = await this.coordination.acquire(ordered.map(provider => ({
+            const hasStickyAffinity = Boolean(options.stickyProviderKey);
+            const lease = await this.coordination.acquire(ordered.map((provider, index) => ({
                 providerType: provider.type,
                 uuid: provider.uuid || provider.config?.uuid,
-                concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0)
+                concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
+                preferred: hasStickyAffinity && index === 0
             })));
             if (!lease) return null;
             const selected = this._findProvider(lease.providerType, lease.uuid);
@@ -2107,16 +2109,18 @@ export class ProviderPoolManager {
      */
     async acquireSlot(providerType, requestedModel = null, options = {}) {
         if (this.coordination) {
-            const candidates = this._orderCoordinatedCandidates(
+            const ordered = this._orderCoordinatedCandidates(
                 this._getHealthyProvidersForType(providerType, requestedModel, options),
                 providerType,
                 requestedModel,
                 options
-            )
-                .map(provider => ({
+            );
+            const hasStickyAffinity = Boolean(options.stickyProviderKey) && isCodexProviderType(providerType);
+            const candidates = ordered.map((provider, index) => ({
                     providerType,
                     uuid: provider.uuid || provider.config?.uuid,
-                    concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0)
+                    concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
+                    preferred: hasStickyAffinity && index === 0
                 }));
             const lease = await this.coordination.acquire(candidates);
             if (!lease) return null;

@@ -47,6 +47,35 @@ describe('provider pool Redis coordination', () => {
         expect(manager.saveTimer).toBeNull();
     });
 
+    test('marks only the first locally selected sticky candidate as preferred for Redis', async () => {
+        const coordinator = {
+            acquire: jest.fn(async candidates => ({
+                leaseId: 'sticky-lease',
+                providerType: candidates[0].providerType,
+                uuid: candidates[0].uuid
+            })),
+            release: jest.fn(async () => true)
+        };
+        const manager = new ProviderPoolManager({
+            'openai-codex-oauth': [
+                { uuid: 'codex-a', isHealthy: true, concurrencyLimit: 2, lastKnownCodexPlan: 'pro' },
+                { uuid: 'codex-b', isHealthy: true, concurrencyLimit: 2, lastKnownCodexPlan: 'pro' }
+            ]
+        }, { coordination: coordinator, persistenceEnabled: false });
+
+        await requestContext.run({}, async () => {
+            await manager.acquireSlot('openai-codex-oauth', 'gpt-5.4', {
+                stickyProviderKey: 'prompt-cache:test'
+            });
+        });
+
+        const candidates = coordinator.acquire.mock.calls[0][0];
+        expect(candidates).toHaveLength(2);
+        expect(candidates.filter(candidate => candidate.preferred)).toHaveLength(1);
+        expect(candidates[0].preferred).toBe(true);
+        expect(candidates[1].preferred).toBe(false);
+    });
+
     test('mixed pools acquire one global lease without using local active counters', async () => {
         const coordinator = {
             acquire: jest.fn(async candidates => ({
@@ -84,5 +113,43 @@ describe('provider pool Redis coordination', () => {
         expect(coordinator.acquire.mock.calls[0][0]).toHaveLength(2);
         expect(manager.providerStatus.first[0].state.activeCount).toBe(0);
         expect(manager.providerStatus.second[0].state.activeCount).toBe(0);
+    });
+
+    test('preserves the sticky preferred candidate when a mixed pool acquires a Redis lease', async () => {
+        const coordinator = {
+            acquire: jest.fn(async candidates => ({
+                leaseId: 'mixed-sticky-lease',
+                providerType: candidates[0].providerType,
+                uuid: candidates[0].uuid
+            })),
+            release: jest.fn(async () => true)
+        };
+        const manager = new ProviderPoolManager({
+            first: [{ uuid: 'first-1', supportedModels: ['model'] }],
+            second: [{ uuid: 'second-1', supportedModels: ['model'] }]
+        }, {
+            coordination: coordinator,
+            persistenceEnabled: false,
+            globalConfig: {
+                mixedProviderPools: {
+                    mixed: {
+                        enabled: true,
+                        entryProviders: ['first'],
+                        candidateProviders: ['first', 'second'],
+                        matchModels: ['model']
+                    }
+                }
+            }
+        });
+
+        await requestContext.run({}, async () => {
+            await manager.acquireSlotFromMixedPool('first', 'model', {
+                stickyProviderKey: 'session:test'
+            });
+        });
+
+        const candidates = coordinator.acquire.mock.calls[0][0];
+        expect(candidates.filter(candidate => candidate.preferred)).toHaveLength(1);
+        expect(candidates[0].preferred).toBe(true);
     });
 });

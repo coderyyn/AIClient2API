@@ -20,6 +20,8 @@ class InMemoryRedisExecutor {
             const selected = candidates
                 .filter(candidate => candidate.concurrencyLimit <= 0 || (this.active.get(candidate.key) || 0) < candidate.concurrencyLimit)
                 .sort((a, b) => {
+                    const preferredDiff = Number(b.preferred === true) - Number(a.preferred === true);
+                    if (preferredDiff !== 0) return preferredDiff;
                     const activeDiff = (this.active.get(a.key) || 0) - (this.active.get(b.key) || 0);
                     if (activeDiff !== 0) return activeDiff;
                     return Number(a.priority || 0) - Number(b.priority || 0);
@@ -100,6 +102,27 @@ describe('RedisLeaseCoordinator', () => {
 
         const secondLease = await coordinator.acquire(candidates);
         expect(secondLease.uuid).toBe('second');
+    });
+
+    test('keeps the preferred affinity provider until its explicit concurrency limit is reached', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const candidates = [
+            { providerType: 'p', uuid: 'affinity', concurrencyLimit: 2, preferred: true },
+            { providerType: 'p', uuid: 'fallback', concurrencyLimit: 0 }
+        ];
+
+        const first = await coordinator.acquire(candidates);
+        const second = await coordinator.acquire(candidates);
+        const overflow = await coordinator.acquire(candidates);
+
+        expect(first.uuid).toBe('affinity');
+        expect(second.uuid).toBe('affinity');
+        expect(overflow.uuid).toBe('fallback');
+
+        await coordinator.release(first.leaseId);
+        const recovered = await coordinator.acquire(candidates);
+        expect(recovered.uuid).toBe('affinity');
     });
 
     test('release is idempotent and never makes active counts negative', async () => {

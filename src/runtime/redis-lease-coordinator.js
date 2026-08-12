@@ -24,6 +24,7 @@ end
 local best = nil
 local best_active = nil
 local best_priority = nil
+local best_preferred = false
 for _, candidate in ipairs(candidates) do
   local active_key = KEYS[1] .. ':active:' .. candidate.key
   local now_ms = tonumber(ARGV[6])
@@ -32,10 +33,14 @@ for _, candidate in ipairs(candidates) do
   local limit = tonumber(candidate.concurrencyLimit or 0)
   if limit <= 0 or active < limit then
     local priority = tonumber(candidate.priority or 0)
-    if best == nil or active < best_active or (active == best_active and priority < best_priority) then
+    local preferred = candidate.preferred == true
+    if best == nil
+      or (preferred and not best_preferred)
+      or (preferred == best_preferred and (active < best_active or (active == best_active and priority < best_priority))) then
       best = candidate
       best_active = active
       best_priority = priority
+      best_preferred = preferred
     end
   end
 end
@@ -136,6 +141,7 @@ function normalizeCandidate(candidate, priority) {
         uuid,
         key: `${providerType}:${uuid}`,
         concurrencyLimit: Number.isFinite(concurrencyLimit) && concurrencyLimit > 0 ? concurrencyLimit : 0,
+        preferred: candidate.preferred === true,
         priority
     };
 }
