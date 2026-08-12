@@ -93,17 +93,17 @@ describe('runtime load test helpers', () => {
 
     test('waits for a newer worker metrics snapshot before calculating stage deltas', async () => {
         const snapshots = [
-            { requests: { total: 10 } },
-            { requests: { total: 10 } },
-            { requests: { total: 11 } }
+            { requests: { total: 11, byWorker: { 'control-1': 11 } } },
+            { requests: { total: 12, byWorker: { 'control-1': 12 } } },
+            { requests: { total: 13, byWorker: { 'control-1': 12, 'execution-1': 1 } } }
         ];
         const fetchSnapshot = jest.fn(async () => snapshots.shift() || null);
         const wait = jest.fn(async () => {});
 
         await expect(waitForRuntimeMetricsAdvance(
-            { requests: { total: 10 } },
-            { fetchSnapshot, wait, timeoutMs: 1000, pollMs: 10 }
-        )).resolves.toEqual({ requests: { total: 11 } });
+            { requests: { total: 10, byWorker: { 'control-1': 10 } } },
+            { fetchSnapshot, wait, timeoutMs: 1000, pollMs: 10, workerPrefix: 'execution-', minimumWorkerRequests: 1 }
+        )).resolves.toEqual({ requests: { total: 13, byWorker: { 'control-1': 12, 'execution-1': 1 } } });
         expect(fetchSnapshot).toHaveBeenCalledTimes(3);
         expect(wait).toHaveBeenCalledTimes(2);
     });

@@ -297,7 +297,11 @@ async function runStage(kind, concurrency, options) {
     const samples = await Promise.all(Array.from({ length: concurrency }, (_, index) => runner(options, index + 1)));
     const resources = await sampler.stop();
     const runtimeAfter = runtimeBefore
-        ? await waitForRuntimeMetricsAdvance(runtimeBefore, { fetchSnapshot: () => fetchRuntimeMetrics(options) })
+        ? await waitForRuntimeMetricsAdvance(runtimeBefore, {
+            fetchSnapshot: () => fetchRuntimeMetrics(options),
+            workerPrefix: 'execution-',
+            minimumWorkerRequests: concurrency
+        })
         : await fetchRuntimeMetrics(options);
     const runtime = runtimeBefore && runtimeAfter ? diffRuntimeMetrics(runtimeBefore, runtimeAfter) : null;
     return { ...summarizeSamples(samples, Date.now() - startedAt), concurrency, resources, runtime, samples };
@@ -314,10 +318,20 @@ export async function waitForRuntimeMetricsAdvance(before, options) {
     const pollMs = Math.max(1, Number(options.pollMs ?? 250));
     const attempts = Math.max(1, Math.ceil(timeoutMs / pollMs) + 1);
     const beforeTotal = Number(before?.requests?.total || 0);
+    const workerPrefix = options.workerPrefix || '';
+    const minimumWorkerRequests = Math.max(0, Number(options.minimumWorkerRequests || 0));
+    const workerTotal = snapshot => Object.entries(snapshot?.requests?.byWorker || {})
+        .filter(([workerId]) => workerId.startsWith(workerPrefix))
+        .reduce((total, [, count]) => total + Number(count || 0), 0);
+    const beforeWorkerTotal = workerTotal(before);
     let latest = null;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
         latest = await fetchSnapshot();
-        if (!latest || Number(latest.requests?.total || 0) > beforeTotal) return latest;
+        if (!latest) return latest;
+        const advanced = workerPrefix
+            ? workerTotal(latest) - beforeWorkerTotal >= minimumWorkerRequests
+            : Number(latest.requests?.total || 0) > beforeTotal;
+        if (advanced) return latest;
         if (attempt < attempts - 1) await wait(pollMs);
     }
     return latest;
