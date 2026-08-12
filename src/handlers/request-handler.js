@@ -50,6 +50,7 @@ export function createRequestHandler(config, providerPoolManager) {
         const workerId = process.env.RUNTIME_WORKER_ID || (process.env.RUNTIME_WORKER_ROLE === 'execution' ? `execution-${process.pid}` : 'standalone');
         const requestKind = /\/images\/(?:generations|edits)/.test(originalPath) ? 'image' : 'model';
         const runtimeRequest = runtimeMetrics.beginRequest({ workerId, kind: requestKind });
+        res.runtimeRequest = runtimeRequest;
         // Unit/in-process adapters may provide a minimal response object without
         // EventEmitter methods. Real Node responses still get lifecycle metrics;
         // lightweight test doubles continue through the normal handler path.

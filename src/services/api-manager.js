@@ -17,6 +17,8 @@ import busboy from 'busboy';
 import { SUPPORTED_IMAGE_MODELS } from '../utils/constants.js';
 import { convertData } from '../convert/convert.js';
 import { summarizePayloadForLog } from '../utils/log-sanitizer.js';
+import { writeImageJsonResponse } from '../runtime/image-json-response.js';
+import { estimateImageResponseBytes, runtimeImageCapacity, updateImageCapacitySignals } from '../runtime/runtime-image-capacity.js';
 import {
     ImageAspectRatioMismatchError,
     ImagePostprocessError,
@@ -186,7 +188,9 @@ function writeImageRequestError(res, error) {
     const status = Number.isInteger(parsedStatus) && parsedStatus >= 100 && parsedStatus <= 599
         ? parsedStatus
         : 500;
-    res.writeHead(status, { 'Content-Type': 'application/json' });
+    const headers = { 'Content-Type': 'application/json' };
+    if (error?.retryAfterSeconds) headers['Retry-After'] = String(error.retryAfterSeconds);
+    res.writeHead(status, headers);
     res.end(JSON.stringify(createErrorResponse(error, MODEL_PROTOCOL_PREFIX.OPENAI)));
 }
 
@@ -506,6 +510,9 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
     let model, n, response_format, size, quality, prompt, imageToolOptions, codexRequestBody, virtualOpenAIRequest;
     let includeProcessingMetadata = false;
     let promptConstraintApplied = false;
+    let capacityTicket = retryContext?.capacityTicket || null;
+    const ownsCapacityTicket = !capacityTicket;
+    let capacityHandedOff = false;
 
     try {
         if (retryContext?.parsedBody) {
@@ -670,6 +677,11 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             processingMetadata = normalized.metadata;
         }
 
+        if (!capacityTicket) {
+            updateImageCapacitySignals(providerPoolManager);
+            capacityTicket = await runtimeImageCapacity.acquire({ bytes: estimateImageResponseBytes({ n }), kind: 'image-generation' });
+        }
+
         const clientResponse = { created: Math.floor(Date.now() / 1000), data: responseData };
         if (includeProcessingMetadata && processingMetadata) {
             clientResponse.x_aiclient2api = { image_processing: processingMetadata };
@@ -713,10 +725,9 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             }
         }
 
-        res.writeHead(200, processingMetadata
-            ? buildImageProcessingHeaders(processingMetadata)
-            : { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(clientResponse));
+        await writeImageJsonResponse(res, clientResponse, {
+            headers: processingMetadata ? buildImageProcessingHeaders(processingMetadata) : {}
+        });
     } catch (error) {
         logger.error('[Image Generation] Error:', error.message);
 
@@ -780,6 +791,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             await new Promise(resolve => setTimeout(resolve, randomDelay));
 
             try {
+                capacityHandedOff = true;
                 return await handleImageGenerationRequest(req, res, CONFIG, providerPoolManager, {
                     ...retryContext,
                     CONFIG,
@@ -790,6 +802,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
                     lastRateLimitError: cooldownApplied ? error : retryContext?.lastRateLimitError,
                     allowExcludedProviderFallback: error.imageProviderRetryable === true,
                     parsedBody: {model, n, response_format, size, quality, prompt, imageToolOptions, virtualOpenAIRequest, includeProcessingMetadata}
+                    ,capacityTicket
                 });
             } catch (retryError) {
                 logger.error('[Image Generation Retry] Failed to get alternative service:', retryError.message);
@@ -798,6 +811,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
 
         writeImageRequestError(res, resolveFinalImageRequestError(error, retryContext, slotUuid));
     } finally {
+        if (ownsCapacityTicket && capacityTicket && !capacityHandedOff) runtimeImageCapacity.release(capacityTicket);
         // 确保并发槽在请求结束后归还（与 handleStreamRequest/handleUnaryRequest 保持一致）
         if (providerPoolManager && slotProviderType && slotUuid) {
             providerPoolManager.releaseSlot(slotProviderType, slotUuid);
@@ -946,6 +960,9 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
     let slotAccountEmail = null;
     let form = null;
     let model = null;
+    let capacityTicket = retryContext?.capacityTicket || null;
+    const ownsCapacityTicket = !capacityTicket;
+    let capacityHandedOff = false;
 
     try {
         form = retryContext?.parsedForm ?? await parseMultipartForm(req);
@@ -1001,6 +1018,13 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             }
         }));
         const totalImageBytes = imageFiles.reduce((total, file) => total + file.buffer.length, 0);
+        if (!capacityTicket) {
+            updateImageCapacitySignals(providerPoolManager);
+            capacityTicket = await runtimeImageCapacity.acquire({
+                bytes: estimateImageResponseBytes({ n, inputBytes: totalImageBytes }),
+                kind: 'image-edit'
+            });
+        }
 
         // 构造虚拟 OpenAI 对话请求，参考对话接口实现自动转换
         const virtualOpenAIRequest = {
@@ -1166,10 +1190,9 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             }
         }
 
-        res.writeHead(200, processingMetadata
-            ? buildImageProcessingHeaders(processingMetadata)
-            : { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(clientResponse));
+        await writeImageJsonResponse(res, clientResponse, {
+            headers: processingMetadata ? buildImageProcessingHeaders(processingMetadata) : {}
+        });
     } catch (error) {
         logger.error('[Image Edits] Error:', error.message);
         if (!res.writableEnded && writeImageProcessingError(res, error)) {
@@ -1204,6 +1227,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             logger.info(`[Image Edits Retry] Switching credential without changing provider health. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, randomDelay));
 
+            capacityHandedOff = true;
             return await handleImageEditsRequest(req, res, CONFIG, providerPoolManager, {
                 ...retryContext,
                 CONFIG,
@@ -1214,11 +1238,13 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
                 lastRateLimitError: cooldownApplied ? error : retryContext?.lastRateLimitError,
                 allowExcludedProviderFallback: error.imageProviderRetryable === true,
                 parsedForm: form
+                ,capacityTicket
             });
         }
 
         writeImageRequestError(res, resolveFinalImageRequestError(error, retryContext, slotUuid));
     } finally {
+        if (ownsCapacityTicket && capacityTicket && !capacityHandedOff) runtimeImageCapacity.release(capacityTicket);
         if (providerPoolManager && slotProviderType && slotUuid) {
             providerPoolManager.releaseSlot(slotProviderType, slotUuid);
         }

@@ -5,6 +5,7 @@ import * as http from 'http'; // Add http for IncomingMessage and ServerResponse
 import * as crypto from 'crypto'; // Import crypto for MD5 hashing
 import { isIP } from 'net';
 import logger from './logger.js';
+import { writeWithBackpressure } from '../runtime/runtime-backpressure.js';
 import { convertData, getOpenAIStreamChunkStop } from '../convert/convert.js';
 import { ProviderStrategyFactory } from './provider-strategies.js';
 import { getPluginManager } from '../core/plugin-manager.js';
@@ -1477,7 +1478,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     // fullResponseJson += chunk.type+"\n";
                     if (!clientDisconnected.value && !res.writableEnded) {
                         try {
-                            res.write(`event: ${chunk.type}\n`);
+                            await writeWithBackpressure(res, `event: ${chunk.type}\n`);
                             anyDataSent = true;
                         } catch (writeErr) {
                             logger.error('[Stream] Failed to write event:', writeErr.message);
@@ -1492,7 +1493,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 // fullResponseJson += JSON.stringify(chunk)+"\n\n";
                 if (!clientDisconnected.value && !res.writableEnded) {
                     try {
-                        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                        await writeWithBackpressure(res, `data: ${JSON.stringify(chunk)}\n\n`);
                         anyDataSent = true;
                     } catch (writeErr) {
                         logger.error('[Stream] Failed to write data:', writeErr.message);
@@ -1544,7 +1545,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             const errorPayload = createStreamErrorResponse(error, fromProvider);
             if (!res.writableEnded) {
                 try {
-                    res.write(errorPayload);
+                    await writeWithBackpressure(res, errorPayload);
                     res.end();
                 } catch (writeErr) {
                     logger.error('[Stream] Failed to write error response:', writeErr.message);
@@ -1711,7 +1712,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         const errorPayload = createStreamErrorResponse(error, fromProvider);
         if (!clientDisconnected.value && !res.writableEnded) {
             try {
-                res.write(errorPayload);
+                await writeWithBackpressure(res, errorPayload);
                 res.end();
             } catch (writeErr) {
                 logger.error('[Stream] Failed to write error response:', writeErr.message);
@@ -1739,7 +1740,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 try {
                     if (clientProtocol === MODEL_PROTOCOL_PREFIX.OPENAI) {
                         if (!hasMessageStop) {
-                            res.write('data: [DONE]\n\n');
+                            await writeWithBackpressure(res, 'data: [DONE]\n\n');
                             hasMessageStop = true;
                         }
                     } else if (clientProtocol === MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES) {
@@ -1747,13 +1748,13 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         // 连接关闭即表示流结束；不要再追加 `event: done` + `data: {}`，否则会触发下游类型校验失败（AI_TypeValidationError）。
                     } else if (clientProtocol === MODEL_PROTOCOL_PREFIX.CLAUDE) {
                         if (!hasMessageStop) {
-                            res.write('event: message_stop\n');
-                            res.write('data: {"type":"message_stop"}\n\n');
+                            await writeWithBackpressure(res, 'event: message_stop\n');
+                            await writeWithBackpressure(res, 'data: {"type":"message_stop"}\n\n');
                             hasMessageStop = true;
                         }
                     } else if (clientProtocol === MODEL_PROTOCOL_PREFIX.GEMINI) {
                         if (!hasMessageStop) {
-                            res.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
+                            await writeWithBackpressure(res, 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
                             hasMessageStop = true;
                         }
                     }

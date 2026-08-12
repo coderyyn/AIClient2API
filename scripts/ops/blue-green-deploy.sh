@@ -10,6 +10,7 @@ IMAGE=""
 REVISION=""
 CANDIDATE_PORT=${CANDIDATE_PORT:-13001}
 CANDIDATE_CONTAINER=${CANDIDATE_CONTAINER:-aiclient2api-green-candidate}
+DEPLOYMENT_EPOCH=${DEPLOYMENT_EPOCH:-green-${REVISION:-candidate}}
 CONFIG_DIR=${CONFIG_DIR:-/root/ai_client_configs}
 STATE_DIR=${STATE_DIR:-/root/aiclient2api-blue-green}
 SNAPSHOT_DIR=${SNAPSHOT_DIR:-$STATE_DIR/candidate-configs}
@@ -126,6 +127,7 @@ prepare_candidate() {
     --name "$CANDIDATE_CONTAINER" \
     --label yyn.deployment_role=candidate \
     --label "yyn.expected_revision=$REVISION" \
+    --env "RUNTIME_DEPLOYMENT_EPOCH=$DEPLOYMENT_EPOCH" \
     --cpus 1 \
     --memory 1g \
     -p "127.0.0.1:${CANDIDATE_PORT}:3000" \
@@ -135,7 +137,7 @@ prepare_candidate() {
   if [ "$APPLY" = "1" ]; then
     wait_for_health || { docker logs --tail 100 "$CANDIDATE_CONTAINER" >&2; exit 1; }
     curl -fsS --max-time 5 "http://127.0.0.1:${CANDIDATE_PORT}/api/health" >/dev/null
-    log "candidate healthy: container=$CANDIDATE_CONTAINER port=$CANDIDATE_PORT revision=$REVISION"
+    log "candidate healthy: container=$CANDIDATE_CONTAINER port=$CANDIDATE_PORT revision=$REVISION epoch=$DEPLOYMENT_EPOCH"
   fi
 }
 

@@ -26,6 +26,7 @@ describe('production image provenance and blue-green preflight', () => {
         expect(script).toContain('PHASE=plan');
         expect(script).toContain('127.0.0.1:${CANDIDATE_PORT}:3000');
         expect(script).toContain('yyn.base_commit');
+        expect(script).toContain('RUNTIME_DEPLOYMENT_EPOCH');
         expect(script).toContain('nginx -t');
         expect(script).toContain('refusing unsafe snapshot path');
         expect(script).not.toMatch(/-p\s+1455:1455/);

@@ -79,6 +79,8 @@ docker image inspect --format '{{ index .Config.Labels "yyn.base_commit" }}' <im
 7. 原子替换 upstream include 并 reload Nginx。
 8. 保留旧容器和镜像至观察窗口结束。
 
+候选必须使用独立的 `RUNTIME_DEPLOYMENT_EPOCH=green-<revision>`；切换时新颜色使用新 epoch，旧颜色租约只允许排空，回滚恢复旧 upstream 与旧 epoch，不复用新颜色未确认的状态事件。
+
 如果必须做到严格零请求中断，需要先把 API Potluck、provider 状态及用量缓存迁移到可并发访问的外部状态存储，或增加可验证的跨进程 mutation ledger；这不属于轻量修复范围。
 
 ## 回滚
