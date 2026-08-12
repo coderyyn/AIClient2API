@@ -14,6 +14,7 @@ import {
     resolveCodexOverloadFailoverKey
 } from '../providers/openai/codex-overload-failover.js';
 import { codexTransientRetryObservability } from '../providers/openai/codex-transient-observability.js';
+import requestContext from './context.js';
 
 // ==================== 时间与时区 ====================
 
@@ -1194,10 +1195,13 @@ export function getRequestBody(req, options = {}) {
             if (settled) return;
             settled = true;
             if (!body) {
+                requestContext.get('runtimeRequest')?.mark?.('bodyParsed');
                 return resolve({});
             }
             try {
-                resolve(JSON.parse(body));
+                const parsed = JSON.parse(body);
+                requestContext.get('runtimeRequest')?.mark?.('bodyParsed');
+                resolve(parsed);
             } catch (error) {
                 reject(new Error("Invalid JSON in request body."));
             }

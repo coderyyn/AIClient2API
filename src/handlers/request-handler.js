@@ -15,6 +15,7 @@ import { getPluginManager } from '../core/plugin-manager.js';
 import { randomUUID } from 'crypto';
 import { handleGrokAssetsProxy } from '../utils/grok-assets-proxy.js';
 import { instrumentResponseForAudit } from '../utils/request-audit-lifecycle.js';
+import { runtimeMetrics } from '../runtime/runtime-metrics.js';
 
 /**
  * Generate a collision-resistant server-side request ID.
@@ -46,8 +47,13 @@ export function createRequestHandler(config, providerPoolManager) {
         const requestId = generateRequestId();
         const initialRequestUrl = new URL(req.url, `http://${req.headers.host}`);
         const originalPath = initialRequestUrl.pathname;
+        const workerId = process.env.RUNTIME_WORKER_ID || (process.env.RUNTIME_WORKER_ROLE === 'execution' ? `execution-${process.pid}` : 'standalone');
+        const requestKind = /\/images\/(?:generations|edits)/.test(originalPath) ? 'image' : 'model';
+        const runtimeRequest = runtimeMetrics.beginRequest({ workerId, kind: requestKind });
+        res.once('finish', () => runtimeRequest.end({ statusCode: res.statusCode }));
+        res.once('close', () => runtimeRequest.end({ statusCode: res.statusCode || 499 }));
 
-        return requestContext.run({ requestId, requestAudit: { requestId, ...network, originalPath } }, async () => {
+        return requestContext.run({ requestId, runtimeRequest, requestAudit: { requestId, ...network, originalPath } }, async () => {
             return logger.runWithContext(requestId, async () => {
                 // Deep copy the config for each request to allow dynamic modification
                 const currentConfig = deepmerge({}, config);
