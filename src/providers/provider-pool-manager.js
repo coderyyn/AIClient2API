@@ -1758,12 +1758,17 @@ export class ProviderPoolManager {
         if (this.coordination) {
             const ordered = this._orderCoordinatedCandidates(candidates, providerType, requestedModel, options);
             const hasStickyAffinity = Boolean(options.stickyProviderKey);
-            const lease = await this.coordination.acquire(ordered.map((provider, index) => ({
+            const coordinatedCandidates = ordered.map((provider, index) => ({
                 providerType: provider.type,
                 uuid: provider.uuid || provider.config?.uuid,
                 concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
                 preferred: hasStickyAffinity && index === 0
-            })));
+            }));
+            const lease = hasStickyAffinity
+                ? await this.coordination.acquire(coordinatedCandidates, {
+                    affinityKey: `mixed:${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
+                })
+                : await this.coordination.acquire(coordinatedCandidates);
             if (!lease) return null;
             const selected = this._findProvider(lease.providerType, lease.uuid);
             if (!selected) {
@@ -2122,7 +2127,11 @@ export class ProviderPoolManager {
                     concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
                     preferred: hasStickyAffinity && index === 0
                 }));
-            const lease = await this.coordination.acquire(candidates);
+            const lease = hasStickyAffinity
+                ? await this.coordination.acquire(candidates, {
+                    affinityKey: `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`
+                })
+                : await this.coordination.acquire(candidates);
             if (!lease) return null;
             const selected = this._findProvider(lease.providerType, lease.uuid);
             if (!selected) {

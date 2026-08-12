@@ -9,15 +9,20 @@ class InMemoryRedisExecutor {
         this.fences = new Map();
         this.bootId = 'boot-1';
         this.readyWorkers = new Set();
+        this.affinity = new Map();
     }
 
     async evalScript(name, _script, keys, args) {
         if (!this.available) throw new Error('redis unavailable');
         if (name === 'acquire-provider-lease') {
-            const [epoch, leaseId, ttlMs, workerId, candidatesJson, _nowMs, observedBootId] = args;
+            const [epoch, leaseId, ttlMs, workerId, candidatesJson, _nowMs, observedBootId, affinityKey = ''] = args;
             if (observedBootId !== this.bootId) return JSON.stringify({ coordinationRestarted: true, bootId: this.bootId });
             const candidates = JSON.parse(candidatesJson);
-            const selected = candidates
+            const mappedKey = affinityKey ? this.affinity.get(affinityKey) : null;
+            const mapped = mappedKey && candidates.find(candidate => candidate.key === mappedKey);
+            const selected = (mapped && (mapped.concurrencyLimit <= 0 || (this.active.get(mapped.key) || 0) < mapped.concurrencyLimit))
+                ? mapped
+                : candidates
                 .filter(candidate => candidate.concurrencyLimit <= 0 || (this.active.get(candidate.key) || 0) < candidate.concurrencyLimit)
                 .sort((a, b) => {
                     const preferredDiff = Number(b.preferred === true) - Number(a.preferred === true);
@@ -28,6 +33,7 @@ class InMemoryRedisExecutor {
                 })[0];
             if (!selected) return null;
             this.active.set(selected.key, (this.active.get(selected.key) || 0) + 1);
+            if (affinityKey && !mapped) this.affinity.set(affinityKey, selected.key);
             this.leases.set(leaseId, { epoch, providerKey: selected.key, workerId, ttlMs: Number(ttlMs) });
             return JSON.stringify({ leaseId, providerType: selected.providerType, uuid: selected.uuid });
         }
@@ -124,6 +130,28 @@ describe('RedisLeaseCoordinator', () => {
         const recovered = await coordinator.acquire(candidates);
         expect(recovered.uuid).toBe('affinity');
     });
+
+    test('persists affinity across workers, temporarily diverts on saturation, then returns after release', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const first = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const second = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w2' });
+        const candidates = [
+            { providerType: 'p', uuid: 'affinity', concurrencyLimit: 1, preferred: true },
+            { providerType: 'p', uuid: 'fallback', concurrencyLimit: 0 }
+        ];
+
+        const firstLease = await first.acquire(candidates, { affinityKey: 'session:one' });
+        const diverted = await second.acquire(candidates, { affinityKey: 'session:one' });
+        expect(firstLease.uuid).toBe('affinity');
+        expect(diverted.uuid).toBe('fallback');
+        expect([...redis.affinity.values()]).toEqual(['p:affinity']);
+        expect([...redis.affinity.keys()][0]).not.toContain('session:one');
+
+        await first.release(firstLease.leaseId);
+        const recovered = await second.acquire(candidates, { affinityKey: 'session:one' });
+        expect(recovered.uuid).toBe('affinity');
+    });
+
 
     test('release is idempotent and never makes active counts negative', async () => {
         const redis = new InMemoryRedisExecutor();

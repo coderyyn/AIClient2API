@@ -69,11 +69,12 @@ describe('provider pool Redis coordination', () => {
             });
         });
 
-        const candidates = coordinator.acquire.mock.calls[0][0];
+        const [candidates, coordinationOptions] = coordinator.acquire.mock.calls[0];
         expect(candidates).toHaveLength(2);
         expect(candidates.filter(candidate => candidate.preferred)).toHaveLength(1);
         expect(candidates[0].preferred).toBe(true);
         expect(candidates[1].preferred).toBe(false);
+        expect(coordinationOptions.affinityKey).toContain('prompt-cache:test');
     });
 
     test('mixed pools acquire one global lease without using local active counters', async () => {
@@ -148,8 +149,9 @@ describe('provider pool Redis coordination', () => {
             });
         });
 
-        const candidates = coordinator.acquire.mock.calls[0][0];
+        const [candidates, coordinationOptions] = coordinator.acquire.mock.calls[0];
         expect(candidates.filter(candidate => candidate.preferred)).toHaveLength(1);
         expect(candidates[0].preferred).toBe(true);
+        expect(coordinationOptions.affinityKey).toContain('session:test');
     });
 });

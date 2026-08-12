@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 export class CoordinationUnavailableError extends Error {
     constructor(message = 'Runtime coordination is unavailable', cause = null) {
@@ -17,6 +17,9 @@ local lease_id = ARGV[2]
 local ttl_ms = tonumber(ARGV[3])
 local worker_id = ARGV[4]
 local candidates = cjson.decode(ARGV[5])
+local affinity_token = ARGV[8] or ''
+local affinity_key = affinity_token ~= '' and (KEYS[1] .. ':affinity:' .. affinity_token) or nil
+local affinity_provider_key = affinity_key and redis.call('GET', affinity_key) or nil
 local boot_id = redis.call('GET', KEYS[1] .. ':recovery:boot')
 if not boot_id or boot_id ~= ARGV[7] then
   return cjson.encode({ coordinationRestarted = true, bootId = boot_id })
@@ -25,12 +28,18 @@ local best = nil
 local best_active = nil
 local best_priority = nil
 local best_preferred = false
+local affinity_candidate = nil
+local affinity_active = nil
 for _, candidate in ipairs(candidates) do
   local active_key = KEYS[1] .. ':active:' .. candidate.key
   local now_ms = tonumber(ARGV[6])
   redis.call('ZREMRANGEBYSCORE', active_key, '-inf', now_ms)
   local active = tonumber(redis.call('ZCARD', active_key) or '0')
   local limit = tonumber(candidate.concurrencyLimit or 0)
+  if affinity_provider_key and candidate.key == affinity_provider_key then
+    affinity_candidate = candidate
+    affinity_active = active
+  end
   if limit <= 0 or active < limit then
     local priority = tonumber(candidate.priority or 0)
     local preferred = candidate.preferred == true
@@ -44,6 +53,14 @@ for _, candidate in ipairs(candidates) do
     end
   end
 end
+if affinity_candidate then
+  local affinity_limit = tonumber(affinity_candidate.concurrencyLimit or 0)
+  if affinity_limit <= 0 or affinity_active < affinity_limit then
+    best = affinity_candidate
+  end
+elseif affinity_key and affinity_provider_key then
+  redis.call('DEL', affinity_key)
+end
 if best == nil then return nil end
 local active_key = KEYS[1] .. ':active:' .. best.key
 redis.call('ZADD', active_key, tonumber(ARGV[6]) + ttl_ms, lease_id)
@@ -51,6 +68,13 @@ redis.call('PEXPIRE', active_key, ttl_ms * 2)
 local lease_key = KEYS[1] .. ':lease:' .. lease_id
 redis.call('HSET', lease_key, 'epoch', epoch, 'providerKey', best.key, 'workerId', worker_id)
 redis.call('PEXPIRE', lease_key, ttl_ms)
+if affinity_key then
+  if not affinity_provider_key or not affinity_candidate then
+    redis.call('SET', affinity_key, best.key, 'PX', tonumber(ARGV[9]))
+  else
+    redis.call('PEXPIRE', affinity_key, tonumber(ARGV[9]))
+  end
+end
 return cjson.encode({ leaseId = lease_id, providerType = best.providerType, uuid = best.uuid })
 `;
 
@@ -146,8 +170,13 @@ function normalizeCandidate(candidate, priority) {
     };
 }
 
+function hashAffinityKey(value) {
+    if (!value) return '';
+    return createHash('sha256').update(String(value)).digest('hex');
+}
+
 export class RedisLeaseCoordinator {
-    constructor({ redis, epoch = 'default', workerId = `worker-${process.pid}`, leaseTtlMs = 120000, expectedWorkers = 1 } = {}) {
+    constructor({ redis, epoch = 'default', workerId = `worker-${process.pid}`, leaseTtlMs = 120000, affinityTtlMs = 24 * 60 * 60 * 1000, expectedWorkers = 1 } = {}) {
         if (!redis?.evalScript) throw new TypeError('Redis executor with evalScript() is required');
         this.redis = redis;
         this.epoch = epoch;
@@ -157,6 +186,7 @@ export class RedisLeaseCoordinator {
         this.ready = this.expectedWorkers === 1;
         this.bootId = null;
         this.leaseTtlMs = leaseTtlMs;
+        this.affinityTtlMs = affinityTtlMs;
         this.namespace = `aiclient2api:${epoch}`;
         this.renewIntervalMs = Math.min(20000, Math.max(1000, Math.floor(this.leaseTtlMs / 3)));
         this.renewTimers = new Map();
@@ -171,7 +201,7 @@ export class RedisLeaseCoordinator {
         }
     }
 
-    async acquire(candidates) {
+    async acquire(candidates, { affinityKey = '' } = {}) {
         if (!this.bootId || !this.ready || this.recovering) await this.synchronize();
         if (!this.ready || this.recovering) throw new CoordinationUnavailableError('Runtime coordination is recovering');
         const normalized = (candidates || []).map(normalizeCandidate).filter(item => item.providerType && item.uuid);
@@ -184,7 +214,9 @@ export class RedisLeaseCoordinator {
             this.workerId,
             JSON.stringify(normalized),
             String(Date.now()),
-            this.bootId || ''
+            this.bootId || '',
+            hashAffinityKey(affinityKey),
+            String(this.affinityTtlMs)
         ]);
         if (!result) return null;
         const lease = typeof result === 'string' ? JSON.parse(result) : result;
