@@ -50,8 +50,13 @@ export function createRequestHandler(config, providerPoolManager) {
         const workerId = process.env.RUNTIME_WORKER_ID || (process.env.RUNTIME_WORKER_ROLE === 'execution' ? `execution-${process.pid}` : 'standalone');
         const requestKind = /\/images\/(?:generations|edits)/.test(originalPath) ? 'image' : 'model';
         const runtimeRequest = runtimeMetrics.beginRequest({ workerId, kind: requestKind });
-        res.once('finish', () => runtimeRequest.end({ statusCode: res.statusCode }));
-        res.once('close', () => runtimeRequest.end({ statusCode: res.statusCode || 499 }));
+        // Unit/in-process adapters may provide a minimal response object without
+        // EventEmitter methods. Real Node responses still get lifecycle metrics;
+        // lightweight test doubles continue through the normal handler path.
+        if (typeof res.once === 'function') {
+            res.once('finish', () => runtimeRequest.end({ statusCode: res.statusCode }));
+            res.once('close', () => runtimeRequest.end({ statusCode: res.statusCode || 499 }));
+        }
 
         return requestContext.run({ requestId, runtimeRequest, requestAudit: { requestId, ...network, originalPath } }, async () => {
             return logger.runWithContext(requestId, async () => {

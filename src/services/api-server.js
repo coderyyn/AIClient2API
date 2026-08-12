@@ -14,6 +14,9 @@ import { startUsageCacheAutoRefreshService } from './usage-cache-auto-refresh-se
 import { createAsyncActivityTracker, createStartupShutdownGate } from './async-activity-tracker.js';
 import { createShutdownCoordinator } from './shutdown-coordinator.js';
 import { registerWorkerShutdownHandlers } from './worker-shutdown-handlers.js';
+import { createRuntimeCoordination } from '../runtime/runtime-coordination.js';
+import { waitForCoordinationReady } from '../runtime/runtime-coordination-readiness.js';
+import { RuntimeEventConsumer } from '../runtime/runtime-event-consumer.js';
 
 /**
  * @license
@@ -128,6 +131,9 @@ import { isRetryableNetworkError } from '../utils/common.js';
 
 // 检测是否作为子进程运行
 const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
+const RUNTIME_WORKER_ROLE = process.env.RUNTIME_WORKER_ROLE || 'standalone';
+const IS_EXECUTION_WORKER = RUNTIME_WORKER_ROLE === 'execution';
+const runtimeCoordination = createRuntimeCoordination();
 
 // 存储服务器实例，用于优雅关闭
 let serverInstance = null;
@@ -139,6 +145,10 @@ const requestActivityTracker = createAsyncActivityTracker();
 const heartbeatActivityTracker = createAsyncActivityTracker();
 const healthCheckActivityTracker = createAsyncActivityTracker();
 const startupShutdownGate = createStartupShutdownGate({ logger });
+const runtimeHookConsumer = new RuntimeEventConsumer({
+    apply: message => getPluginManager()?.executeHook?.(message.hookName, ...(message.args || [])),
+    ack: message => sendToMaster({ type: 'runtime_hook_ack', sourceWorkerId: message.sourceWorkerId, eventId: message.eventId })
+});
 
 /**
  * 发送消息给主进程
@@ -239,7 +249,7 @@ async function startServer() {
     // await autoLinkProviderConfigs(CONFIG);
 
     // Start TLS sidecar if enabled
-    if (CONFIG.TLS_SIDECAR_ENABLED) {
+    if (CONFIG.TLS_SIDECAR_ENABLED && !IS_EXECUTION_WORKER) {
         const sidecar = getTLSSidecar();
         const started = await sidecar.start({
             port: CONFIG.TLS_SIDECAR_PORT,
@@ -273,18 +283,24 @@ async function startServer() {
     }
 
     // Initialize API services
-    const services = await initApiService(CONFIG, true);
+    const services = await initApiService(CONFIG, !IS_EXECUTION_WORKER, {
+        coordination: runtimeCoordination,
+        persistenceEnabled: !IS_EXECUTION_WORKER,
+        stateEventSink: IS_EXECUTION_WORKER && process.send
+            ? event => process.send({ type: 'provider_state', event })
+            : null
+    });
     if (startupShutdownGate.shouldAbort('Codex prewarm service startup')) return null;
-    codexPrewarmService = startCodexPrewarmService(CONFIG, getProviderPoolManager());
+    codexPrewarmService = IS_EXECUTION_WORKER ? null : startCodexPrewarmService(CONFIG, getProviderPoolManager());
     if (startupShutdownGate.shouldAbort('usage cache auto refresh startup')) return null;
-    usageCacheAutoRefreshService = startUsageCacheAutoRefreshService(CONFIG, getProviderPoolManager());
+    usageCacheAutoRefreshService = IS_EXECUTION_WORKER ? null : startUsageCacheAutoRefreshService(CONFIG, getProviderPoolManager());
     if (startupShutdownGate.shouldAbort('UI management initialization')) return null;
     
     // Initialize UI management features
-    initializeUIManagement(CONFIG);
+    if (!IS_EXECUTION_WORKER) initializeUIManagement(CONFIG);
     
     // Initialize API management and get heartbeat function
-    const heartbeatAndRefreshToken = initializeAPIManagement(services);
+    const heartbeatAndRefreshToken = IS_EXECUTION_WORKER ? async () => {} : initializeAPIManagement(services);
     if (startupShutdownGate.shouldAbort('request handler creation')) return null;
     
     // Create request handler
@@ -392,7 +408,7 @@ async function startServer() {
             return;
         }
 
-        if (CONFIG.CRON_REFRESH_TOKEN) {
+        if (!IS_EXECUTION_WORKER && CONFIG.CRON_REFRESH_TOKEN) {
             logger.info(`  • Cron Near Minutes: ${CONFIG.CRON_NEAR_MINUTES}`);
             logger.info(`  • Cron Refresh Token: ${CONFIG.CRON_REFRESH_TOKEN}`);
             // 每 CRON_NEAR_MINUTES 分钟执行一次心跳日志和令牌刷新
@@ -404,7 +420,7 @@ async function startServer() {
         }
         // 服务器完全启动后,执行初始健康检查
         const poolManager = getProviderPoolManager();
-        if (poolManager) {
+        if (!IS_EXECUTION_WORKER && poolManager) {
             logger.info('[Initialization] Performing initial health checks for provider pools...');
             healthCheckActivityTracker.run(async () => poolManager.performInitialHealthChecks()).catch(error => {
                 logger.error('[Initialization] Initial health checks failed:', error);
@@ -415,7 +431,7 @@ async function startServer() {
         // 注意：无论初始 enabled 状态如何，都注册 reloadHealthCheckTimer，
         // 使得热更新时（从 disabled→enabled）config-api 能调用它启动 timer。
         const scheduledConfig = CONFIG.SCHEDULED_HEALTH_CHECK;
-        {
+        if (!IS_EXECUTION_WORKER) {
             const DEFAULT_INTERVAL = CONFIG.CRON_NEAR_MINUTES * 60 * 1000;
 
             let isHealthCheckRunning = false;
@@ -501,6 +517,10 @@ async function startServer() {
             finishStartup();
             return;
         }
+        if (IS_EXECUTION_WORKER && runtimeCoordination?.synchronize) {
+            const coordinationStatus = await waitForCoordinationReady(runtimeCoordination);
+            logger.info(`[Runtime] Coordination recovery barrier ready: ${coordinationStatus.readyWorkers}/${runtimeCoordination.expectedWorkers}`);
+        }
         if (IS_WORKER_PROCESS) {
             sendToMaster({ type: 'ready', pid: process.pid });
         }
@@ -519,6 +539,27 @@ const shutdownHandlers = registerWorkerShutdownHandlers({
     requestShutdown: gracefulShutdown,
     isRetryableNetworkError,
     logger,
+    onRuntimeMessage: message => {
+        if (message.type === 'provider_state' && message.event) {
+            getProviderPoolManager()?.applyRemoteProviderState?.(message.event);
+            return true;
+        }
+        if (message.type === 'runtime_hook' && RUNTIME_WORKER_ROLE === 'control') {
+            runtimeHookConsumer.consume(message).catch(error => {
+                logger.error('[Runtime Hook] Failed to apply remote hook:', error.message);
+            });
+            return true;
+        }
+        if (message.type === 'runtime_hook_ack' && IS_EXECUTION_WORKER) {
+            getPluginManager()?.runtimeHookBridge?.ack?.(message.eventId);
+            return true;
+        }
+        if (message.type === 'runtime_hook_retry' && IS_EXECUTION_WORKER) {
+            getPluginManager()?.runtimeHookBridge?.retryUnacked?.();
+            return true;
+        }
+        return false;
+    },
     sendStatus: data => sendToMaster({ type: 'status', data }),
     getStatus: () => ({
         pid: process.pid,

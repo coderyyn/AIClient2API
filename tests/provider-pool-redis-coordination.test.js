@@ -1,0 +1,88 @@
+import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
+import requestContext from '../src/utils/context.js';
+
+jest.mock('../src/providers/adapter.js', () => ({
+    getServiceAdapter: jest.fn(),
+    getRegisteredProviders: jest.fn(() => ['test']),
+    invalidateServiceAdapter: jest.fn()
+}));
+
+jest.mock('../src/ui-modules/event-broadcast.js', () => ({
+    broadcastEvent: jest.fn()
+}));
+
+describe('provider pool Redis coordination', () => {
+    test('acquires from eligible local candidates and releases the request-bound lease', async () => {
+        const coordinator = {
+            acquire: jest.fn(async candidates => ({
+                leaseId: 'lease-1',
+                providerType: candidates[0].providerType,
+                uuid: candidates[0].uuid
+            })),
+            release: jest.fn(async () => true)
+        };
+        const manager = new ProviderPoolManager({
+            test: [
+                { uuid: 'disabled', isDisabled: true },
+                { uuid: 'healthy', isHealthy: true, concurrencyLimit: 0 }
+            ]
+        }, { coordination: coordinator, persistenceEnabled: false });
+
+        await requestContext.run({}, async () => {
+            const selected = await manager.acquireSlot('test', 'model');
+            expect(selected.uuid).toBe('healthy');
+            expect(coordinator.acquire).toHaveBeenCalledWith([
+                expect.objectContaining({ providerType: 'test', uuid: 'healthy', concurrencyLimit: 0 })
+            ]);
+            await manager.releaseSlot('test', 'healthy');
+        });
+
+        expect(coordinator.release).toHaveBeenCalledWith('lease-1');
+    });
+
+    test('execution workers do not persist provider files', () => {
+        const manager = new ProviderPoolManager({ test: [{ uuid: 'one' }] }, { persistenceEnabled: false });
+        manager._debouncedSave('test');
+        expect(manager.pendingSaves.size).toBe(0);
+        expect(manager.saveTimer).toBeNull();
+    });
+
+    test('mixed pools acquire one global lease without using local active counters', async () => {
+        const coordinator = {
+            acquire: jest.fn(async candidates => ({
+                leaseId: 'mixed-lease',
+                providerType: candidates[0].providerType,
+                uuid: candidates[0].uuid
+            })),
+            release: jest.fn(async () => true)
+        };
+        const manager = new ProviderPoolManager({
+            first: [{ uuid: 'first-1', supportedModels: ['model'] }],
+            second: [{ uuid: 'second-1', supportedModels: ['model'] }]
+        }, {
+            coordination: coordinator,
+            persistenceEnabled: false,
+            globalConfig: {
+                mixedProviderPools: {
+                    mixed: {
+                        enabled: true,
+                        entryProviders: ['first'],
+                        candidateProviders: ['first', 'second'],
+                        matchModels: ['model']
+                    }
+                }
+            }
+        });
+
+        await requestContext.run({}, async () => {
+            const result = await manager.acquireSlotWithFallback('first', 'model');
+            expect(result.config.uuid).toBeTruthy();
+            await manager.releaseSlot(result.actualProviderType, result.config.uuid);
+        });
+
+        expect(coordinator.acquire).toHaveBeenCalledTimes(1);
+        expect(coordinator.acquire.mock.calls[0][0]).toHaveLength(2);
+        expect(manager.providerStatus.first[0].state.activeCount).toBe(0);
+        expect(manager.providerStatus.second[0].state.activeCount).toBe(0);
+    });
+});

@@ -24,6 +24,7 @@ import {
     createWorkerLifecycle,
     restartAfterGracefulStop
 } from './master-worker-lifecycle.js';
+import { startMultiWorkerRuntime } from '../runtime/multi-worker-runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -401,6 +402,11 @@ function setupSignalHandlers() {
  */
 async function main() {
     logger.info('='.repeat(50));
+
+    if (process.env.RUNTIME_MULTI_WORKER_ENABLED === 'true') {
+        startMultiWorkerRuntime({ logger });
+        return;
+    }
     logger.info('[Master] AIClient2API Master Process');
     logger.info('[Master] PID:', process.pid);
     logger.info('[Master] Node version:', process.version);

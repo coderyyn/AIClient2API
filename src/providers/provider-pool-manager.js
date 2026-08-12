@@ -21,6 +21,8 @@ import {
     readFreshUsageCacheSync
 } from '../utils/codex-plan.js';
 import { normalizeCodexRateLimitWindows } from '../utils/codex-rate-limit.js';
+import requestContext from '../utils/context.js';
+import { createProviderStateEvent, applyProviderStateEvent } from '../runtime/provider-state-event.js';
 
 function getCustomModelAliasesForProvider(config, providerType) {
     const customModels = Array.isArray(config?.customModels) ? config.customModels : [];
@@ -583,6 +585,12 @@ export class ProviderPoolManager {
         this.saveDebounceTime = options.saveDebounceTime ?? 10000; // 默认10秒批量落盘
         this.saveTimer = null;
         this.pendingSaves = new Set(); // 记录待保存的 providerType
+        this.coordination = options.coordination || null;
+        this.persistenceEnabled = options.persistenceEnabled !== false;
+        this.stateEventSink = options.stateEventSink || null;
+        this.serviceAdapterFactory = options.serviceAdapterFactory || getServiceAdapter;
+        this.pendingStateEvents = new Set();
+        this.stateEventTimer = null;
         
         // Fallback 链配置
         this.fallbackChain = options.globalConfig?.providerFallbackChain || {};
@@ -1318,6 +1326,27 @@ export class ProviderPoolManager {
      */
     async _refreshNodeToken(providerType, providerStatus, force = false) {
         const config = providerStatus.config;
+        let refreshFence = null;
+        let refreshFenceTimer = null;
+
+        if (this.coordination?.acquireRefreshFence) {
+            refreshFence = await this.coordination.acquireRefreshFence(
+                providerType,
+                config.uuid,
+                this.refreshTaskTimeoutMs + 30000
+            );
+            if (refreshFence === null) {
+                this._log('debug', `Token refresh already owned by another worker for ${this._getDisplayName(config)}`);
+                return false;
+            }
+            const refreshFenceTtl = this.refreshTaskTimeoutMs + 30000;
+            refreshFenceTimer = setInterval(() => {
+                this.coordination.renewRefreshFence?.(providerType, config.uuid, refreshFence, refreshFenceTtl).catch(error => {
+                    this._log('warn', `Failed to renew refresh fence for ${this._getDisplayName(config)}: ${error.message}`);
+                });
+            }, Math.min(20000, Math.max(1000, Math.floor(refreshFenceTtl / 3))));
+            refreshFenceTimer.unref?.();
+        }
         
         // 检查刷新次数是否已达上限（最大5次）
         const currentRefreshCount = config.refreshCount || 0;
@@ -1344,7 +1373,7 @@ export class ProviderPoolManager {
                 MODEL_PROVIDER: providerType
             };
             delete tempConfig.providerPools;
-            const serviceAdapter = getServiceAdapter(tempConfig);
+            const serviceAdapter = this.serviceAdapterFactory(tempConfig);
             
             // 调用适配器的 refreshToken 方法（内部封装了具体的刷新逻辑）
             if (typeof serviceAdapter.refreshToken === 'function') {
@@ -1362,6 +1391,13 @@ export class ProviderPoolManager {
                 }
                 const trackedRefreshOperation = this._trackRefreshOperation(refreshOperation);
                 const refreshResult = await this._awaitRefreshWithTimeout(trackedRefreshOperation, providerType, this._getDisplayName(config));
+
+                if (refreshFence !== null && !await this.coordination.validateRefreshFence(providerType, config.uuid, refreshFence)) {
+                    const staleError = new Error(`Stale token refresh fence for ${providerType}/${config.uuid}`);
+                    staleError.code = 'STALE_REFRESH_FENCE';
+                    staleError.skipErrorCount = true;
+                    throw staleError;
+                }
 
                 const duration = Date.now() - startTime;
                 
@@ -1388,15 +1424,19 @@ export class ProviderPoolManager {
             this._log('error', `Token refresh failed for node ${this._getDisplayName(config)}: ${error.message}`);
             
             // 记录错误信息
-            config.lastErrorTime = new Date().toISOString();
-            config.lastErrorMessage = `Refresh failed: ${error.message}`;
+            if (error.code !== 'STALE_REFRESH_FENCE') {
+                config.lastErrorTime = new Date().toISOString();
+                config.lastErrorMessage = `Refresh failed: ${error.message}`;
+            }
             
             // 增加错误计数（用于普通的健康检查参考，虽然刷新错误主要参考 refreshCount）
-            config.errorCount = (config.errorCount || 0) + 1;
+            if (error.code !== 'STALE_REFRESH_FENCE') config.errorCount = (config.errorCount || 0) + 1;
 
             // 只有当刷新重试次数达到上限（5次）时，才标记为不健康
             // 注意：refreshCount 在进入本方法后的 try 块前已经自增（L466）
-            if (config.refreshCount >= 5) {
+            if (error.code === 'STALE_REFRESH_FENCE') {
+                config.needsRefresh = false;
+            } else if (config.refreshCount >= 5) {
                 this.markProviderUnhealthyImmediately(providerType, config, `Refresh failed after maximum attempts (5): ${error.message}`);
             } else {
                 // 关键修复：重置 needsRefresh 为 false，允许该节点回到池中
@@ -1410,6 +1450,13 @@ export class ProviderPoolManager {
                 this._debouncedSave(providerType);
             }
             throw error;
+        } finally {
+            if (refreshFenceTimer) clearInterval(refreshFenceTimer);
+            if (refreshFence !== null) {
+                await this.coordination.releaseRefreshFence(providerType, config.uuid, refreshFence).catch(error => {
+                    this._log('warn', `Failed to release refresh fence for ${providerType}/${config.uuid}: ${error.message}`);
+                });
+            }
         }
     }
 
@@ -1706,6 +1753,31 @@ export class ProviderPoolManager {
                 }
                 throw error;
             }
+        }
+
+        if (this.coordination) {
+            const ordered = this._orderCoordinatedCandidates(candidates, providerType, requestedModel, options);
+            const lease = await this.coordination.acquire(ordered.map(provider => ({
+                providerType: provider.type,
+                uuid: provider.uuid || provider.config?.uuid,
+                concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0)
+            })));
+            if (!lease) return null;
+            const selected = this._findProvider(lease.providerType, lease.uuid);
+            if (!selected) {
+                await this.coordination.release(lease.leaseId);
+                return null;
+            }
+            const store = requestContext.getStore();
+            store.providerLeases = store.providerLeases || new Map();
+            store.providerLeases.set(`${lease.providerType}:${lease.uuid}`, lease.leaseId);
+            selected.config.lastUsed = new Date().toISOString();
+            return {
+                config: selected.config,
+                actualProviderType: selected.type,
+                isFallback: false,
+                isMixedPool: true
+            };
         }
 
         const selected = this._selectFromMixedCandidates(candidates, requestedModel, { ...options, skipUsageCount: true });
@@ -2034,6 +2106,31 @@ export class ProviderPoolManager {
      * @param {object} options 
      */
     async acquireSlot(providerType, requestedModel = null, options = {}) {
+        if (this.coordination) {
+            const candidates = this._orderCoordinatedCandidates(
+                this._getHealthyProvidersForType(providerType, requestedModel, options),
+                providerType,
+                requestedModel,
+                options
+            )
+                .map(provider => ({
+                    providerType,
+                    uuid: provider.uuid || provider.config?.uuid,
+                    concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0)
+                }));
+            const lease = await this.coordination.acquire(candidates);
+            if (!lease) return null;
+            const selected = this._findProvider(lease.providerType, lease.uuid);
+            if (!selected) {
+                await this.coordination.release(lease.leaseId);
+                return null;
+            }
+            const store = requestContext.getStore();
+            store.providerLeases = store.providerLeases || new Map();
+            store.providerLeases.set(`${lease.providerType}:${lease.uuid}`, lease.leaseId);
+            selected.config.lastUsed = new Date().toISOString();
+            return selected.config;
+        }
         // 使用 selectProvider 进行初次选择（评分逻辑已经包含了并发考虑）
         const selectedConfig = await this.selectProvider(providerType, requestedModel, { ...options, skipUsageCount: true });
         
@@ -2107,6 +2204,18 @@ export class ProviderPoolManager {
      */
     releaseSlot(providerType, uuid) {
         if (!providerType || !uuid) return;
+
+        if (this.coordination) {
+            const leases = requestContext.get('providerLeases');
+            const key = `${providerType}:${uuid}`;
+            const leaseId = leases?.get(key);
+            if (!leaseId) return false;
+            leases.delete(key);
+            return this.coordination.release(leaseId).catch(error => {
+                this._log('warn', `[Coordination] Lease release deferred to TTL for ${key}: ${error.message}`);
+                return false;
+            });
+        }
         
         const provider = this._findProvider(providerType, uuid);
         if (!provider) return;
@@ -3295,6 +3404,20 @@ export class ProviderPoolManager {
         }
     }
 
+    _orderCoordinatedCandidates(candidates, providerType, requestedModel, options = {}) {
+        if (candidates.length <= 1) return candidates;
+        const remaining = [...candidates];
+        const ordered = [];
+        while (remaining.length > 0) {
+            const selected = this._selectFromMixedCandidates(remaining, requestedModel, options)
+                || remaining[0];
+            ordered.push(selected);
+            const index = remaining.indexOf(selected);
+            remaining.splice(index < 0 ? 0 : index, 1);
+        }
+        return ordered;
+    }
+
     markAntigravityModelQuotaUnhealthy(providerType, providerConfig, modelName, errorMessage = null, recoveryTime = null) {
         if (!providerConfig?.uuid || !isAntigravityProviderType(providerType)) return;
         const provider = this._findProvider(providerType, providerConfig.uuid);
@@ -4089,6 +4212,23 @@ export class ProviderPoolManager {
      * @private
      */
     _debouncedSave(providerType) {
+        if (!this.persistenceEnabled) {
+            if (!this.stateEventSink) return;
+            this.pendingStateEvents.add(providerType);
+            if (this.stateEventTimer) return;
+            this.stateEventTimer = setTimeout(() => {
+                this.stateEventTimer = null;
+                const types = [...this.pendingStateEvents];
+                this.pendingStateEvents.clear();
+                for (const type of types) {
+                    for (const provider of this.providerStatus[type] || []) {
+                        this.stateEventSink(createProviderStateEvent(type, provider.config));
+                    }
+                }
+            }, Math.min(this.saveDebounceTime, 1000));
+            this.stateEventTimer.unref?.();
+            return;
+        }
         // 将待保存的 providerType 添加到集合中
         this.pendingSaves.add(providerType);
 
@@ -4172,6 +4312,14 @@ export class ProviderPoolManager {
                 this._log('error', `Failed to write provider_pools.json: ${error.message}`);
             }
         });
+    }
+
+    applyRemoteProviderState(event) {
+        const applied = applyProviderStateEvent(this.providerPools, event);
+        const provider = this._findProvider(event?.providerType, event?.uuid);
+        if (provider) applyProviderStateEvent({ [event.providerType]: [provider.config] }, event);
+        if (applied && this.persistenceEnabled) this._debouncedSave(event.providerType);
+        return applied || Boolean(provider);
     }
 
 }

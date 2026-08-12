@@ -1,4 +1,16 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
   aiclient-api:
     # 方式二：从 Dockerfile 本地构建
     # 使用方法: docker compose -f docker/docker-compose.build.yml -f docker/docker-compose.dev.yml up -d --build
@@ -18,6 +30,13 @@ services:
       - ../plugins:/app/src/plugins-user
     environment:
       - ARGS=
+      - RUNTIME_MULTI_WORKER_ENABLED=true
+      - RUNTIME_EXECUTION_WORKERS=3
+      - REDIS_URL=redis://redis:6379/0
+      - RUNTIME_DEPLOYMENT_EPOCH=local
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
       interval: 30s

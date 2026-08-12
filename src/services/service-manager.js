@@ -634,7 +634,7 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
  * @param {Object} config - The server configuration
  * @returns {Promise<Object>} The initialized services
  */
-export async function initApiService(config, isReady = false) {
+export async function initApiService(config, isReady = false, runtimeOptions = {}) {
 
     // Initialize or update ProviderPoolManager
     if (providerPoolManager) {
@@ -650,6 +650,9 @@ export async function initApiService(config, isReady = false) {
             globalConfig: config,
             maxErrorCount: config.MAX_ERROR_COUNT ?? 10,
             providerFallbackChain: config.providerFallbackChain || {},
+            coordination: runtimeOptions.coordination || null,
+            persistenceEnabled: runtimeOptions.persistenceEnabled !== false,
+            stateEventSink: runtimeOptions.stateEventSink || null,
         });
         logger.info('[Initialization] ProviderPoolManager initialized.');
     }

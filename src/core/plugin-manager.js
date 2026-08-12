@@ -20,6 +20,7 @@ import {
     validatePluginExport,
     validatePluginId
 } from './plugin-security.js';
+import { RuntimeHookBridge } from '../runtime/runtime-hook-bridge.js';
 
 // 插件配置文件路径
 const PLUGINS_CONFIG_FILE = path.join(process.cwd(), 'configs', 'plugins.json');
@@ -88,6 +89,10 @@ class PluginManager {
         this.initialized = false;
         /** @type {Object} */
         this.config = null; // 存储服务器全局配置
+        this.runtimeRole = process.env.RUNTIME_WORKER_ROLE || 'standalone';
+        this.runtimeHookBridge = this.runtimeRole === 'execution' && process.send
+            ? new RuntimeHookBridge({ send: message => process.send(message) })
+            : null;
     }
 
     /**
@@ -203,6 +208,7 @@ class PluginManager {
      * 保存插件配置文件
      */
     async saveConfig() {
+        if (this.runtimeRole === 'execution') return;
         try {
             const dir = path.dirname(PLUGINS_CONFIG_FILE);
             if (!existsSync(dir)) {
@@ -263,8 +269,10 @@ class PluginManager {
         for (const [name, plugin] of this.plugins) {
             const pluginConfig = this.pluginsConfig.plugins[name] || {};
             const enabled = pluginConfig.enabled !== false; // 默认启用
+            const executionSkipped = this.runtimeRole === 'execution'
+                && ['request-audit', 'model-usage-stats'].includes(name);
             
-            if (!enabled) {
+            if (!enabled || executionSkipped) {
                 logger.info(`[PluginManager] Plugin "${name}" is disabled, skipping init`);
                 continue;
             }
@@ -576,7 +584,11 @@ class PluginManager {
      * @param  {...any} args - 钩子参数
      */
     async executeHook(hookName, ...args) {
+        if (this.runtimeHookBridge && ['onUnaryResponse', 'onStreamChunk', 'onContentGenerated', 'onRequestCompleted'].includes(hookName)) {
+            await this.runtimeHookBridge.handle(hookName, args[0]);
+        }
         for (const plugin of this.getEnabledPlugins()) {
+            if (this.runtimeHookBridge && ['api-potluck', 'request-audit', 'model-usage-stats'].includes(plugin.name)) continue;
             if (!plugin.hooks || typeof plugin.hooks[hookName] !== 'function') continue;
             
             try {

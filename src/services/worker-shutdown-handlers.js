@@ -3,7 +3,8 @@ export function createWorkerShutdownHandlers({
     isRetryableNetworkError = () => false,
     sendStatus = () => {},
     getStatus = () => ({}),
-    logger = console
+    logger = console,
+    onRuntimeMessage = () => false
 } = {}) {
     const requestGracefulShutdown = () => requestShutdown(0);
     const requestFatalShutdown = () => requestShutdown(1);
@@ -11,6 +12,7 @@ export function createWorkerShutdownHandlers({
     return {
         onMessage(message) {
             if (!message?.type) return;
+            if (onRuntimeMessage(message) === true) return;
             logger?.info?.('[Worker] Received message from master:', message.type);
 
             if (message.type === 'shutdown') {
