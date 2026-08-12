@@ -4,16 +4,15 @@
  */
 
 import http from 'http';
+import { resolveHealthcheckTarget } from './src/runtime/healthcheck-target.js';
 
-// 从环境变量获取主机和端口，如果没有设置则使用默认值
-const HOST = process.env.HEALTHCHECK_HOST || '127.0.0.1';
-const PORT = process.env.HEALTHCHECK_PORT || 3100;
+const target = resolveHealthcheckTarget(process.env);
 
 // 发送HTTP请求到健康检查端点
 const options = {
-  hostname: HOST,
-  port: PORT,
-  path: process.env.HEALTHCHECK_PATH || '/master/health',
+  hostname: target.host,
+  port: target.port,
+  path: target.path,
   method: 'GET',
   timeout: 2000 // 2秒超时
 };
