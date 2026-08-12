@@ -32,7 +32,7 @@ for _, candidate in ipairs(candidates) do
   local limit = tonumber(candidate.concurrencyLimit or 0)
   if limit <= 0 or active < limit then
     local priority = tonumber(candidate.priority or 0)
-    if best == nil or priority < best_priority or (priority == best_priority and active < best_active) then
+    if best == nil or active < best_active or (active == best_active and priority < best_priority) then
       best = candidate
       best_active = active
       best_priority = priority

@@ -19,7 +19,11 @@ class InMemoryRedisExecutor {
             const candidates = JSON.parse(candidatesJson);
             const selected = candidates
                 .filter(candidate => candidate.concurrencyLimit <= 0 || (this.active.get(candidate.key) || 0) < candidate.concurrencyLimit)
-                .sort((a, b) => (this.active.get(a.key) || 0) - (this.active.get(b.key) || 0))[0];
+                .sort((a, b) => {
+                    const activeDiff = (this.active.get(a.key) || 0) - (this.active.get(b.key) || 0);
+                    if (activeDiff !== 0) return activeDiff;
+                    return Number(a.priority || 0) - Number(b.priority || 0);
+                })[0];
             if (!selected) return null;
             this.active.set(selected.key, (this.active.get(selected.key) || 0) + 1);
             this.leases.set(leaseId, { epoch, providerKey: selected.key, workerId, ttlMs: Number(ttlMs) });
@@ -81,6 +85,21 @@ describe('RedisLeaseCoordinator', () => {
         const unlimited = [{ providerType: 'p', uuid: 'unlimited', concurrencyLimit: 0 }];
         const leases = await Promise.all(Array.from({ length: 20 }, () => first.acquire(unlimited)));
         expect(leases.every(Boolean)).toBe(true);
+    });
+
+    test('orders coordinated candidates by active load before local priority', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const candidates = [
+            { providerType: 'p', uuid: 'first', concurrencyLimit: 0 },
+            { providerType: 'p', uuid: 'second', concurrencyLimit: 0 }
+        ];
+
+        const firstLease = await coordinator.acquire(candidates);
+        expect(firstLease.uuid).toBe('first');
+
+        const secondLease = await coordinator.acquire(candidates);
+        expect(secondLease.uuid).toBe('second');
     });
 
     test('release is idempotent and never makes active counts negative', async () => {
