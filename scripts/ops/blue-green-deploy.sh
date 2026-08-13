@@ -10,6 +10,7 @@ IMAGE=""
 REVISION=""
 CANDIDATE_PORT=${CANDIDATE_PORT:-13001}
 CANDIDATE_CONTAINER=${CANDIDATE_CONTAINER:-aiclient2api-green-candidate}
+CANDIDATE_EXECUTION_WORKERS=${CANDIDATE_EXECUTION_WORKERS:-3}
 DEPLOYMENT_EPOCH=${DEPLOYMENT_EPOCH:-green-${REVISION:-candidate}}
 CONFIG_DIR=${CONFIG_DIR:-/root/ai_client_configs}
 STATE_DIR=${STATE_DIR:-/root/aiclient2api-blue-green}
@@ -110,6 +111,7 @@ prepare_candidate() {
   verify_image_revision
   verify_safe_paths
   [ -d "$CONFIG_DIR" ] || { echo "config dir not found: $CONFIG_DIR" >&2; exit 1; }
+  [ -n "${REDIS_URL:-}" ] || { echo "REDIS_URL is required for multi-worker candidate preflight" >&2; exit 1; }
 
   if [ "$APPLY" = "1" ]; then
     mkdir -p "$STATE_DIR"
@@ -127,6 +129,9 @@ prepare_candidate() {
     --name "$CANDIDATE_CONTAINER" \
     --label yyn.deployment_role=candidate \
     --label "yyn.expected_revision=$REVISION" \
+    --env RUNTIME_MULTI_WORKER_ENABLED=true \
+    --env "RUNTIME_EXECUTION_WORKERS=$CANDIDATE_EXECUTION_WORKERS" \
+    --env REDIS_URL \
     --env "RUNTIME_DEPLOYMENT_EPOCH=$DEPLOYMENT_EPOCH" \
     --cpus 1 \
     --memory 1g \

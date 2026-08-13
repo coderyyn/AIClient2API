@@ -16,6 +16,7 @@
 
 - Build traceable images with `scripts/ops/build-image.sh`; verify the `yyn.base_commit` label before rollout.
 - Use `scripts/ops/blue-green-deploy.sh` for dry-run, protected candidate snapshot, health checks, and Nginx upstream preview. It is a lightweight candidate-preflight tool, not automatic active-active blue-green.
+- Candidate `prepare` requires a reachable `REDIS_URL` and explicitly enables multi-worker mode; never validate a production candidate in fallback single-worker mode.
 - Production uses a single-writer handoff: the control worker writes provider configuration, execution workers receive revisioned `provider_config_sync`, and stale provider-state events are rejected.
 - Before traffic switch, verify `/runtime/health` shows complete worker topology and provider config convergence with `pendingWorkerCount=0`.
 - Do not directly restart or replace the active container while writing mounted config. Pause management/OAuth writes, perform the documented manual Nginx handoff, retain rollback state, and obtain explicit production authorization.

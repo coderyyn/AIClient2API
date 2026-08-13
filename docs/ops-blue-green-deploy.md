@@ -46,6 +46,8 @@ docker image inspect --format '{{ index .Config.Labels "yyn.base_commit" }}' <im
   --apply
 ```
 
+执行 `prepare` 前必须在运维 shell 中提供可供候选容器访问的 `REDIS_URL`。脚本不会打印该值；候选会显式启用 `RUNTIME_MULTI_WORKER_ENABLED=true`，默认启动 3 个 execution workers，可用 `CANDIDATE_EXECUTION_WORKERS` 覆盖。
+
 行为如下：
 
 1. 核对镜像 revision。
