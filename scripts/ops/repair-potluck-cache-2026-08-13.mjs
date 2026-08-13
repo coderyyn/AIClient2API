@@ -185,7 +185,9 @@ async function main() {
       target.cacheRateSource = item.cacheRateSource;
       target.baseline = item.baseline;
       target.cacheHitRatio = num(target.promptTokens) > 0 ? target.cachedTokens / num(target.promptTokens) : 0;
-      deltasByKey[rawKey] = (deltasByKey[rawKey] || 0) + num(item.deltaCachedTokens);
+      if (item.path === 'summary') {
+        deltasByKey[rawKey] = (deltasByKey[rawKey] || 0) + num(item.deltaCachedTokens);
+      }
     }
     for (const rawKey of Object.keys(appliedNext.keys || {})) {
       recalcDayCosts(appliedNext.keys[rawKey].usageHistory?.[TARGET_DATE]);
