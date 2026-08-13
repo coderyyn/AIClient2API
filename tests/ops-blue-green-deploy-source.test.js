@@ -62,5 +62,8 @@ describe('production image provenance and blue-green preflight', () => {
         expect(script).toContain("--exclude='app-logs'");
         expect(script).toContain('SNAPSHOT_REQUIRED_BYTES');
         expect(script).toContain('insufficient disk space for candidate snapshot');
+        expect(script).toContain('CANDIDATE_MEMORY');
+        expect(script).toContain('CANDIDATE_CPUS');
+        expect(script).toContain('--memory "$CANDIDATE_MEMORY"');
     });
 });
