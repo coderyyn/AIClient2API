@@ -11,6 +11,23 @@ function containsImage(value, seen = new Set()) {
         : containsImage(item, seen));
 }
 
+function compactCodexRouting(routing) {
+    if (!routing || typeof routing !== 'object') return undefined;
+    return {
+        routingMode: routing.routingMode === 'fixed' || routing.routingMode === 'auto'
+            ? routing.routingMode
+            : null,
+        requestedPrimaryGroupId: routing.requestedPrimaryGroupId || null,
+        selectedGroupId: routing.selectedGroupId || null,
+        selectedProviderUuid: routing.selectedProviderUuid || null,
+        spillover: routing.spillover === true,
+        spilloverReason: routing.spilloverReason || null,
+        assignmentMissing: routing.assignmentMissing === true,
+        affinitySource: routing.affinitySource || null,
+        hotShardApplied: routing.hotShardApplied === true
+    };
+}
+
 function compactMetadata(context = {}) {
     const metadata = {
         requestId: context.requestId || context._monitorRequestId || null,
@@ -20,10 +37,7 @@ function compactMetadata(context = {}) {
         fromProvider: context.fromProvider || null,
         toProvider: context.toProvider || null,
         potluckApiKey: context.potluckApiKey || null,
-        _codexRouting: context._codexRouting ? {
-            affinitySource: context._codexRouting.affinitySource || null,
-            hotShardApplied: context._codexRouting.hotShardApplied === true
-        } : undefined,
+        _codexRouting: compactCodexRouting(context._codexRouting),
         isStream: context.isStream === true,
         method: context.method || null,
         path: context.path || null,

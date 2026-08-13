@@ -167,6 +167,15 @@ export function buildRequestAuditEvent(context = {}) {
             providerNameDisplay: sanitizeProviderName(context.providerName)
         },
         routing: {
+            routingMode: context._codexRouting?.routingMode === 'fixed' || context._codexRouting?.routingMode === 'auto'
+                ? context._codexRouting.routingMode
+                : null,
+            requestedPrimaryGroupId: context._codexRouting?.requestedPrimaryGroupId || null,
+            selectedGroupId: context._codexRouting?.selectedGroupId || null,
+            selectedProviderUuidHash: hashSecret(context._codexRouting?.selectedProviderUuid),
+            spillover: context._codexRouting?.spillover === true,
+            spilloverReason: context._codexRouting?.spilloverReason || null,
+            assignmentMissing: context._codexRouting?.assignmentMissing === true,
             affinitySource: context._codexRouting?.affinitySource || null,
             hotShardApplied: context._codexRouting?.hotShardApplied === true
         },

@@ -58,7 +58,19 @@ describe('RuntimeHookBridge', () => {
             _monitorRequestId: 'responses-usage-1',
             model: 'gpt-5.4-mini',
             toProvider: 'openai-codex-oauth',
-            _codexRouting: { affinitySource: 'session_id', hotShardApplied: true, affinityKey: 'private' }
+            _codexRouting: {
+                routingMode: 'auto',
+                requestedPrimaryGroupId: 'group-a',
+                selectedGroupId: 'group-b',
+                selectedProviderUuid: 'provider-uuid-selected',
+                spillover: true,
+                spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
+                assignmentMissing: false,
+                affinitySource: 'session_id',
+                hotShardApplied: true,
+                affinityKey: 'session:private-affinity-value',
+                oauthToken: 'must-not-cross-worker-bridge'
+            }
         });
 
         expect(messages[0].args[0].nativeResponse.usage).toMatchObject({
@@ -69,10 +81,18 @@ describe('RuntimeHookBridge', () => {
             reasoning_tokens: 8
         });
         expect(messages[1].args[0]._codexRouting).toEqual({
+            routingMode: 'auto',
+            requestedPrimaryGroupId: 'group-a',
+            selectedGroupId: 'group-b',
+            selectedProviderUuid: 'provider-uuid-selected',
+            spillover: true,
+            spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
+            assignmentMissing: false,
             affinitySource: 'session_id',
             hotShardApplied: true
         });
-        expect(JSON.stringify(messages)).not.toContain('private');
+        expect(JSON.stringify(messages)).not.toContain('private-affinity-value');
+        expect(JSON.stringify(messages)).not.toContain('must-not-cross-worker-bridge');
     });
 
     test('reports only the presence of an image result, never Base64 bytes', async () => {

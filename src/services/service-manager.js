@@ -19,8 +19,10 @@ import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 import { getProviderModels } from '../providers/provider-models.js';
 import { codexOverloadFailoverStore } from '../providers/openai/codex-overload-failover.js';
+import { codexCredentialGroupAffinityStore } from '../providers/openai/codex-credential-group-affinity.js';
 import { readGeminiCredentialEmail } from '../utils/gemini-account.js';
 import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
+import { CredentialGroupService, routeKeyToCredentialCandidates } from './codex-credential-group-service.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
@@ -110,12 +112,394 @@ export function withStickyProviderAffinity(config, providerType, options = {}) {
             selectionOptions.stickyProviderSource = affinity.source;
             selectionOptions.shardDiscriminator = config._codexCacheAffinityScope?.turnId;
             config._codexRouting = {
+                ...(config._codexRouting || {}),
                 affinitySource: affinity.source,
                 hotShardApplied: false
             };
         }
     }
     return selectionOptions;
+}
+
+const CODEX_ROUTING_DIAGNOSTIC_FIELDS = new Set([
+    'routingMode',
+    'requestedPrimaryGroupId',
+    'selectedGroupId',
+    'selectedProviderUuid',
+    'spillover',
+    'spilloverReason',
+    'affinitySource',
+    'hotShardApplied',
+    'assignmentMissing'
+]);
+
+function updateCodexRoutingDiagnostics(config, patch = {}) {
+    const sanitizedPatch = {};
+    for (const [key, value] of Object.entries(patch)) {
+        if (CODEX_ROUTING_DIAGNOSTIC_FIELDS.has(key)) sanitizedPatch[key] = value;
+    }
+    config._codexRouting = {
+        ...(config._codexRouting || {}),
+        ...sanitizedPatch
+    };
+    return config._codexRouting;
+}
+
+function resolveCodexCredentialGroupAffinity(config, providerType) {
+    if (!isCodexProviderType(providerType) || !config?.potluckKeyData?.id) return null;
+
+    const scope = config._codexCacheAffinityScope || {};
+    const candidates = [
+        ['prompt_cache_key', scope.promptCacheKey],
+        ['thread_id', scope.threadId],
+        ['session_id', scope.sessionId],
+        ['installation_id', scope.installationId]
+    ];
+    const selected = candidates.find(([, value]) => value !== undefined && value !== null && value !== '');
+    if (!selected) return null;
+
+    const [source, value] = selected;
+    return {
+        key: [
+            'credential-group',
+            hashAffinityScope(providerType),
+            hashAffinityScope(config.potluckKeyData.id),
+            source,
+            hashAffinityScope(value)
+        ].join(':'),
+        source
+    };
+}
+
+function initializeSelectionDiagnostics(selectionDiagnostics = {}) {
+    Object.assign(selectionDiagnostics, {
+        totalCandidateCount: 0,
+        healthCooldownSkipped: 0,
+        temporaryCooldownSkipped: 0,
+        nextTemporaryRecoveryTime: null,
+        concurrencyLimitSkipped: 0,
+        eligibleCandidateCount: 0,
+        capacityExhausted: false,
+        filterReasons: {},
+        attempts: []
+    });
+    return selectionDiagnostics;
+}
+
+function normalizeCredentialGroups(groups = []) {
+    return (Array.isArray(groups) ? groups : [])
+        .filter(group => group && group.id)
+        .map(group => ({
+            ...group,
+            id: String(group.id),
+            credentialUuids: [...new Set(
+                (Array.isArray(group.credentialUuids) ? group.credentialUuids : [])
+                    .filter(Boolean)
+                    .map(String)
+            )]
+        }));
+}
+
+function resolvePotluckCredentialRouting(keyData = {}, currentConfig = {}) {
+    const keyId = keyData?.id ? String(keyData.id) : '';
+    const storedAssignment = keyId
+        ? (currentConfig.keyAssignments || []).find(assignment => String(assignment?.keyId || assignment?.id || '') === keyId)
+        : null;
+
+    if (keyData.routingMode === 'fixed') {
+        return { ...keyData, keyId, routingMode: 'fixed' };
+    }
+    if (keyData.routingMode === 'auto' && keyData.primaryGroupId) {
+        return { ...keyData, keyId, routingMode: 'auto' };
+    }
+    if (storedAssignment) {
+        return { ...storedAssignment, keyId, routingMode: storedAssignment.routingMode === 'fixed' ? 'fixed' : 'auto' };
+    }
+    return null;
+}
+
+async function resolveCodexCredentialGroupContext(config, providerType) {
+    if (!isCodexProviderType(providerType) || !config?.potluckKeyData) {
+        return { handled: false };
+    }
+
+    const service = new CredentialGroupService({
+        filePath: config.CODEX_CREDENTIAL_GROUPS_FILE_PATH
+    });
+    const currentConfig = await service.getCurrentConfig();
+    const keyRouting = resolvePotluckCredentialRouting(config.potluckKeyData, currentConfig);
+    if (!keyRouting) {
+        updateCodexRoutingDiagnostics(config, {
+            routingMode: config.potluckKeyData.routingMode === 'fixed' ? 'fixed' : 'auto',
+            assignmentMissing: true
+        });
+        return { handled: false, assignmentMissing: true };
+    }
+
+    return {
+        handled: true,
+        keyRouting,
+        groups: normalizeCredentialGroups(currentConfig.groups)
+    };
+}
+
+function getProviderCredentialCatalog(providerType) {
+    return (providerPoolManager?.providerStatus?.[providerType] || [])
+        .map(provider => provider?.uuid || provider?.config?.uuid)
+        .filter(Boolean)
+        .map(uuid => ({ uuid: String(uuid), providerType, providerWeight: 1 }));
+}
+
+function getProviderStatusByUuid(providerType, uuid) {
+    return (providerPoolManager?.providerStatus?.[providerType] || [])
+        .find(provider => String(provider?.uuid || provider?.config?.uuid || '') === String(uuid));
+}
+
+function modelAliasMatches(requestedModel, configuredModel) {
+    const requested = String(requestedModel || '').trim().toLowerCase();
+    const configured = String(configuredModel || '').trim().toLowerCase();
+    if (!requested || !configured) return false;
+    if (requested === configured) return true;
+    if (requested.endsWith('-fast') && requested.slice(0, -5) === configured) return true;
+    return configured.endsWith('-fast') && configured.slice(0, -5) === requested;
+}
+
+function isFixedCredentialModelSupported(providerType, uuid, requestedModel) {
+    if (!requestedModel) return true;
+
+    const providerStatus = getProviderStatusByUuid(providerType, uuid);
+    const providerConfig = providerStatus?.config || providerStatus;
+    if (!providerConfig) return false;
+
+    const supportedModels = Array.isArray(providerConfig.supportedModels)
+        ? providerConfig.supportedModels.filter(Boolean)
+        : [];
+    if (supportedModels.length > 0 && !supportedModels.some(model => modelAliasMatches(requestedModel, model))) {
+        return false;
+    }
+
+    const notSupportedModels = Array.isArray(providerConfig.notSupportedModels)
+        ? providerConfig.notSupportedModels.filter(Boolean)
+        : [];
+    return !notSupportedModels.some(model => modelAliasMatches(requestedModel, model));
+}
+
+function createFixedCredentialUnavailableError(cause = null) {
+    const error = new Error('The fixed Codex credential is unavailable');
+    error.code = 'FIXED_CREDENTIAL_UNAVAILABLE';
+    error.status = cause?.status || 503;
+    if (cause) error.cause = cause;
+    return error;
+}
+
+function isCredentialAvailabilityError(error) {
+    return error?.status === 429
+        || error?.code === 429
+        || /^Queue timeout\b/.test(String(error?.message || ''));
+}
+
+function getOrderedCredentialGroups(groups, requestedPrimaryGroupId, pinnedGroupId = null) {
+    const groupById = new Map(groups.map(group => [group.id, group]));
+    const ordered = [];
+    const addGroup = groupId => {
+        const group = groupId ? groupById.get(String(groupId)) : null;
+        if (group && !ordered.some(candidate => candidate.id === group.id)) ordered.push(group);
+    };
+
+    addGroup(pinnedGroupId);
+    addGroup(requestedPrimaryGroupId);
+    for (const group of groups) addGroup(group.id);
+    return ordered;
+}
+
+async function selectCodexCredentialGroupProvider(config, providerType, requestedModel, options = {}, selectionDiagnostics = {}) {
+    const context = await resolveCodexCredentialGroupContext(config, providerType);
+    if (!context.handled) return context;
+
+    const { keyRouting, groups } = context;
+    const useAcquire = options.acquireSlot === true;
+    const selectFromPool = selectionOptions => useAcquire
+        ? providerPoolManager.acquireSlotWithFallback(providerType, requestedModel, selectionOptions)
+        : providerPoolManager.selectProviderWithFallback(providerType, requestedModel, {
+            ...selectionOptions,
+            skipUsageCount: true
+        });
+
+    if (keyRouting.routingMode === 'fixed') {
+        const route = routeKeyToCredentialCandidates({
+            keyRouting,
+            groups,
+            credentials: getProviderCredentialCatalog(providerType)
+        });
+        updateCodexRoutingDiagnostics(config, {
+            routingMode: 'fixed',
+            requestedPrimaryGroupId: null,
+            selectedGroupId: route.selectedGroupId || null,
+            selectedProviderUuid: null,
+            spillover: false,
+            spilloverReason: null,
+            assignmentMissing: false
+        });
+        if (route.errorCode || route.candidateProviderUuids.length !== 1) {
+            throw createFixedCredentialUnavailableError();
+        }
+        if (!isFixedCredentialModelSupported(
+            providerType,
+            route.candidateProviderUuids[0],
+            requestedModel
+        )) {
+            throw createFixedCredentialUnavailableError();
+        }
+
+        const fixedOptions = withStickyProviderAffinity(config, providerType, {
+            ...options,
+            selectionDiagnostics,
+            requestedModel,
+            allowedProviderUuids: route.candidateProviderUuids,
+            disableProviderFallback: true,
+            preferredProviderUuid: null
+        });
+        try {
+            const selectedResult = await selectFromPool(fixedOptions);
+            if (!selectedResult) throw createFixedCredentialUnavailableError();
+            updateCodexRoutingDiagnostics(config, {
+                selectedProviderUuid: selectedResult.config?.uuid || null,
+                hotShardApplied: selectionDiagnostics.hotShardApplied === true
+            });
+            return { handled: true, selectedResult, availabilityError: null };
+        } catch (error) {
+            if (error?.code === 'FIXED_CREDENTIAL_UNAVAILABLE') throw error;
+            throw createFixedCredentialUnavailableError(error);
+        }
+    }
+
+    const requestedPrimaryGroupId = keyRouting.primaryGroupId || groups[0]?.id || null;
+    const groupAffinity = resolveCodexCredentialGroupAffinity(config, providerType);
+    const pinnedGroupId = groupAffinity
+        ? codexCredentialGroupAffinityStore.getPinnedGroup(groupAffinity.key)
+        : null;
+    const orderedGroups = getOrderedCredentialGroups(groups, requestedPrimaryGroupId, pinnedGroupId);
+    const failoverKey = config._codexOverloadFailoverKey || null;
+    const pendingExcludedUuid = failoverKey
+        ? codexOverloadFailoverStore.getPendingExclusion(failoverKey)
+        : null;
+    const pinnedProviderUuid = failoverKey
+        ? codexOverloadFailoverStore.getPinnedProvider(failoverKey)
+        : null;
+    const originalExcludedUuids = Array.isArray(options.excludeProviderUuids)
+        ? options.excludeProviderUuids
+        : [];
+    let availabilityError = null;
+
+    updateCodexRoutingDiagnostics(config, {
+        routingMode: 'auto',
+        requestedPrimaryGroupId,
+        selectedGroupId: null,
+        selectedProviderUuid: null,
+        spillover: false,
+        spilloverReason: null,
+        affinitySource: groupAffinity?.source || config._codexRouting?.affinitySource || null,
+        assignmentMissing: false
+    });
+
+    const attemptGroups = async ({ excludeProviderUuids, preferredProviderUuid }) => {
+        for (const group of orderedGroups) {
+            if (group.credentialUuids.length === 0) continue;
+            const groupOptions = withStickyProviderAffinity(config, providerType, {
+                ...options,
+                selectionDiagnostics,
+                requestedModel,
+                allowedProviderUuids: group.credentialUuids,
+                disableProviderFallback: true,
+                preferredProviderUuid,
+                excludeProviderUuids
+            });
+            try {
+                const selectedResult = await selectFromPool(groupOptions);
+                if (selectedResult) return { selectedResult, group };
+            } catch (error) {
+                if (!isCredentialAvailabilityError(error)) throw error;
+                availabilityError = error;
+            }
+        }
+        return null;
+    };
+
+    let selected = await attemptGroups({
+        preferredProviderUuid: pinnedProviderUuid === pendingExcludedUuid ? null : pinnedProviderUuid,
+        excludeProviderUuids: [...new Set([
+            ...originalExcludedUuids,
+            ...(pendingExcludedUuid ? [pendingExcludedUuid] : [])
+        ])]
+    });
+
+    if (!selected && pendingExcludedUuid) {
+        selected = await attemptGroups({
+            preferredProviderUuid: null,
+            excludeProviderUuids: originalExcludedUuids
+        });
+    }
+
+    if (!selected && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
+        selected = await attemptGroups({
+            preferredProviderUuid: null,
+            excludeProviderUuids: []
+        });
+    }
+
+    if (!selected) {
+        return { handled: true, selectedResult: null, availabilityError };
+    }
+
+    const selectedUuid = selected.selectedResult.config?.uuid || null;
+    if (failoverKey && pendingExcludedUuid) {
+        if (selectedUuid && selectedUuid !== pendingExcludedUuid) {
+            codexOverloadFailoverStore.pinAlternative(failoverKey, selectedUuid);
+        } else {
+            codexOverloadFailoverStore.consumePendingExclusion(failoverKey);
+        }
+    }
+    if (groupAffinity) {
+        codexCredentialGroupAffinityStore.pinGroup(groupAffinity.key, selected.group.id);
+    }
+
+    const spillover = Boolean(requestedPrimaryGroupId && selected.group.id !== requestedPrimaryGroupId);
+    updateCodexRoutingDiagnostics(config, {
+        selectedGroupId: selected.group.id,
+        selectedProviderUuid: selectedUuid,
+        spillover,
+        spilloverReason: spillover ? 'PRIMARY_GROUP_UNAVAILABLE' : null,
+        hotShardApplied: selectionDiagnostics.hotShardApplied === true
+    });
+    return { handled: true, selectedResult: selected.selectedResult, availabilityError: null };
+}
+
+function throwProviderSelectionFailure(config, model, options, selectionDiagnostics, availabilityError = null) {
+    if (options.acquireSlot === true && selectionDiagnostics.capacityExhausted === true) {
+        const errorMsg = `[API Service] All healthy providers are at concurrency capacity for ${config.MODEL_PROVIDER}${model ? ` supporting model: ${model}` : ''}`;
+        logger.warn(errorMsg);
+        const error = new Error(errorMsg);
+        error.status = 429;
+        error.code = 429;
+        throw error;
+    }
+    if (
+        selectionDiagnostics.temporaryCooldownSkipped > 0
+        && selectionDiagnostics.eligibleCandidateCount === 0
+    ) {
+        const errorMsg = `[API Service] All providers are temporarily unavailable during cooldown for ${config.MODEL_PROVIDER}${model ? ` supporting model: ${model}` : ''}`;
+        logger.warn(errorMsg);
+        const error = new Error(errorMsg);
+        error.status = 429;
+        error.code = 429;
+        error.retryAfter = selectionDiagnostics.nextTemporaryRecoveryTime;
+        throw error;
+    }
+    if (availabilityError) throw availabilityError;
+
+    const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${model ? ` supporting model: ${model}` : ''}`;
+    logger.error(errorMsg);
+    throw new Error(errorMsg);
 }
 
 function restoreProviderPoolsAfterFailedPersist(config, originalProviderPools) {
@@ -822,10 +1206,26 @@ export async function getApiService(config, requestedModel = null, options = {})
     let serviceConfig = config;
     const isPoolable = PROVIDER_MAPPINGS.some(m => m.providerType === config.MODEL_PROVIDER);
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
-        // 如果有号池管理器，并且当前模型提供者类型有对应的号池（或属于号池类型提供商），则从号池中选择一个提供者配置
-        // selectProvider 现在是异步的，使用链式锁确保并发安全
-        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, { ...options, requestedModel: actualModelName, skipUsageCount: true });
-        const selectedProviderConfig = await providerPoolManager.selectProvider(config.MODEL_PROVIDER, actualModelName, selectionOptions);
+        const selectionDiagnostics = initializeSelectionDiagnostics(options.selectionDiagnostics || {});
+        const groupSelection = await selectCodexCredentialGroupProvider(
+            config,
+            config.MODEL_PROVIDER,
+            actualModelName,
+            options,
+            selectionDiagnostics
+        );
+        const selectedProviderConfig = groupSelection.handled
+            ? groupSelection.selectedResult?.config
+            : await providerPoolManager.selectProvider(
+                config.MODEL_PROVIDER,
+                actualModelName,
+                withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                    ...options,
+                    selectionDiagnostics,
+                    requestedModel: actualModelName,
+                    skipUsageCount: true
+                })
+            );
         if (selectedProviderConfig) {
             // 合并选中的提供者配置到当前请求的 config 中
             serviceConfig = deepmerge(config, selectedProviderConfig);
@@ -835,9 +1235,13 @@ export async function getApiService(config, requestedModel = null, options = {})
             const customNameDisplay = serviceConfig.customName ? ` (${serviceConfig.customName})` : '';
             logger.info(`[API Service] Using pooled configuration for ${config.MODEL_PROVIDER}: ${serviceConfig.uuid}${customNameDisplay}${actualModelName ? ` (model: ${actualModelName})` : ''}`);
         } else {
-            const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
-            logger.error(errorMsg);
-            throw new Error(errorMsg);
+            throwProviderSelectionFailure(
+                config,
+                actualModelName,
+                options,
+                selectionDiagnostics,
+                groupSelection.availabilityError
+            );
         }
     } else if (effectiveProvider === MODEL_PROVIDER.AUTO && actualModelName) {
         // 如果在 AUTO 模式下依然没能解析出具体提供商，则报错
@@ -869,18 +1273,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     let isFallback = false;
     let selectedUuid = null;
     let actualModel = actualModelName;
-    const selectionDiagnostics = options.selectionDiagnostics || {};
-    Object.assign(selectionDiagnostics, {
-        totalCandidateCount: 0,
-        healthCooldownSkipped: 0,
-        temporaryCooldownSkipped: 0,
-        nextTemporaryRecoveryTime: null,
-        concurrencyLimitSkipped: 0,
-        eligibleCandidateCount: 0,
-        capacityExhausted: false,
-        filterReasons: {},
-        attempts: []
-    });
+    const selectionDiagnostics = initializeSelectionDiagnostics(options.selectionDiagnostics || {});
     const routingOptions = {
         ...options,
         selectionDiagnostics
@@ -892,71 +1285,96 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         // 如果开启了并发限制，则使用 acquireSlot 进行选择和占位
         const useAcquire = options.acquireSlot === true;
         let selectedResult;
-        const failoverKey = isCodexProviderType(config.MODEL_PROVIDER)
-            ? config._codexOverloadFailoverKey
-            : null;
-        const pendingExcludedUuid = failoverKey
-            ? codexOverloadFailoverStore.getPendingExclusion(failoverKey)
-            : null;
-        const pinnedProviderUuid = failoverKey
-            ? codexOverloadFailoverStore.getPinnedProvider(failoverKey)
-            : null;
-        const originalExcludedUuids = options.excludeProviderUuids || [];
-        const preferredProviderUuid = pinnedProviderUuid === pendingExcludedUuid
-            ? null
-            : pinnedProviderUuid;
+        let availabilityError = null;
+        const groupSelection = await selectCodexCredentialGroupProvider(
+            config,
+            config.MODEL_PROVIDER,
+            actualModelName,
+            routingOptions,
+            selectionDiagnostics
+        );
 
-        const selectFromPool = async (selectionOptions) => {
-            if (useAcquire) {
-                return providerPoolManager.acquireSlotWithFallback(
+        if (groupSelection.handled) {
+            selectedResult = groupSelection.selectedResult;
+            availabilityError = groupSelection.availabilityError;
+        } else {
+            const failoverKey = isCodexProviderType(config.MODEL_PROVIDER)
+                ? config._codexOverloadFailoverKey
+                : null;
+            const pendingExcludedUuid = failoverKey
+                ? codexOverloadFailoverStore.getPendingExclusion(failoverKey)
+                : null;
+            const pinnedProviderUuid = failoverKey
+                ? codexOverloadFailoverStore.getPinnedProvider(failoverKey)
+                : null;
+            const originalExcludedUuids = options.excludeProviderUuids || [];
+            const preferredProviderUuid = pinnedProviderUuid === pendingExcludedUuid
+                ? null
+                : pinnedProviderUuid;
+
+            const selectFromPool = async (selectionOptions) => {
+                if (useAcquire) {
+                    return providerPoolManager.acquireSlotWithFallback(
+                        config.MODEL_PROVIDER,
+                        actualModelName,
+                        selectionOptions
+                    );
+                }
+                return providerPoolManager.selectProviderWithFallback(
                     config.MODEL_PROVIDER,
                     actualModelName,
-                    selectionOptions
+                    { ...selectionOptions, skipUsageCount: true }
                 );
+            };
+
+            const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                ...routingOptions,
+                requestedModel: actualModelName,
+                preferredProviderUuid,
+                excludeProviderUuids: [...new Set([
+                    ...originalExcludedUuids,
+                    ...(pendingExcludedUuid ? [pendingExcludedUuid] : [])
+                ])]
+            });
+
+            selectedResult = await selectFromPool(selectionOptions);
+
+            // 过载 UUID 只是软排除；如果没有其他可用节点，撤销该排除并允许继续使用唯一/原凭证。
+            if (!selectedResult && pendingExcludedUuid) {
+                logger.info(`[Codex Overload] No alternative provider available; retrying selection with previous provider allowed: ${pendingExcludedUuid}`);
+                const fallbackSelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                    ...routingOptions,
+                    requestedModel: actualModelName,
+                    preferredProviderUuid: null,
+                    excludeProviderUuids: originalExcludedUuids
+                });
+                selectedResult = await selectFromPool(fallbackSelectionOptions);
             }
-            return providerPoolManager.selectProviderWithFallback(
-                config.MODEL_PROVIDER,
-                actualModelName,
-                { ...selectionOptions, skipUsageCount: true }
-            );
-        };
 
-        const selectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-            ...routingOptions,
-            requestedModel: actualModelName,
-            preferredProviderUuid,
-            excludeProviderUuids: [...new Set([
-                ...originalExcludedUuids,
-                ...(pendingExcludedUuid ? [pendingExcludedUuid] : [])
-            ])]
-        });
+            // 请求内瞬态错误重试会先排除已尝试的凭证以优先覆盖其他账号。
+            // 若全部已尝试凭证仍然满足标准号池调度条件，则允许重新进入选择器循环；
+            // 不直接指定凭证，因此健康、额度、冷却、模型支持和并发限制仍会完整生效。
+            if (!selectedResult && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
+                logger.info(`[Credential Retry] No untried provider available; retrying standard selection with previously tried providers eligible again`);
+                const retrySelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
+                    ...routingOptions,
+                    requestedModel: actualModelName,
+                    preferredProviderUuid: null,
+                    excludeProviderUuids: []
+                });
+                selectedResult = await selectFromPool(retrySelectionOptions);
+            }
 
-        selectedResult = await selectFromPool(selectionOptions);
-
-        // 过载 UUID 只是软排除；如果没有其他可用节点，撤销该排除并允许继续使用唯一/原凭证。
-        if (!selectedResult && pendingExcludedUuid) {
-            logger.info(`[Codex Overload] No alternative provider available; retrying selection with previous provider allowed: ${pendingExcludedUuid}`);
-            const fallbackSelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-                ...routingOptions,
-                requestedModel: actualModelName,
-                preferredProviderUuid: null,
-                excludeProviderUuids: originalExcludedUuids
-            });
-            selectedResult = await selectFromPool(fallbackSelectionOptions);
-        }
-
-        // 请求内瞬态错误重试会先排除已尝试的凭证以优先覆盖其他账号。
-        // 若全部已尝试凭证仍然满足标准号池调度条件，则允许重新进入选择器循环；
-        // 不直接指定凭证，因此健康、额度、冷却、模型支持和并发限制仍会完整生效。
-        if (!selectedResult && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
-            logger.info(`[Credential Retry] No untried provider available; retrying standard selection with previously tried providers eligible again`);
-            const retrySelectionOptions = withStickyProviderAffinity(config, config.MODEL_PROVIDER, {
-                ...routingOptions,
-                requestedModel: actualModelName,
-                preferredProviderUuid: null,
-                excludeProviderUuids: []
-            });
-            selectedResult = await selectFromPool(retrySelectionOptions);
+            if (selectedResult && failoverKey && pendingExcludedUuid) {
+                const selectedUuid = selectedResult.config?.uuid;
+                if (selectedUuid && selectedUuid !== pendingExcludedUuid) {
+                    codexOverloadFailoverStore.pinAlternative(failoverKey, selectedUuid);
+                    logger.info(`[Codex Overload] Switched session to alternative provider: ${selectedUuid}`);
+                } else {
+                    codexOverloadFailoverStore.consumePendingExclusion(failoverKey);
+                    logger.info(`[Codex Overload] Reusing previous provider because no alternative was available: ${pendingExcludedUuid}`);
+                }
+            }
         }
         
         if (selectedResult) {
@@ -971,47 +1389,18 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             selectedUuid = selectedProviderConfig.uuid;
             actualModel = fallbackModel || actualModelName;
 
-            if (failoverKey && pendingExcludedUuid) {
-                if (selectedUuid && selectedUuid !== pendingExcludedUuid) {
-                    codexOverloadFailoverStore.pinAlternative(failoverKey, selectedUuid);
-                    logger.info(`[Codex Overload] Switched session to alternative provider: ${selectedUuid}`);
-                } else {
-                    codexOverloadFailoverStore.consumePendingExclusion(failoverKey);
-                    logger.info(`[Codex Overload] Reusing previous provider because no alternative was available: ${pendingExcludedUuid}`);
-                }
-            }
-            
             // mixed pool/fallback 可能跨 providerType 命中真实节点，需要切到真实 adapter。
             if (actualProviderType && actualProviderType !== config.MODEL_PROVIDER) {
                 serviceConfig.MODEL_PROVIDER = actualProviderType;
             }
         } else {
-            if (
-                useAcquire
-                && selectionDiagnostics.capacityExhausted === true
-            ) {
-                const errorMsg = `[API Service] All healthy providers are at concurrency capacity for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
-                logger.warn(errorMsg);
-                const error = new Error(errorMsg);
-                error.status = 429;
-                error.code = 429;
-                throw error;
-            }
-            if (
-                selectionDiagnostics.temporaryCooldownSkipped > 0
-                && selectionDiagnostics.eligibleCandidateCount === 0
-            ) {
-                const errorMsg = `[API Service] All providers are temporarily unavailable during cooldown for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
-                logger.warn(errorMsg);
-                const error = new Error(errorMsg);
-                error.status = 429;
-                error.code = 429;
-                error.retryAfter = selectionDiagnostics.nextTemporaryRecoveryTime;
-                throw error;
-            }
-            const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
-            logger.error(errorMsg);
-            throw new Error(errorMsg);
+            throwProviderSelectionFailure(
+                config,
+                actualModelName,
+                options,
+                selectionDiagnostics,
+                availabilityError
+            );
         }
     } else if (effectiveProvider === MODEL_PROVIDER.AUTO && actualModelName) {
         // 如果在 AUTO 模式下依然没能解析出具体提供商，则报错

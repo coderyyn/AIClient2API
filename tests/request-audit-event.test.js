@@ -171,20 +171,37 @@ describe('request audit event', () => {
       providerUuid: 'private-provider-uuid',
       model: 'gpt-5.4-mini',
       _codexRouting: {
+        routingMode: 'auto',
+        requestedPrimaryGroupId: 'group-a',
+        selectedGroupId: 'group-b',
+        selectedProviderUuid: 'private-selected-provider-uuid',
+        spillover: true,
+        spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
+        assignmentMissing: false,
         affinitySource: 'session_id',
         affinityKey: 'session:private-affinity-value',
-        hotShardApplied: true
+        hotShardApplied: true,
+        oauthToken: 'private-oauth-token'
       }
     });
 
     expect(event.routing).toEqual({
+      routingMode: 'auto',
+      requestedPrimaryGroupId: 'group-a',
+      selectedGroupId: 'group-b',
+      selectedProviderUuidHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
+      spillover: true,
+      spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
+      assignmentMissing: false,
       affinitySource: 'session_id',
       hotShardApplied: true
     });
     expect(event.account.providerUuidHash).toMatch(/^sha256:[a-f0-9]{16}$/);
     const serialized = JSON.stringify(event);
     expect(serialized).not.toContain('private-provider-uuid');
+    expect(serialized).not.toContain('private-selected-provider-uuid');
     expect(serialized).not.toContain('private-affinity-value');
+    expect(serialized).not.toContain('private-oauth-token');
   });
 
   test('uses account email as the summary account key when present', () => {
