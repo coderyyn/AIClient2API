@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { normalizeUsageCandidate } from '../../utils/usage-normalizer.js';
 
 function toNumber(value) {
     const number = Number(value);
@@ -45,21 +46,12 @@ export function extractAccountEmail(...candidates) {
 }
 
 export function normalizeUsage(usage = {}) {
-    const promptTokens = toNumber(usage.promptTokens ?? usage.prompt_tokens ?? usage.input_tokens);
-    const cachedTokens = toNumber(
-        usage.cachedTokens ??
-        usage.cached_tokens ??
-        usage.prompt_tokens_details?.cached_tokens ??
-        usage.input_tokens_details?.cached_tokens
-    );
-    const reasoningTokens = toNumber(
-        usage.reasoningTokens ??
-        usage.reasoning_tokens ??
-        usage.completion_tokens_details?.reasoning_tokens ??
-        usage.output_tokens_details?.reasoning_tokens
-    );
-    const completionTokens = toNumber(usage.completionTokens ?? usage.completion_tokens ?? usage.output_tokens);
-    const totalTokens = toNumber(usage.totalTokens ?? usage.total_tokens) || promptTokens + completionTokens;
+    const normalized = normalizeUsageCandidate(usage) || {};
+    const promptTokens = toNumber(normalized.promptTokens);
+    const cachedTokens = toNumber(normalized.cachedTokens);
+    const reasoningTokens = toNumber(normalized.reasoningTokens);
+    const completionTokens = toNumber(normalized.completionTokens);
+    const totalTokens = toNumber(normalized.totalTokens) || promptTokens + completionTokens;
     return {
         promptTokens,
         cachedTokens,
@@ -169,10 +161,14 @@ export function buildRequestAuditEvent(context = {}) {
             name: context.potluckKeyData?.name || null
         },
         account: {
-            providerUuid: context.providerUuid || null,
+            providerUuidHash: hashSecret(context.providerUuid),
             accountEmail: extractAccountEmail(context.accountEmail, context.accountIdentity, context.providerName),
             providerNameHash: hashSecret(context.providerName),
             providerNameDisplay: sanitizeProviderName(context.providerName)
+        },
+        routing: {
+            affinitySource: context._codexRouting?.affinitySource || null,
+            hotShardApplied: context._codexRouting?.hotShardApplied === true
         },
         status: {
             ...derivedStatus,

@@ -99,7 +99,7 @@ export function buildAuditSummary(events = []) {
         const usage = event.usage || {};
         addUsage(result.summary, usage);
         addUsage(ensureBucket(result.models, event.request?.model), usage);
-        addUsage(ensureBucket(result.accounts, event.account?.accountEmail || event.account?.providerNameDisplay || event.account?.providerUuid), usage);
+        addUsage(ensureBucket(result.accounts, event.account?.accountEmail || event.account?.providerNameDisplay || event.account?.providerUuidHash || event.account?.providerUuid), usage);
 
         for (const section of event.contextBreakdown?.sections || []) {
             const id = section.id || 'unknown';

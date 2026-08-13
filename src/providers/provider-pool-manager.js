@@ -903,6 +903,9 @@ export class ProviderPoolManager {
         const shardUnit = stableHashToUnitInterval(`${providerType}:${requestedModel || ''}:${options.stickyProviderKey}:shard:${discriminator}`);
         const shardIndex = Math.min(shardProviders.length - 1, Math.floor(shardUnit * shardProviders.length));
         const selected = shardProviders[shardIndex];
+        if (options.selectionDiagnostics) {
+            options.selectionDiagnostics.hotShardApplied = true;
+        }
         this._log('debug', `Selected provider for ${providerType} by hot sticky shard ${shardIndex + 1}/${shardProviders.length}: ${this._getDisplayName(selected.config)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         return selected;
     }
@@ -2381,7 +2384,8 @@ export class ProviderPoolManager {
                 concurrencyLimitSkipped: 0,
                 eligibleCandidateCount: 0,
                 capacityExhausted: false,
-                filterReasons: {}
+                filterReasons: {},
+                hotShardApplied: false
             });
         }
         

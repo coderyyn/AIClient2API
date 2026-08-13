@@ -1,5 +1,6 @@
 import logger from '../../utils/logger.js';
 import { buildRequestAuditEvent, normalizeUsage } from './audit-event.js';
+import { extractUsage as extractNormalizedUsage, mergeUsage as mergeNormalizedUsage } from '../../utils/usage-normalizer.js';
 import { getAnalysisStore, getAuditStore, handleRequestAuditRoutes, setAnalysisStore, setAuditStore, setRawCaptureController } from './api-routes.js';
 import { createRequestAuditAnalyzerRunner } from './analyzer-runner.js';
 import { buildBoundedRawCaptureEvent, RequestAuditRawCaptureStore, shouldCaptureRawRequest } from './raw-capture-store.js';
@@ -74,30 +75,11 @@ function nextTick() {
 }
 
 function mergeUsage(base, next) {
-    const normalized = normalizeUsage(next);
-    return {
-        promptTokens: Math.max(base?.promptTokens || 0, normalized.promptTokens),
-        cachedTokens: Math.max(base?.cachedTokens || 0, normalized.cachedTokens),
-        completionTokens: Math.max(base?.completionTokens || 0, normalized.completionTokens),
-        reasoningTokens: Math.max(base?.reasoningTokens || 0, normalized.reasoningTokens),
-        totalTokens: Math.max(base?.totalTokens || 0, normalized.totalTokens)
-    };
+    return mergeNormalizedUsage(base, next);
 }
 
 function extractUsage(...candidates) {
-    return candidates.reduce((usage, candidate) => {
-        if (!candidate) return usage;
-        if (Array.isArray(candidate)) {
-            return candidate.reduce((inner, item) => mergeUsage(inner, item?.usage || item), usage);
-        }
-        return mergeUsage(usage, candidate.usage || candidate.message?.usage || candidate.usageMetadata || candidate.response?.usage || candidate);
-    }, {
-        promptTokens: 0,
-        cachedTokens: 0,
-        completionTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 0
-    });
+    return extractNormalizedUsage(...candidates);
 }
 
 function getRequestId(context = {}) {

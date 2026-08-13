@@ -1,27 +1,4 @@
-function number(value) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function extractUsage(value) {
-    const usage = value?.usage || value?.message?.usage || value?.usageMetadata || value?.response?.usage || {};
-    const prompt = number(value?.prompt_tokens ?? usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount);
-    const completion = number(value?.completion_tokens ?? usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount);
-    const total = number(value?.total_tokens ?? usage.total_tokens ?? usage.totalTokenCount) || prompt + completion;
-    const cached = number(value?.cached_tokens ?? usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens);
-    const reasoning = number(value?.completion_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens ?? usage.thoughtsTokenCount);
-    return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total, cached_tokens: cached, reasoning_tokens: reasoning };
-}
-
-function mergeUsage(current, next) {
-    return {
-        prompt_tokens: Math.max(current?.prompt_tokens || 0, next.prompt_tokens),
-        completion_tokens: Math.max(current?.completion_tokens || 0, next.completion_tokens),
-        total_tokens: Math.max(current?.total_tokens || 0, next.total_tokens),
-        cached_tokens: Math.max(current?.cached_tokens || 0, next.cached_tokens),
-        reasoning_tokens: Math.max(current?.reasoning_tokens || 0, next.reasoning_tokens)
-    };
-}
+import { extractUsage, mergeUsage, toWireUsage } from '../utils/usage-normalizer.js';
 
 function containsImage(value, seen = new Set()) {
     if (!value || typeof value !== 'object' || seen.has(value)) return false;
@@ -47,6 +24,10 @@ function compactMetadata(context = {}) {
         accountIdentity: context.accountIdentity || null,
         accountEmail: context.accountEmail || null,
         potluckApiKey: context.potluckApiKey || null,
+        _codexRouting: context._codexRouting ? {
+            affinitySource: context._codexRouting.affinitySource || null,
+            hotShardApplied: context._codexRouting.hotShardApplied === true
+        } : undefined,
         isStream: context.isStream === true,
         method: context.method || null,
         path: context.path || null,
@@ -98,7 +79,7 @@ export class RuntimeHookBridge {
         if (hookName === 'onStreamChunk') {
             if (!requestId) return;
             const current = this.pending.get(requestId) || { metadata: compactMetadata(context), usage: {}, hasImage: false };
-            current.usage = mergeUsage(current.usage, mergeUsage(extractUsage(context.nativeChunk), extractUsage(context.chunkToSend)));
+            current.usage = mergeUsage(current.usage, extractUsage(context.nativeChunk, context.chunkToSend));
             current.hasImage ||= containsImage(context.nativeChunk) || containsImage(context.chunkToSend);
             this.pending.set(requestId, current);
             return;
@@ -106,7 +87,7 @@ export class RuntimeHookBridge {
 
         if (hookName === 'onUnaryResponse') {
             if (!requestId) return;
-            const usage = mergeUsage(extractUsage(context.nativeResponse), extractUsage(context.clientResponse));
+            const usage = extractUsage(context.nativeResponse, context.clientResponse);
             this.pending.set(requestId, { metadata: compactMetadata(context), usage, hasImage: containsImage(context.nativeResponse) || containsImage(context.clientResponse) });
             return;
         }
@@ -120,8 +101,8 @@ export class RuntimeHookBridge {
                 hookName: 'onUnaryResponse',
                 args: [{
                     ...metadata,
-                    nativeResponse: { usage: pending.usage },
-                    clientResponse: pending.hasImage ? { data: [{ url: 'image://result' }] } : { usage: pending.usage }
+                    nativeResponse: { usage: toWireUsage(pending.usage) },
+                    clientResponse: pending.hasImage ? { data: [{ url: 'image://result' }] } : { usage: toWireUsage(pending.usage) }
                 }]
             });
             this._send({ type: 'runtime_hook', hookName, args: [metadata] });

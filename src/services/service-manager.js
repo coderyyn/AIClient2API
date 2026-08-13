@@ -109,6 +109,10 @@ export function withStickyProviderAffinity(config, providerType, options = {}) {
             selectionOptions.stickyProviderKey = affinity.key;
             selectionOptions.stickyProviderSource = affinity.source;
             selectionOptions.shardDiscriminator = config._codexCacheAffinityScope?.turnId;
+            config._codexRouting = {
+                affinitySource: affinity.source,
+                hotShardApplied: false
+            };
         }
     }
     return selectionOptions;
@@ -1024,6 +1028,9 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     }
     
     const service = getServiceAdapter(serviceConfig);
+    if (config._codexRouting) {
+        config._codexRouting.hotShardApplied = selectionDiagnostics.hotShardApplied === true;
+    }
     
     return {
         service,

@@ -16,7 +16,7 @@ function keyHash(event) {
 }
 
 function accountId(event) {
-    return event?.account?.providerUuid || event?.account?.providerNameDisplay || null;
+    return event?.account?.providerUuidHash || event?.account?.providerUuid || event?.account?.providerNameDisplay || null;
 }
 
 function modelId(event) {

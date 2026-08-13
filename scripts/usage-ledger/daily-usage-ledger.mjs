@@ -198,7 +198,7 @@ function canonicalAccount(account = {}, fallbackProvider = 'unknown') {
     };
   }
 
-  const identity = account.accountIdentity || account.providerUuid || 'unknown';
+  const identity = account.accountIdentity || account.providerUuid || account.providerUuidHash || 'unknown';
   return {
     provider,
     accountEmail: email,
@@ -427,11 +427,11 @@ function auditEventToRows(event, options = {}) {
   const provider = event.request?.toProvider || event.request?.fromProvider || 'unknown';
   const accountRecord = {
     provider,
-    providerUuid: event.account?.providerUuid || event.account?.accountEmail || null,
+    providerUuid: event.account?.providerUuidHash || event.account?.providerUuid || event.account?.accountEmail || null,
     accountEmail: event.account?.accountEmail || null,
-    accountIdentity: event.account?.accountEmail || event.account?.providerUuid || null,
+    accountIdentity: event.account?.accountEmail || event.account?.providerUuidHash || event.account?.providerUuid || null,
     providerName: event.account?.providerNameDisplay || null,
-    providerUuids: [event.account?.providerUuid].filter(Boolean),
+    providerUuids: [event.account?.providerUuidHash || event.account?.providerUuid].filter(Boolean),
     models: {
       [event.request?.actualModel || event.request?.model || 'unknown']: {
         ...normalizeUsage(event.usage || {}),
@@ -734,7 +734,7 @@ function compactRepairEvent(event = {}) {
       name: event.potluckKey?.name || null,
     },
     account: {
-      providerUuid: event.account?.providerUuid || null,
+      providerUuid: event.account?.providerUuidHash || event.account?.providerUuid || null,
       accountEmail: event.account?.accountEmail || null,
       providerNameDisplay: event.account?.providerNameDisplay || null,
     },
@@ -754,7 +754,7 @@ function repairEventFingerprint(event) {
     event.request?.toProvider,
     event.request?.actualModel,
     event.potluckKey?.hash,
-    event.account?.providerUuid,
+    event.account?.providerUuidHash || event.account?.providerUuid,
     event.account?.accountEmail,
     event.usage,
   ])).digest('hex');
@@ -960,11 +960,11 @@ function makeRepairAccount(event) {
       providerUuid: email,
       accountIdentity: email,
       accountEmail: email,
-      providerUuids: [event.account?.providerUuid].filter(Boolean),
+      providerUuids: [event.account?.providerUuidHash || event.account?.providerUuid].filter(Boolean),
       providerName: event.account?.providerNameDisplay || null,
     };
   }
-  const identity = event.account?.providerUuid || email;
+  const identity = event.account?.providerUuidHash || event.account?.providerUuid || email;
   if (!identity) return null;
   return {
     key: `${provider}:${identity}`,
@@ -972,7 +972,7 @@ function makeRepairAccount(event) {
     providerUuid: identity,
     accountIdentity: identity,
     accountEmail: email,
-    providerUuids: [event.account?.providerUuid].filter(Boolean),
+    providerUuids: [event.account?.providerUuidHash || event.account?.providerUuid].filter(Boolean),
     providerName: event.account?.providerNameDisplay || null,
   };
 }

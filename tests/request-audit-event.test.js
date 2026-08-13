@@ -159,9 +159,32 @@ describe('request audit event', () => {
     });
 
     expect(event.account).toMatchObject({
-      providerUuid: 'uuid-1',
+      providerUuidHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
       accountEmail: 'codex.user@example.com'
     });
+    expect(event.account).not.toHaveProperty('providerUuid');
+  });
+
+  test('records sanitized sticky routing diagnostics without the affinity key', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-routing-diagnostics',
+      providerUuid: 'private-provider-uuid',
+      model: 'gpt-5.4-mini',
+      _codexRouting: {
+        affinitySource: 'session_id',
+        affinityKey: 'session:private-affinity-value',
+        hotShardApplied: true
+      }
+    });
+
+    expect(event.routing).toEqual({
+      affinitySource: 'session_id',
+      hotShardApplied: true
+    });
+    expect(event.account.providerUuidHash).toMatch(/^sha256:[a-f0-9]{16}$/);
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain('private-provider-uuid');
+    expect(serialized).not.toContain('private-affinity-value');
   });
 
   test('uses account email as the summary account key when present', () => {

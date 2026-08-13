@@ -235,6 +235,24 @@ describe('provider pool sticky affinity', () => {
         expect(new Set(hotSelections)).not.toContain('codex-hot');
     });
 
+    test('reports when a hot sticky shard was applied', async () => {
+        const manager = createHotShardCodexPoolManager();
+        const stickyProviderKey = 'hot-cache-key-diagnostics';
+        const diagnostics = {};
+
+        for (let i = 0; i < 4; i++) {
+            await manager.selectProvider('openai-codex-oauth', 'gpt-5.5', {
+                stickyProviderKey,
+                shardDiscriminator: `turn-${i}`,
+                selectionDiagnostics: diagnostics,
+                skipUsageCount: true
+            });
+        }
+
+        clearTimeout(manager.saveTimer);
+        expect(diagnostics.hotShardApplied).toBe(true);
+    });
+
     test('raises very hot Codex affinity keys up to five shards when enough accounts exist', async () => {
         const manager = createNineAccountHotShardManager();
         const config = manager._getCodexStickyHotShardConfig();

@@ -10,7 +10,7 @@ function event(overrides = {}) {
       toProvider: overrides.toProvider || 'openai-codex-oauth'
     },
     account: {
-      providerUuid: overrides.accountUuid || 'account-a',
+      providerUuidHash: overrides.accountUuid || 'account-a',
       providerNameDisplay: overrides.accountName || 'account-a'
     },
     usage: {

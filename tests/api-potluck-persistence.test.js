@@ -106,6 +106,53 @@ afterEach(() => {
 });
 
 describe('api potluck persistence', () => {
+    test('reports recorded, delta update, and deduplicated outcomes for one request snapshot', async () => {
+        const plugin = await loadPotluckPlugin();
+        const key = await plugin.exports.createKey('Usage Outcome', 1000);
+
+        const first = await plugin.exports.incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 3007,
+            completionTokens: 16,
+            totalTokens: 3023,
+            cachedTokens: 0
+        }, 'req-usage-outcome');
+        const updated = await plugin.exports.incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 3007,
+            completionTokens: 16,
+            totalTokens: 3023,
+            cachedTokens: 2688
+        }, 'req-usage-outcome');
+        const duplicate = await plugin.exports.incrementUsage(key.id, 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            promptTokens: 3007,
+            completionTokens: 16,
+            totalTokens: 3023,
+            cachedTokens: 2688
+        }, 'req-usage-outcome');
+
+        expect(first.usageRecordingStatus).toBe('recorded');
+        expect(updated.usageRecordingStatus).toBe('updated-by-delta');
+        expect(duplicate.usageRecordingStatus).toBe('deduplicated');
+        expect((await plugin.exports.getKey(key.id))).toMatchObject({
+            todayUsage: 1,
+            todayPromptTokens: 3007,
+            todayCachedTokens: 2688,
+            todayTotalTokens: 3023
+        });
+    });
+
+    test('reports missing-key without mutating storage', async () => {
+        const plugin = await loadPotluckPlugin();
+        const result = await plugin.exports.incrementUsage('maki_missing', 'openai-codex-oauth', 'gpt-5.4-mini', {
+            requestCount: 1,
+            totalTokens: 1
+        }, 'req-missing-key');
+
+        expect(result).toMatchObject({ usageRecordingStatus: 'missing-key' });
+    });
+
     test('uses the configured persistence interval instead of the 5 second default', async () => {
         const plugin = await loadPotluckPlugin();
         await plugin.init({

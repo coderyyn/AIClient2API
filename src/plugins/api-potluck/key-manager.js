@@ -1618,10 +1618,11 @@ function hasBillableUsage(usage = {}) {
 export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown', usage = {}, requestId = null, context = {}) {
     ensureLoaded();
     const keyData = keyStore.keys[apiKey];
-    if (!keyData) return;
+    if (!keyData) return { usageRecordingStatus: 'missing-key', persistencePending: false };
 
     let usageToApply = usage;
     let shouldRecordRate = true;
+    let usageRecordingStatus = 'recorded';
     if (requestId) {
         cleanupRecordedRequests();
         const recordKey = `${apiKey}:${requestId}`;
@@ -1632,6 +1633,7 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
             usageToApply = subtractRecordedUsage(maxUsage, previous, { includeRequestCount: false });
             recordedRequests.set(recordKey, { timestamp: Date.now(), usage: maxUsage });
             shouldRecordRate = hasBillableUsage(usageToApply);
+            usageRecordingStatus = shouldRecordRate ? 'updated-by-delta' : 'deduplicated';
         } else {
             usageToApply = nextUsage;
             recordedRequests.set(recordKey, { timestamp: Date.now(), usage: nextUsage });
@@ -1641,7 +1643,9 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     if (!hasBillableUsage(usageToApply)) {
         return {
             ...keyData,
-            usedBonus: false
+            usedBonus: false,
+            usageRecordingStatus,
+            persistencePending: isDirty
         };
     }
 
@@ -1749,7 +1753,9 @@ export async function incrementUsage(apiKey, pName = 'unknown', mName = 'unknown
     
     return {
         ...keyData,
-        usedBonus: false
+        usedBonus: false,
+        usageRecordingStatus,
+        persistencePending: isDirty
     };
 }
 

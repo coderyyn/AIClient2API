@@ -1,5 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals';
-import { resolveCodexAffinityKey } from '../src/services/service-manager.js';
+import { resolveCodexAffinityKey, withStickyProviderAffinity } from '../src/services/service-manager.js';
 import { extractCodexCacheAffinityScope } from '../src/utils/common.js';
 
 jest.mock('../src/providers/adapter.js', () => ({
@@ -50,6 +50,26 @@ describe('Codex affinity scope', () => {
             CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: true,
             potluckApiKey: 'maki_secret_key'
         }, 'gemini-cli-oauth', 'gpt-image-2')).toBeNull();
+    });
+
+    test('stores only sanitized routing diagnostics on the request config', () => {
+        const config = {
+            CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: true,
+            potluckApiKey: 'maki_secret_key',
+            _codexCacheAffinityScope: { sessionId: 'session-private-value' }
+        };
+
+        const options = withStickyProviderAffinity(config, 'openai-codex-oauth', {
+            requestedModel: 'gpt-5.4-mini'
+        });
+
+        expect(options.stickyProviderSource).toBe('session_id');
+        expect(config._codexRouting).toEqual({
+            affinitySource: 'session_id',
+            hotShardApplied: false
+        });
+        expect(JSON.stringify(config._codexRouting)).not.toContain('session-private-value');
+        expect(JSON.stringify(config._codexRouting)).not.toContain('maki_secret_key');
     });
 
     test('merges Codex client metadata with request metadata', () => {

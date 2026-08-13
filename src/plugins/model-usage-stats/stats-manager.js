@@ -6,6 +6,11 @@ import logger from '../../utils/logger.js';
 import { RateManager } from '../../utils/rate-tracker.js';
 import { getBeijingDateString } from '../../utils/common.js';
 import { normalizeCodexRateLimitWindows } from '../../utils/codex-rate-limit.js';
+import {
+    extractUsage as extractNormalizedUsage,
+    mergeUsage as mergeNormalizedUsage,
+    normalizeUsageCandidate as normalizeSharedUsageCandidate
+} from '../../utils/usage-normalizer.js';
 
 const STATS_STORE_FILE = path.join(process.cwd(), 'configs', 'model-usage-stats.json');
 const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
@@ -724,98 +729,17 @@ function getAccountUsageSnapshot(provider, providerUuid) {
 }
 
 function normalizeUsageCandidate(candidate) {
-    if (!candidate || typeof candidate !== 'object') {
-        return null;
-    }
-    if (Array.isArray(candidate)) {
-        const usage = candidate.reduce((merged, item) => mergeUsage(merged, normalizeUsageCandidate(item)), {
-            promptTokens: 0,
-            completionTokens: 0,
-            totalTokens: 0,
-            reasoningTokens: 0,
-            cachedTokens: 0
-        });
-        const hasUsage = usage.promptTokens > 0 || usage.completionTokens > 0 || usage.reasoningTokens > 0 || usage.totalTokens > 0 || usage.cachedTokens > 0;
-        return hasUsage ? usage : null;
-    }
-
-    const usage = candidate.usage || candidate.message?.usage || candidate.usageMetadata || candidate.response?.usage || null;
-    const reasoningTokens = toNumber(
-        candidate.completion_tokens_details?.reasoning_tokens ??
-        candidate.output_tokens_details?.reasoning_tokens ??
-        usage?.completion_tokens_details?.reasoning_tokens ??
-        usage?.output_tokens_details?.reasoning_tokens ??
-        usage?.thoughtsTokenCount
-    );
-    const promptTokens = toNumber(
-        candidate.prompt_tokens ??
-        usage?.prompt_tokens ??
-        usage?.input_tokens ??
-        usage?.promptTokenCount ??
-        usage?.inputTokenCount
-    );
-    const completionTokens = toNumber(
-        candidate.completion_tokens ??
-        usage?.completion_tokens ??
-        usage?.output_tokens ??
-        usage?.candidatesTokenCount ??
-        usage?.outputTokenCount
-    );
-    const totalTokens = toNumber(
-        candidate.total_tokens ??
-        usage?.total_tokens ??
-        usage?.totalTokenCount
-    );
-    const cachedTokens = toNumber(
-        candidate.cached_tokens ??
-        usage?.cached_tokens ??
-        candidate.prompt_tokens_details?.cached_tokens ??
-        candidate.input_tokens_details?.cached_tokens ??
-        usage?.prompt_tokens_details?.cached_tokens ??
-        usage?.input_tokens_details?.cached_tokens ??
-        usage?.cache_read_input_tokens ??
-        usage?.cachedContentTokenCount
-    );
-
-    const hasUsage = promptTokens > 0 || completionTokens > 0 || reasoningTokens > 0 || totalTokens > 0 || cachedTokens > 0;
-    if (!hasUsage) {
-        return null;
-    }
-
-    return {
-        promptTokens,
-        completionTokens,
-        reasoningTokens,
-        totalTokens: totalTokens || (promptTokens + completionTokens),
-        cachedTokens
-    };
+    const usage = normalizeSharedUsageCandidate(candidate);
+    if (!usage) return null;
+    return Object.values(usage).some(value => value > 0) ? usage : null;
 }
 
 function mergeUsage(baseUsage, nextUsage) {
-    if (!nextUsage) {
-        return baseUsage;
-    }
-
-    return {
-        promptTokens: Math.max(baseUsage.promptTokens, nextUsage.promptTokens),
-        completionTokens: Math.max(baseUsage.completionTokens, nextUsage.completionTokens),
-        reasoningTokens: Math.max(baseUsage.reasoningTokens || 0, nextUsage.reasoningTokens || 0),
-        totalTokens: Math.max(baseUsage.totalTokens, nextUsage.totalTokens || (nextUsage.promptTokens + nextUsage.completionTokens)),
-        cachedTokens: Math.max(baseUsage.cachedTokens, nextUsage.cachedTokens)
-    };
+    return mergeNormalizedUsage(baseUsage, nextUsage);
 }
 
 function extractUsage(...candidates) {
-    return candidates.reduce((usage, candidate) => {
-        const normalized = normalizeUsageCandidate(candidate);
-        return mergeUsage(usage, normalized);
-    }, {
-        promptTokens: 0,
-        completionTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 0,
-        cachedTokens: 0
-    });
+    return extractNormalizedUsage(...candidates);
 }
 
 function getPendingRequest(requestId, meta = {}) {
