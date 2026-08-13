@@ -173,6 +173,7 @@ async function main() {
     if (approvedPatch.targetDate !== TARGET_DATE) throw new Error('patch target date mismatch');
     const approvedPatches = approvedPatch.patches || [];
     const appliedNext = clone(store);
+    const deltasByKey = {};
     for (const item of approvedPatches) {
       const rawKey = Object.keys(appliedNext.keys || {}).find(key => keyHash(key) === item.keyHash);
       if (!rawKey) throw new Error(`key hash no longer exists: ${item.keyHash}`);
@@ -184,9 +185,13 @@ async function main() {
       target.cacheRateSource = item.cacheRateSource;
       target.baseline = item.baseline;
       target.cacheHitRatio = num(target.promptTokens) > 0 ? target.cachedTokens / num(target.promptTokens) : 0;
+      deltasByKey[rawKey] = (deltasByKey[rawKey] || 0) + num(item.deltaCachedTokens);
     }
     for (const rawKey of Object.keys(appliedNext.keys || {})) {
       recalcDayCosts(appliedNext.keys[rawKey].usageHistory?.[TARGET_DATE]);
+      if (deltasByKey[rawKey]) {
+        appliedNext.keys[rawKey].totalCachedTokens = num(appliedNext.keys[rawKey].totalCachedTokens) + deltasByKey[rawKey];
+      }
     }
     if (!args.backupDir) throw new Error('--backup-dir is required with --apply');
     const backupDir = path.resolve(args.backupDir);
