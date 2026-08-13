@@ -85,7 +85,7 @@ export const PROVIDER_MAPPINGS = [
         patterns: ['configs/grok-cli/', '/grok-cli/', '/.grok-cli/'],
         providerType: 'grok-cli-oauth',
         credPathKey: 'GROK_CLI_OAUTH_CREDS_FILE_PATH',
-        defaultCheckModel: 'grok-3-mini',
+        defaultCheckModel: 'grok-4.6',
         displayName: 'Grok CLI OAuth',
         needsProjectId: false,
         urlKeys: ['GROK_CLI_BASE_URL']

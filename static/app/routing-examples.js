@@ -519,7 +519,7 @@ function renderRoutingExamples(providerConfigs) {
         'openai-qwen-oauth': 'qwen3-coder-plus',
         'openai-iflow': 'qwen3-max',
         'openai-codex-oauth': 'gpt-5',
-        'grok-cli-oauth': 'grok-3-mini',
+        'grok-cli-oauth': 'grok-4.6',
         'grok-web': 'grok-4.1-mini',
         'openaiResponses-custom': 'gpt-4o'
     };

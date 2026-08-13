@@ -131,6 +131,10 @@ export const PROVIDER_MODELS = {
     ],
     'grok-cli-oauth': [
         'grok-build-0.1',
+        'grok-build-latest',
+        'grok-4.5',
+        'grok-4.5-latest',
+        'grok-4.6',
         'grok-imagine-image-quality',
         'grok-imagine-image',
         'grok-imagine-image-pro',

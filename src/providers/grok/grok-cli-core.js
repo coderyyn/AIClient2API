@@ -16,7 +16,7 @@ const GROK_CLI_DEFAULT_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing
 const GROK_CLI_DEFAULT_SUBSCRIPTIONS_URL = 'https://grok.com/rest/subscriptions';
 const GROK_CLI_CLIENT_VERSION = '0.2.87';
 const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
-const GROK_CLI_DEFAULT_MODEL = 'grok-3-mini';
+const GROK_CLI_DEFAULT_MODEL = 'grok-4.6';
 const GROK_CLI_MODELS = getProviderModels(MODEL_PROVIDER.GROK_CLI || 'grok-cli-oauth');
 const GROK_CLI_IMAGE_MODELS = new Set([
     'grok-imagine-image-quality',

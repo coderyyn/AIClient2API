@@ -21,6 +21,14 @@ function loadEnsureToolCallIds() {
 }
 
 describe('upstream model registrations', () => {
+    test('registers current Grok CLI OAuth models', () => {
+        expect(getProviderModels('grok-cli-oauth')).toEqual(expect.arrayContaining([
+            'grok-4.5',
+            'grok-4.6',
+            'grok-build-latest'
+        ]));
+    });
+
     test('registers Gemini 3.6 Flash aliases for Gemini and Antigravity providers', () => {
         expect(getProviderModels('gemini-cli-oauth')).toEqual(expect.arrayContaining([
             'gemini-3.6-flash'
