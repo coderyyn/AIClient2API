@@ -169,6 +169,21 @@ export function createCodexOAuthAxiosConfig(config = {}, options = {}) {
     return configureAxiosProxy(axiosConfig, config, 'openai-codex-oauth');
 }
 
+export async function postCodexOAuthRefreshRequest(httpClient, url, data, headers, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    timeoutId.unref?.();
+    try {
+        return await httpClient.post(url, data, {
+            headers,
+            timeout: timeoutMs,
+            signal: controller.signal
+        });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 class CodexAuth {
     constructor(config, proxyOptions = {}) {
         this.config = config;
@@ -510,7 +525,8 @@ class CodexAuth {
         logger.info(`${CODEX_OAUTH_CONFIG.logPrefix} Refreshing access token...`);
 
         try {
-            const response = await this.httpClient.post(
+            const response = await postCodexOAuthRefreshRequest(
+                this.httpClient,
                 CODEX_OAUTH_CONFIG.tokenUrl,
                 new URLSearchParams({
                     grant_type: 'refresh_token',
@@ -518,10 +534,8 @@ class CodexAuth {
                     refresh_token: refreshToken
                 }).toString(),
                 {
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Accept': 'application/json'
-                    }
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json'
                 }
             );
 

@@ -28,7 +28,8 @@ const CODEX_FINGERPRINT_HEADER_NAMES = Object.freeze([
     'x-client-request-id',
     'session-id',
     'session_id',
-    'thread-id'
+    'thread-id',
+    'x-openai-internal-codex-responses-lite'
 ]);
 
 export function extractInboundCodexFingerprintContext(req, requestBody = {}) {

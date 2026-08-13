@@ -20,6 +20,7 @@ import {
     resolveCodexFingerprintIds
 } from './codex-fingerprint.js';
 import { recordCodexFingerprintAudit } from './codex-fingerprint-audit.js';
+import { codexPromptCacheObservability } from './codex-prompt-cache-observability.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
@@ -444,6 +445,10 @@ export class CodexApiService {
         const url = `${this.baseUrl}/responses`;
         const fingerprintState = this.resolveFingerprintState(requestBody);
         const body = await this.prepareRequestBody(selectedModel, requestBody, true, fingerprintState.ids);
+        codexPromptCacheObservability.recordPresence({
+            providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
+            promptCacheOptions: body.prompt_cache_options
+        });
         const headers = this.buildHeaders(body.prompt_cache_key, true, fingerprintState);
 
         let overloadRetryCount = 0;
@@ -469,6 +474,12 @@ export class CodexApiService {
                 return this.parseNonStreamResponse(response.data);
             } catch (error) {
                 error.origin = error.origin || 'upstream_codex';
+                codexPromptCacheObservability.recordUpstreamError({
+                    providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
+                    promptCacheOptions: body.prompt_cache_options,
+                    httpStatus: error.response?.status,
+                    errorClass: error.response?.data?.error?.type || error.response?.data?.error?.code
+                });
                 if (rejectedFieldRetryCount < 1 && removeRejectedResponsesField(body, error)) {
                     rejectedFieldRetryCount += 1;
                     logger.warn('[Codex] Upstream rejected an allowlisted Responses field; retrying once with that field removed');
@@ -544,6 +555,10 @@ export class CodexApiService {
         const url = `${this.baseUrl}/responses`;
         const fingerprintState = this.resolveFingerprintState(requestBody);
         const body = await this.prepareRequestBody(selectedModel, requestBody, true, fingerprintState.ids);
+        codexPromptCacheObservability.recordPresence({
+            providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
+            promptCacheOptions: body.prompt_cache_options
+        });
         const headers = this.buildHeaders(body.prompt_cache_key, true, fingerprintState);
 
         let overloadRetryCount = 0;
@@ -595,6 +610,12 @@ export class CodexApiService {
                 return;
             } catch (error) {
                 error.origin = error.origin || 'upstream_codex';
+                codexPromptCacheObservability.recordUpstreamError({
+                    providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
+                    promptCacheOptions: body.prompt_cache_options,
+                    httpStatus: error.response?.status,
+                    errorClass: error.response?.data?.error?.type || error.response?.data?.error?.code
+                });
                 if (!hasVisibleOutput && rejectedFieldRetryCount < 1 && removeRejectedResponsesField(body, error)) {
                     rejectedFieldRetryCount += 1;
                     logger.warn('[Codex] Upstream rejected an allowlisted Responses field; retrying stream once with that field removed');
@@ -663,26 +684,32 @@ export class CodexApiService {
         };
 
         const inboundHeaders = fingerprintState?.inboundHeaders || {};
+        const getInboundHeader = (name) => Object.entries(inboundHeaders)
+            .find(([key, value]) => key.toLowerCase() === name.toLowerCase() && value !== undefined && value !== null && String(value).trim())?.[1];
         for (const name of [
             'x-codex-turn-metadata', 'x-codex-window-id', 'x-codex-installation-id',
-            'x-client-request-id', 'session-id', 'session_id', 'thread-id'
+            'x-client-request-id', 'thread-id', 'x-openai-internal-codex-responses-lite'
         ]) {
-            const value = inboundHeaders[name] ?? inboundHeaders[name.toLowerCase()];
+            const value = getInboundHeader(name);
             if (value !== undefined && value !== null && String(value).trim()) {
                 headers[name] = String(value);
             }
         }
-        // 设置 Conversation_id 和 Session_id
-        if (cacheId) {
-            headers['Conversation_id'] = cacheId;
-            const hasInboundSessionUnderscore = Object.keys(inboundHeaders)
-                .some(name => name.toLowerCase() === 'session_id');
-            if (!hasInboundSessionUnderscore) {
-                headers['Session_id'] = cacheId;
-            }
+        // 入站兼容多种 session header，出站只保留 canonical Session-Id。
+        const inboundSession = ['session-id', 'session_id']
+            .map(name => getInboundHeader(name))
+            .find(value => value !== undefined && value !== null && String(value).trim());
+        const sessionHeader = inboundSession || cacheId;
+        if (sessionHeader) {
+            headers['Session-Id'] = String(sessionHeader);
         }
 
-        // 必须最后改写，避免大小写不敏感的 HTTP 客户端将 Session_id 覆盖到 session_id。
+        // 设置 Conversation_id；prompt_cache_key 继续保留并参与现有 sticky/cache 逻辑。
+        if (cacheId) {
+            headers['Conversation_id'] = cacheId;
+        }
+
+        // 必须最后改写，让账号级指纹覆盖入站身份，同时维持唯一 canonical Session-Id。
         if (fingerprintState?.ids) {
             applyCodexFingerprintHeaders(headers, fingerprintState.ids);
         }

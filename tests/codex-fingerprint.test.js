@@ -109,7 +109,8 @@ describe('Codex OAuth fingerprint convergence', () => {
         const headerMetadata = JSON.parse(headers['x-codex-turn-metadata']);
         const bodyMetadata = JSON.parse(body.client_metadata['x-codex-turn-metadata']);
         expect(headers['x-codex-installation-id']).toBe(ids.installationId);
-        expect(headers['session-id']).toBe(ids.sessionId);
+        expect(headers['Session-Id']).toBe(ids.sessionId);
+        expect(headers['session-id']).toBeUndefined();
         expect(headers['thread-id']).toBe(ids.threadId);
         expect(body.client_metadata.session_id).toBe(ids.sessionId);
         expect(body.client_metadata.thread_id).toBe(ids.threadId);
@@ -151,7 +152,8 @@ describe('Codex OAuth fingerprint convergence', () => {
         expect(headers.Session_id).toBeUndefined();
         expect(headers.SESSION_ID).toBeUndefined();
         expect(headers['X-Codex-Installation-Id']).toBeUndefined();
-        expect(headers.session_id).toBe(ids.sessionId);
+        expect(headers['Session-Id']).toBe(ids.sessionId);
+        expect(headers.session_id).toBeUndefined();
         expect(headers['x-codex-installation-id']).toBe(ids.installationId);
     });
 });

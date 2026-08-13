@@ -163,7 +163,9 @@ describe('Codex OAuth fingerprint request integration', () => {
             const embeddedBody = JSON.parse(request.data.client_metadata['x-codex-turn-metadata']);
 
             expect(request.headers['x-codex-installation-id']).toBe(request.data.client_metadata['x-codex-installation-id']);
-            expect(request.headers['session-id']).toBe(request.data.client_metadata.session_id);
+            expect(request.headers['Session-Id']).toBe(request.data.client_metadata.session_id);
+            expect(request.headers['session-id']).toBeUndefined();
+            expect(request.headers.session_id).toBeUndefined();
             expect(request.headers['thread-id']).toBe(request.data.client_metadata.thread_id);
             expect(embeddedHeader.turn_id).toBe(request.data.client_metadata.turn_id);
             expect(embeddedBody.turn_id).toBe(request.data.client_metadata.turn_id);
@@ -201,8 +203,8 @@ describe('Codex OAuth fingerprint request integration', () => {
         try {
             await service.generateContent('gpt-5.4-mini', body);
             const request = axios.request.mock.calls[0][0];
-            expect(request.headers['session-id']).toBe('original-session');
-            expect(request.headers.session_id).toBeUndefined();
+            expect(request.headers['Session-Id']).toBe('original-session');
+            expect(request.headers['session-id']).toBeUndefined();
             expect(request.headers['thread-id']).toBe('client-thread');
             expect(request.headers['x-codex-installation-id']).toBe('client-installation');
             expect(request.data.client_metadata.session_id).toBe('original-session');
@@ -222,7 +224,8 @@ describe('Codex OAuth fingerprint request integration', () => {
         try {
             await service.generateContent('gpt-5.4-mini', body);
             const headers = axios.request.mock.calls[0][0].headers;
-            expect(headers.session_id).toBe('underscore-session');
+            expect(headers['Session-Id']).toBe('underscore-session');
+            expect(headers.session_id).toBeUndefined();
             expect(headers.Session_id).toBeUndefined();
         } finally {
             service.stopCacheCleanup();

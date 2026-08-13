@@ -117,8 +117,7 @@ export function applyCodexFingerprintHeaders(headers = {}, ids) {
     if (ids.mode !== 'device') {
         headers['x-codex-window-id'] = ids.windowId;
         headers['x-client-request-id'] = ids.threadId;
-        headers['session-id'] = ids.sessionId;
-        headers.session_id = ids.sessionId;
+        headers['Session-Id'] = ids.sessionId;
         headers['thread-id'] = ids.threadId;
         Object.assign(metadataFields, {
             session_id: ids.sessionId,
