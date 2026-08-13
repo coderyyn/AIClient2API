@@ -2,7 +2,7 @@ import '../core/security-hardening.js';
 import logger from '../utils/logger.js';
 import * as http from 'http';
 import { initializeConfig, CONFIG } from '../core/config-manager.js';
-import { initApiService, autoLinkProviderConfigs } from './service-manager.js';
+import { initApiService, autoLinkProviderConfigs, getProviderPoolManager } from './service-manager.js';
 import { initializeUIManagement } from './ui-manager.js';
 import { initializeAPIManagement } from './api-manager.js';
 import { createRequestHandler } from '../handlers/request-handler.js';
@@ -18,6 +18,7 @@ import { createRuntimeCoordination } from '../runtime/runtime-coordination.js';
 import { waitForCoordinationReady } from '../runtime/runtime-coordination-readiness.js';
 import { RuntimeEventConsumer } from '../runtime/runtime-event-consumer.js';
 import { migrateCodexFingerprintProviderPoolsFile } from '../utils/codex-fingerprint-migration.js';
+import { invalidateServiceAdapter } from '../providers/adapter.js';
 
 /**
  * @license
@@ -127,7 +128,6 @@ import { migrateCodexFingerprintProviderPoolsFile } from '../utils/codex-fingerp
 
 import 'dotenv/config'; // Import dotenv and configure it
 import '../converters/register-converters.js'; // 注册所有转换器
-import { getProviderPoolManager } from './service-manager.js';
 import { isRetryableNetworkError } from '../utils/common.js';
 import { runtimeMetrics } from '../runtime/runtime-metrics.js';
 
@@ -309,6 +309,9 @@ async function startServer() {
         persistenceEnabled: !IS_EXECUTION_WORKER,
         stateEventSink: IS_EXECUTION_WORKER && process.send
             ? event => process.send({ type: 'provider_state', event })
+            : null,
+        configEventSink: !IS_EXECUTION_WORKER && process.send
+            ? event => process.send(event)
             : null
     });
     if (startupShutdownGate.shouldAbort('Codex prewarm service startup')) return null;
@@ -548,7 +551,11 @@ async function startServer() {
                 sendToMaster({ type: 'runtime_metrics', snapshot: runtimeMetrics.snapshot() });
             }, 5000);
             runtimeMetricsTimerId.unref?.();
-            sendToMaster({ type: 'ready', pid: process.pid });
+            sendToMaster({
+                type: 'ready',
+                pid: process.pid,
+                providerConfigRevision: getProviderPoolManager()?.providerConfigRevision || 0
+            });
         }
                 finishStartup();
             } catch (error) {
@@ -568,6 +575,20 @@ const shutdownHandlers = registerWorkerShutdownHandlers({
     onRuntimeMessage: message => {
         if (message.type === 'provider_state' && message.event) {
             getProviderPoolManager()?.applyRemoteProviderState?.(message.event);
+            return true;
+        }
+        if (message.type === 'provider_config_sync' && IS_EXECUTION_WORKER) {
+            const manager = getProviderPoolManager();
+            const result = manager?.applyProviderConfigSync?.(message);
+            if (result?.applied) {
+                CONFIG.providerPools = manager.providerPools;
+                for (const uuid of result.changedUuids) invalidateServiceAdapter(message.providerType, uuid);
+                sendToMaster({ type: 'provider_config_sync_ack', revision: result.revision });
+            }
+            return true;
+        }
+        if (message.type === 'provider_config_sync_status' && RUNTIME_WORKER_ROLE === 'control') {
+            globalThis.providerConfigSyncStatus = message;
             return true;
         }
         if (message.type === 'runtime_hook' && RUNTIME_WORKER_ROLE === 'control') {

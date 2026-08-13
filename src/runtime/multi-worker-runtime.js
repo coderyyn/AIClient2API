@@ -38,6 +38,35 @@ export function aggregateWorkerMetrics(workerSnapshots = new Map()) {
     return result;
 }
 
+export function createProviderConfigAckTracker() {
+    let currentRevision = 0;
+    const appliedRevisions = new Map();
+    return {
+        notePublished(revision, workerIds = []) {
+            currentRevision = Math.max(currentRevision, Number(revision || 0));
+            for (const workerId of workerIds) {
+                if (!appliedRevisions.has(workerId)) appliedRevisions.set(workerId, 0);
+            }
+        },
+        acknowledge(workerId, revision) {
+            if (!workerId) return;
+            appliedRevisions.set(workerId, Math.max(Number(revision || 0), appliedRevisions.get(workerId) || 0));
+        },
+        remove(workerId) {
+            appliedRevisions.delete(workerId);
+        },
+        snapshot(workerIds = []) {
+            const revisions = Object.fromEntries(workerIds.map(workerId => [workerId, appliedRevisions.get(workerId) || 0]));
+            const pendingWorkers = workerIds.filter(workerId => (revisions[workerId] || 0) < currentRevision);
+            return {
+                currentRevision,
+                pendingWorkerCount: pendingWorkers.length,
+                workerRevisions: revisions
+            };
+        }
+    };
+}
+
 export function startMultiWorkerRuntime({ env = process.env, args = process.argv.slice(2), logger = console } = {}) {
     const topology = resolveWorkerTopology(env);
     const publicPort = Number(env.RUNTIME_PUBLIC_PORT || 3000);
@@ -45,6 +74,8 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
     const epoch = env.RUNTIME_DEPLOYMENT_EPOCH || `local-${Date.now()}`;
     const workers = new Map();
     const workerMetrics = new Map();
+    const providerConfigAcks = createProviderConfigAckTracker();
+    const latestProviderConfigEvents = new Map();
     const ready = new Set();
     let shuttingDown = false;
 
@@ -64,6 +95,13 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
         child.on('message', message => {
             if (message?.type === 'ready') {
                 ready.add(id);
+                if (role === 'execution') {
+                    providerConfigAcks.acknowledge(id, Number(message.providerConfigRevision || 0));
+                    const replayEvents = [...latestProviderConfigEvents.values()].sort((left, right) => left.revision - right.revision);
+                    for (const event of replayEvents) {
+                        if (child.connected) child.send({ ...event, targetWorkerId: id });
+                    }
+                }
                 if (role === 'control') {
                     for (const worker of workers.values()) {
                         if (worker.role === 'execution' && worker.child.connected) worker.child.send({ type: 'runtime_hook_retry' });
@@ -82,6 +120,24 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
                     if (worker.child !== child && worker.child.connected) worker.child.send(message);
                 }
             }
+            if (message?.type === 'provider_config_sync' && role === 'control') {
+                latestProviderConfigEvents.set(message.providerType, { ...message });
+                const executionIds = [...workers.values()]
+                    .filter(worker => worker.role === 'execution' && (!message.targetWorkerId || message.targetWorkerId === worker.id))
+                    .map(worker => worker.id);
+                providerConfigAcks.notePublished(message.revision, executionIds);
+                for (const worker of workers.values()) {
+                    if (worker.role === 'execution' && worker.child.connected && (!message.targetWorkerId || message.targetWorkerId === worker.id)) worker.child.send(message);
+                }
+            }
+            if (message?.type === 'provider_config_sync_ack' && role === 'execution') {
+                providerConfigAcks.acknowledge(id, message.revision);
+                const control = workers.get('control-1');
+                if (control?.child.connected) control.child.send({
+                    type: 'provider_config_sync_status',
+                    ...providerConfigAcks.snapshot([...workers.values()].filter(worker => worker.role === 'execution').map(worker => worker.id))
+                });
+            }
             if (message?.type === 'runtime_metrics' && message.snapshot) {
                 workerMetrics.set(id, message.snapshot);
             }
@@ -90,6 +146,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             ready.delete(id);
             workers.delete(id);
             workerMetrics.delete(id);
+            providerConfigAcks.remove(id);
             if (!shuttingDown) {
                 logger.error?.(`[Runtime] ${id} exited code=${code} signal=${signal}; restarting`);
                 setTimeout(() => spawnWorker(role, index, port), 1000).unref?.();
@@ -120,6 +177,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             coordination: 'redis',
             leaseRecovery: 'ready',
             persistenceBacklog: 0,
+            providerConfig: providerConfigAcks.snapshot([...workers.values()].filter(worker => worker.role === 'execution').map(worker => worker.id)),
             metrics: aggregateWorkerMetrics(workerMetrics)
         })
     }));
@@ -159,7 +217,8 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             epoch,
             controlWorkers: [...workers.values()].filter(worker => worker.role === 'control').length,
             executionWorkers: [...workers.values()].filter(worker => worker.role === 'execution').length,
-            readyWorkers: ready.size
+            readyWorkers: ready.size,
+            providerConfig: providerConfigAcks.snapshot([...workers.values()].filter(worker => worker.role === 'execution').map(worker => worker.id))
         }),
         shutdown
     };

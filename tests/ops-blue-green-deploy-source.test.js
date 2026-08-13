@@ -44,4 +44,10 @@ describe('production image provenance and blue-green preflight', () => {
         expect(guide).toContain('max-size');
         expect(guide).toContain('nginx -t');
     });
+
+    test('candidate preflight gates on worker config convergence', () => {
+        const script = read('scripts/ops/blue-green-deploy.sh');
+        expect(script).toContain('/runtime/health');
+        expect(script).toContain('pendingWorkerCount');
+    });
 });

@@ -137,6 +137,11 @@ prepare_candidate() {
   if [ "$APPLY" = "1" ]; then
     wait_for_health || { docker logs --tail 100 "$CANDIDATE_CONTAINER" >&2; exit 1; }
     curl -fsS --max-time 5 "http://127.0.0.1:${CANDIDATE_PORT}/api/health" >/dev/null
+    runtime_health=$(curl -fsS --max-time 5 "http://127.0.0.1:${CANDIDATE_PORT}/runtime/health")
+    printf '%s' "$runtime_health" | grep -Eq '"pendingWorkerCount"[[:space:]]*:[[:space:]]*0' || {
+      echo "candidate provider config propagation is still pending" >&2
+      exit 1
+    }
     log "candidate healthy: container=$CANDIDATE_CONTAINER port=$CANDIDATE_PORT revision=$REVISION epoch=$DEPLOYMENT_EPOCH"
   fi
 }

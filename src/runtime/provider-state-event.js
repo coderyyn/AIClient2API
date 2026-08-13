@@ -6,7 +6,7 @@ const MUTABLE_STATE_FIELDS = [
     'lastKnownCodexPlan'
 ];
 
-export function createProviderStateEvent(providerType, config = {}) {
+export function createProviderStateEvent(providerType, config = {}, configRevision = 0) {
     const state = {};
     for (const field of MUTABLE_STATE_FIELDS) {
         if (config[field] !== undefined) state[field] = structuredClone(config[field]);
@@ -15,12 +15,14 @@ export function createProviderStateEvent(providerType, config = {}) {
         type: 'provider_state',
         providerType: String(providerType || ''),
         uuid: String(config.uuid || ''),
+        configRevision: Number(configRevision || 0),
         state,
         occurredAt: new Date().toISOString()
     };
 }
 
-export function applyProviderStateEvent(providerPools, event) {
+export function applyProviderStateEvent(providerPools, event, current = {}) {
+    if (Number(event?.configRevision || 0) < Number(current.revision || 0)) return false;
     const providers = providerPools?.[event?.providerType];
     if (!Array.isArray(providers)) return false;
     const target = providers.find(provider => provider.uuid === event.uuid);

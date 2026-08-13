@@ -95,6 +95,14 @@
 - sticky provider 默认应按配置决定是否启用；如果更关注缓存命中率，可以开启并观察 provider 健康状态。
 - 真实 smoke 时不要打印完整 API key、OAuth token、cookie、Authorization 头或原始请求体。
 
+### 多 worker 配置同步与蓝绿运维
+
+- 生产默认是 1 个 control worker + 3 个 execution worker；control worker 是 `provider_pools.json` 的唯一写入者。
+- Provider 编辑、启用/禁用、删除、刷新 UUID、Codex 重新授权和配置重载必须通过 revisioned `provider_config_sync` 广播，不能直接给 manager 赋值后返回成功。
+- 候选发布使用 `scripts/ops/build-image.sh` 构建可追溯镜像，再用 `scripts/ops/blue-green-deploy.sh` 做 dry-run/prepare/render 预检。
+- 现有脚本是“候选预热 + 单写者人工交接”，不是自动严格双活；正式切换仍需暂停管理写操作和 OAuth，并人工执行 Nginx upstream 切换/回滚。
+- 切换前必须确认 `/runtime/health` 的 provider config revision 已在所有 execution worker 收敛，`pendingWorkerCount=0`；不要直接重启正在写挂载配置的 active 容器。
+
 ## 验证记录
 
 最近一次本地验证：

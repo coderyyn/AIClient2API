@@ -52,7 +52,10 @@ docker image inspect --format '{{ index .Config.Labels "yyn.base_commit" }}' <im
 2. 把 canonical configs 复制到权限为 700 的候选快照目录。
 3. 候选限制为 1 CPU、1 GB 内存，只绑定 `127.0.0.1:13001 -> 3000`。
 4. 等待 Docker health，并检查 `/api/health`。
-5. 不触碰当前容器、Nginx 或 OAuth 端口。
+5. 检查 `/runtime/health` 的 `providerConfig.currentRevision`、`providerConfig.pendingWorkerCount` 和 execution worker 数量；`pendingWorkerCount` 必须为 0。
+6. 不触碰当前容器、Nginx 或 OAuth 端口。
+
+多 worker 运行时由 control worker 作为唯一配置写入者。每次 provider 编辑、启用/禁用、凭据重新授权或配置重载都会生成递增的配置 revision，并广播到 execution workers；旧 revision 的健康状态事件会被丢弃。若 `/runtime/health` 显示仍有 pending worker，不得进行流量切换。
 
 可以生成 upstream 预览：
 

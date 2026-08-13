@@ -120,6 +120,14 @@ function loadProviderPools(currentConfig, providerPoolManager) {
     return JSON.parse(readFileSync(filePath, 'utf-8'));
 }
 
+function publishProviderType(providerPoolManager, providerPools, providerType, action, changedUuids = []) {
+    if (!providerPoolManager) return null;
+    return providerPoolManager.publishProviderConfig(providerType, providerPools[providerType] || [], {
+        action,
+        changedUuids
+    });
+}
+
 function getManagedSupportedModels(providerType, providers = []) {
     return normalizeModelIds(
         providers.flatMap(provider => getConfiguredSupportedModels(providerType, provider))
@@ -525,8 +533,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], { action: 'add', changedUuids: [filteredConfig.uuid] });
         }
 
         // 广播更新事件
@@ -642,8 +649,7 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], { action: 'update', changedUuids: [providerUuid] });
         }
 
         // 广播更新事件
@@ -722,8 +728,7 @@ async function _handleDeleteProvider(req, res, currentConfig, providerPoolManage
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            publishProviderType(providerPoolManager, providerPools, providerType, 'delete', [providerUuid]);
         }
 
         // 广播更新事件
@@ -798,14 +803,7 @@ async function _handleDisableEnableProvider(req, res, currentConfig, providerPoo
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            
-            // Call the appropriate method
-            if (action === 'disable') {
-                providerPoolManager.disableProvider(providerType, provider);
-            } else {
-                providerPoolManager.enableProvider(providerType, provider);
-            }
+            providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], { action, changedUuids: [providerUuid] });
         }
 
         // 广播更新事件
@@ -1010,8 +1008,7 @@ async function _handleDeleteUnhealthyProviders(req, res, currentConfig, provider
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            publishProviderType(providerPoolManager, providerPools, providerType, 'delete_unhealthy', unhealthyProviders.map(provider => provider.uuid));
         }
 
         // 广播更新事件
@@ -1109,8 +1106,7 @@ async function _handleRefreshUnhealthyUuids(req, res, currentConfig, providerPoo
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            publishProviderType(providerPoolManager, providerPools, providerType, 'refresh_unhealthy_uuids', refreshedProviders.flatMap(provider => [provider.oldUuid, provider.newUuid]));
         }
 
         // 广播更新事件
@@ -1473,12 +1469,9 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            // 重要：更新管理器的内存池数据，确保后续扫描能立即看到变化
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus(true);
-
             const uniqueTypes = [...new Set(linkedProviders.map(lp => lp.providerType))];
             for (const type of uniqueTypes) {
+                publishProviderType(providerPoolManager, providerPools, type, 'quick_link', linkedProviders.filter(item => item.providerType === type).map(item => item.provider?.uuid).filter(Boolean));
                 providerPoolManager.resetAllHealthInType(type);
             }
         }
@@ -1586,8 +1579,7 @@ async function _handleRefreshProviderUuid(req, res, currentConfig, providerPoolM
 
         // Update provider pool manager if available
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], { action: 'refresh_uuid', changedUuids: [oldUuid, newUuid] });
         }
 
         // 广播更新事件

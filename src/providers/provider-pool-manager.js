@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
+import { applyProviderConfigEvent, createProviderConfigEvent } from '../runtime/provider-config-event.js';
 import { convertData } from '../convert/convert.js';
 
 import {
@@ -588,6 +589,8 @@ export class ProviderPoolManager {
         this.coordination = options.coordination || null;
         this.persistenceEnabled = options.persistenceEnabled !== false;
         this.stateEventSink = options.stateEventSink || null;
+        this.configEventSink = options.configEventSink || null;
+        this.providerConfigRevision = Number(options.providerConfigRevision || 0);
         this.serviceAdapterFactory = options.serviceAdapterFactory || getServiceAdapter;
         this.pendingStateEvents = new Set();
         this.stateEventTimer = null;
@@ -4281,7 +4284,7 @@ export class ProviderPoolManager {
                 this.pendingStateEvents.clear();
                 for (const type of types) {
                     for (const provider of this.providerStatus[type] || []) {
-                        this.stateEventSink(createProviderStateEvent(type, provider.config));
+                        this.stateEventSink(createProviderStateEvent(type, provider.config, this.providerConfigRevision));
                     }
                 }
             }, Math.min(this.saveDebounceTime, 1000));
@@ -4374,11 +4377,31 @@ export class ProviderPoolManager {
     }
 
     applyRemoteProviderState(event) {
-        const applied = applyProviderStateEvent(this.providerPools, event);
+        const applied = applyProviderStateEvent(this.providerPools, event, { revision: this.providerConfigRevision });
+        if (!applied && Number(event?.configRevision || 0) < this.providerConfigRevision) {
+            this._log('warn', `Ignored stale provider state for ${event?.providerType}/${event?.uuid}: event revision ${event?.configRevision || 0}, current ${this.providerConfigRevision}`);
+            return false;
+        }
         const provider = this._findProvider(event?.providerType, event?.uuid);
-        if (provider) applyProviderStateEvent({ [event.providerType]: [provider.config] }, event);
+        if (provider) applyProviderStateEvent({ [event.providerType]: [provider.config] }, event, { revision: this.providerConfigRevision });
         if (applied && this.persistenceEnabled) this._debouncedSave(event.providerType);
         return applied || Boolean(provider);
+    }
+
+    applyProviderConfigSync(event) {
+        const result = applyProviderConfigEvent(this.providerPools, event, { revision: this.providerConfigRevision });
+        if (!result.applied) return result;
+        this.providerConfigRevision = result.revision;
+        this.initializeProviderStatus(true);
+        return result;
+    }
+
+    publishProviderConfig(providerType, providers, options = {}) {
+        const revision = this.providerConfigRevision + 1;
+        const event = createProviderConfigEvent(providerType, providers, { ...options, revision });
+        const result = this.applyProviderConfigSync(event);
+        if (result.applied) this.configEventSink?.(event);
+        return { ...result, event };
     }
 
 }

@@ -136,8 +136,9 @@ function restoreProviderPoolsAfterFailedPersist(config, originalProviderPools) {
  * @returns {Promise<Object>} 更新后的 providerPools 对象
  */
 export async function autoLinkProviderConfigs(config, options = {}) {
+    const previousProviderPools = JSON.parse(JSON.stringify(config.providerPools || {}));
     const originalProviderPools = options.throwOnPersistError
-        ? JSON.parse(JSON.stringify(config.providerPools || {}))
+        ? JSON.parse(JSON.stringify(previousProviderPools))
         : null;
     // 确保 providerPools 对象存在
     if (!config.providerPools) {
@@ -209,12 +210,14 @@ export async function autoLinkProviderConfigs(config, options = {}) {
     }
     
     // 如果有新的配置文件需要关联，保存更新后的 provider_pools.json
+    let persistedProviderChanges = false;
     if (totalNewProviders > 0 || updatedExistingProviders > 0) {
         const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
         try {
             await withFileLock(filePath, async () => {
                 await atomicWriteFile(filePath, JSON.stringify(config.providerPools, null, 2), 'utf8');
             });
+            persistedProviderChanges = true;
             logger.info(`[Auto-Link] Added ${totalNewProviders} new config(s) to provider pools:`);
             for (const [displayName, providers] of Object.entries(allNewProviders)) {
                 logger.info(`  ${displayName}: ${providers.length} config(s)`);
@@ -242,11 +245,23 @@ export async function autoLinkProviderConfigs(config, options = {}) {
         logger.info('[Auto-Link] No new configs to link');
     }
     
-    // Update provider pool manager if available
+    // Update provider pool manager if available only after persistence succeeds.
     try {
-        if (providerPoolManager) {
-            providerPoolManager.providerPools = config.providerPools;
-            providerPoolManager.initializeProviderStatus();
+        if (providerPoolManager && persistedProviderChanges) {
+            const providerTypes = new Set([
+                ...Object.keys(previousProviderPools),
+                ...Object.keys(config.providerPools || {})
+            ]);
+            for (const providerType of providerTypes) {
+                if (JSON.stringify(previousProviderPools[providerType] || []) === JSON.stringify(config.providerPools[providerType] || [])) continue;
+                providerPoolManager.publishProviderConfig(providerType, config.providerPools[providerType] || [], {
+                    action: 'auto_link',
+                    changedUuids: [...new Set([
+                        ...(previousProviderPools[providerType] || []).map(provider => provider.uuid),
+                        ...(config.providerPools[providerType] || []).map(provider => provider.uuid)
+                    ].filter(Boolean))]
+                });
+            }
         }
     } catch (refreshError) {
         logger.warn(`[Auto-Link] Provider pools saved but manager refresh failed: ${refreshError.message}`);
@@ -326,12 +341,6 @@ export async function replaceProviderCredentialPath(config, options = {}) {
         await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
 
         try {
-            invalidateServiceAdapter(providerType, providerUuid);
-        } catch (invalidateError) {
-            logger.warn(`[Auto-Link] Provider persisted but cached adapter invalidation failed: ${invalidateError.message}`);
-        }
-
-        try {
             if (config) {
                 config.providerPools = providerPools;
             }
@@ -340,11 +349,15 @@ export async function replaceProviderCredentialPath(config, options = {}) {
         }
         try {
             if (providerPoolManager) {
-                providerPoolManager.providerPools = providerPools;
-                providerPoolManager.initializeProviderStatus();
+                providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], { action: 'reauthorize', changedUuids: [providerUuid] });
             }
         } catch (managerRefreshError) {
             logger.warn(`[Auto-Link] Provider pool persisted but manager refresh failed: ${managerRefreshError.message}`);
+        }
+        try {
+            invalidateServiceAdapter(providerType, providerUuid);
+        } catch (invalidateError) {
+            logger.warn(`[Auto-Link] Provider persisted but cached adapter invalidation failed: ${invalidateError.message}`);
         }
     });
 
@@ -424,8 +437,10 @@ async function persistCodexIdentityToProviderPool(config, providerType, provider
         await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf8');
         if (config) config.providerPools = providerPools;
         if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
+            providerPoolManager.publishProviderConfig(providerType, providerPools[providerType], {
+                action: 'codex_identity',
+                changedUuids: [providerUuid]
+            });
         }
     });
 }
@@ -641,12 +656,18 @@ export async function initApiService(config, isReady = false, runtimeOptions = {
 
     // Initialize or update ProviderPoolManager
     if (providerPoolManager) {
-        providerPoolManager.providerPools = config.providerPools || {};
+        if (!runtimeOptions.preserveProviderPools) {
+            providerPoolManager.providerPools = config.providerPools || {};
+            providerPoolManager.initializeProviderStatus();
+        }
         providerPoolManager.globalConfig = config;
         providerPoolManager.fallbackChain = config.providerFallbackChain || {};
         providerPoolManager.modelFallbackMapping = config.modelFallbackMapping || {};
         providerPoolManager.mixedProviderPools = config.mixedProviderPools || {};
-        providerPoolManager.initializeProviderStatus();
+        providerPoolManager.coordination = runtimeOptions.coordination || providerPoolManager.coordination;
+        providerPoolManager.persistenceEnabled = runtimeOptions.persistenceEnabled ?? providerPoolManager.persistenceEnabled;
+        providerPoolManager.stateEventSink = runtimeOptions.stateEventSink ?? providerPoolManager.stateEventSink;
+        providerPoolManager.configEventSink = runtimeOptions.configEventSink ?? providerPoolManager.configEventSink;
         logger.info('[Initialization] ProviderPoolManager existing instance updated.');
     } else {
         providerPoolManager = new ProviderPoolManager(config.providerPools || {}, {
@@ -656,6 +677,8 @@ export async function initApiService(config, isReady = false, runtimeOptions = {
             coordination: runtimeOptions.coordination || null,
             persistenceEnabled: runtimeOptions.persistenceEnabled !== false,
             stateEventSink: runtimeOptions.stateEventSink || null,
+            configEventSink: runtimeOptions.configEventSink || null,
+            providerConfigRevision: runtimeOptions.providerConfigRevision || 0,
         });
         logger.info('[Initialization] ProviderPoolManager initialized.');
     }

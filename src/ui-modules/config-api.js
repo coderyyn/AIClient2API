@@ -51,6 +51,30 @@ function invalidateServiceInstancesForProxyChange() {
     }
 }
 
+function providerTypeChanged(previousProviders = [], nextProviders = []) {
+    return JSON.stringify(previousProviders) !== JSON.stringify(nextProviders);
+}
+
+export function publishChangedProviderConfigs(providerPoolManager, nextPools = {}, previousPools = {}) {
+    if (!providerPoolManager) return [];
+    const published = [];
+    const providerTypes = new Set([...Object.keys(previousPools || {}), ...Object.keys(nextPools || {})]);
+    for (const providerType of providerTypes) {
+        const previousProviders = previousPools?.[providerType] || [];
+        const nextProviders = nextPools?.[providerType] || [];
+        if (!providerTypeChanged(previousProviders, nextProviders)) continue;
+        const changedUuids = [...new Set([
+            ...previousProviders.map(provider => provider?.uuid),
+            ...nextProviders.map(provider => provider?.uuid)
+        ].filter(Boolean))];
+        published.push(providerPoolManager.publishProviderConfig(providerType, nextProviders, {
+            action: 'reload',
+            changedUuids
+        }));
+    }
+    return published;
+}
+
 /**
  * 重载配置文件
  */
@@ -66,8 +90,7 @@ export async function reloadConfig(providerPoolManager) {
             const newConfig = await initializeConfig(process.argv.slice(2), configPath);
             // Update provider pool manager if available
             if (providerPoolManager) {
-                providerPoolManager.providerPools = newConfig.providerPools;
-                providerPoolManager.initializeProviderStatus(true);
+                publishChangedProviderConfigs(providerPoolManager, newConfig.providerPools, providerPoolManager.providerPools);
             }
 
             // Update global CONFIG
@@ -76,7 +99,7 @@ export async function reloadConfig(providerPoolManager) {
 
             // Update initApiService - 清空并重新初始化服务实例
             Object.keys(serviceInstances).forEach(key => delete serviceInstances[key]);
-            initApiService(CONFIG);
+            initApiService(CONFIG, false, { preserveProviderPools: true });
 
             logger.info('[UI API] Configuration reloaded successfully');
 

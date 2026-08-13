@@ -27,4 +27,15 @@ describe('provider state persistence events', () => {
         expect(target.isHealthy).toBe(false);
         expect(target.accessToken).toBe('keep');
     });
+
+    test('carries config revision and rejects stale remote state', async () => {
+        const { createProviderStateEvent, applyProviderStateEvent } = await import('../src/runtime/provider-state-event.js');
+        const target = { uuid: 'one', isHealthy: true };
+        const event = createProviderStateEvent('provider', { uuid: 'one', isHealthy: false }, 5);
+        expect(event.configRevision).toBe(5);
+        expect(applyProviderStateEvent({ provider: [target] }, { ...event, configRevision: 4 }, { revision: 5 })).toBe(false);
+        expect(target.isHealthy).toBe(true);
+        expect(applyProviderStateEvent({ provider: [target] }, event, { revision: 5 })).toBe(true);
+        expect(target.isHealthy).toBe(false);
+    });
 });
