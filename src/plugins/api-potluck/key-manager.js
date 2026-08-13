@@ -283,6 +283,25 @@ function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
     };
 }
 
+function createInvalidKeyRoutingAssignmentsError(message, details = null) {
+    const error = new Error(message);
+    error.code = 'INVALID_KEY_ROUTING_ASSIGNMENTS';
+    if (details) error.details = details;
+    return error;
+}
+
+function isSameKeyRouting(keyData, routing) {
+    if (keyData.routingMode !== routing.routingMode) return false;
+    if ((keyData.primaryGroupId || null) !== (routing.primaryGroupId || null)) return false;
+    if ((keyData.manualLock === true) !== (routing.manualLock === true)) return false;
+
+    const currentFixed = keyData.fixedCredential || null;
+    const nextFixed = routing.fixedCredential || null;
+    if (!currentFixed || !nextFixed) return currentFixed === nextFixed;
+    return currentFixed.providerType === nextFixed.providerType
+        && currentFixed.uuid === nextFixed.uuid;
+}
+
 function normalizeKeyData(keyData = {}) {
     const routing = normalizeKeyRouting(keyData);
     const normalized = {
@@ -1460,6 +1479,25 @@ export async function getKey(keyId, options = {}) {
 }
 
 /**
+ * 获取凭据组管理服务使用的完整 Key 目录。
+ * 该接口只供服务端内部使用；返回管理响应前必须脱敏 ID。
+ */
+export function getCredentialRoutingKeyCatalog() {
+    ensureLoaded();
+    return Object.entries(keyStore.keys).map(([keyId, keyData]) => ({
+        id: keyId,
+        keyId,
+        name: keyData.name || '',
+        enabled: keyData.enabled !== false,
+        routingMode: keyData.routingMode,
+        primaryGroupId: keyData.primaryGroupId || null,
+        fixedCredential: keyData.fixedCredential ? { ...keyData.fixedCredential } : null,
+        manualLock: keyData.manualLock === true,
+        usageHistory: JSON.parse(JSON.stringify(keyData.usageHistory || {}))
+    }));
+}
+
+/**
  * 删除 Key
  */
 export async function deleteKey(keyId) {
@@ -1611,6 +1649,80 @@ export async function updateKeyRouting(keyId, routing = {}) {
     Object.assign(keyData, normalizedRouting);
     const targetVersion = markDirty();
     return buildManagementMutationResult(targetVersion, keyData);
+}
+
+/**
+ * 事务式批量应用凭据路由。所有 assignment 会在任何写入发生前完成校验，
+ * 然后整批只触发一次持久化 mutation。
+ */
+export async function applyKeyRoutingAssignments(assignments) {
+    ensureLoaded();
+    if (!Array.isArray(assignments)) {
+        throw createInvalidKeyRoutingAssignmentsError('assignments 必须是数组');
+    }
+
+    const normalizedAssignments = [];
+    const seenKeyIds = new Set();
+    for (const assignment of assignments) {
+        const keyId = typeof assignment?.keyId === 'string'
+            ? assignment.keyId.trim()
+            : typeof assignment?.id === 'string'
+                ? assignment.id.trim()
+                : '';
+        if (!keyId || !keyStore.keys[keyId]) {
+            throw createInvalidKeyRoutingAssignmentsError('路由分配引用了不存在的 Key', {
+                reason: keyId ? 'KEY_NOT_FOUND' : 'KEY_ID_REQUIRED'
+            });
+        }
+        if (seenKeyIds.has(keyId)) {
+            throw createInvalidKeyRoutingAssignmentsError('同一个 Key 不能重复分配路由', {
+                reason: 'DUPLICATE_KEY_ASSIGNMENT'
+            });
+        }
+        seenKeyIds.add(keyId);
+
+        let routing;
+        try {
+            routing = normalizeKeyRouting(assignment?.routing || assignment, { strict: true });
+        } catch (error) {
+            if (error?.code === 'INVALID_KEY_ROUTING') {
+                throw createInvalidKeyRoutingAssignmentsError(error.message, {
+                    reason: 'INVALID_ROUTING',
+                    keyId
+                });
+            }
+            throw error;
+        }
+        normalizedAssignments.push({ keyId, routing });
+    }
+
+    let updated = 0;
+    let unchanged = 0;
+    let skippedLocked = 0;
+    for (const { keyId, routing } of normalizedAssignments) {
+        const keyData = keyStore.keys[keyId];
+        if (keyData.manualLock === true) {
+            skippedLocked += 1;
+            continue;
+        }
+        if (isSameKeyRouting(keyData, routing)) {
+            unchanged += 1;
+            continue;
+        }
+        Object.assign(keyData, routing);
+        updated += 1;
+    }
+
+    const summary = {
+        total: normalizedAssignments.length,
+        updated,
+        unchanged,
+        skippedLocked
+    };
+    if (updated === 0) return attachPersistenceStatus(summary, false);
+
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, summary);
 }
 
 // 用于防止同一 Key 下同一请求重复入账，保留短窗口覆盖 stream/fallback 重复 finalize。

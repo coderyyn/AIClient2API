@@ -271,4 +271,107 @@ describe('API Potluck key credential routing', () => {
             }
         });
     });
+
+    test('exposes a detached internal catalog with usage history for group planning', async () => {
+        const { keyManager } = await loadPotluckModules();
+        const created = await keyManager.createKey('Catalog Key', 1000);
+
+        const catalog = keyManager.getCredentialRoutingKeyCatalog();
+        expect(catalog).toHaveLength(1);
+        expect(catalog[0]).toMatchObject({
+            id: created.id,
+            keyId: created.id,
+            name: 'Catalog Key',
+            routingMode: 'auto',
+            primaryGroupId: null,
+            fixedCredential: null,
+            manualLock: false,
+            usageHistory: {}
+        });
+
+        catalog[0].name = 'mutated';
+        catalog[0].usageHistory['2026-08-13'] = { summary: { totalTokens: 99 } };
+        expect((await keyManager.getKey(created.id)).name).toBe('Catalog Key');
+        expect((await keyManager.getKey(created.id)).usageHistory).toEqual({});
+    });
+
+    test('applies routing assignments atomically, skips locked keys, and persists once', async () => {
+        const { keyManager } = await loadPotluckModules();
+        const first = await keyManager.createKey('Batch One', 1000);
+        const locked = await keyManager.createKey('Batch Locked', 1000);
+        const unchanged = await keyManager.createKey('Batch Unchanged', 1000);
+        await keyManager.updateKeyRouting(locked.id, {
+            routingMode: 'auto',
+            primaryGroupId: 'group-locked',
+            manualLock: true
+        });
+        mockAtomicWriteFile.mockClear();
+
+        const result = await keyManager.applyKeyRoutingAssignments([
+            {
+                keyId: first.id,
+                routingMode: 'auto',
+                primaryGroupId: 'group-first',
+                manualLock: false
+            },
+            {
+                keyId: locked.id,
+                routingMode: 'auto',
+                primaryGroupId: 'group-generated',
+                manualLock: false
+            },
+            {
+                keyId: unchanged.id,
+                routingMode: 'auto',
+                primaryGroupId: null,
+                manualLock: false
+            }
+        ]);
+
+        expect(result).toMatchObject({
+            total: 3,
+            updated: 1,
+            unchanged: 1,
+            skippedLocked: 1,
+            persistencePending: false
+        });
+        expect(mockAtomicWriteFile).toHaveBeenCalledTimes(1);
+        expect(await keyManager.getKey(first.id)).toMatchObject({
+            primaryGroupId: 'group-first',
+            manualLock: false
+        });
+        expect(await keyManager.getKey(locked.id)).toMatchObject({
+            primaryGroupId: 'group-locked',
+            manualLock: true
+        });
+    });
+
+    test('validates the complete batch before changing any Key', async () => {
+        const { keyManager } = await loadPotluckModules();
+        const created = await keyManager.createKey('Atomic Validation', 1000);
+        mockAtomicWriteFile.mockClear();
+
+        await expect(keyManager.applyKeyRoutingAssignments([
+            {
+                keyId: created.id,
+                routingMode: 'auto',
+                primaryGroupId: 'group-valid'
+            },
+            {
+                keyId: 'maki_missing',
+                routingMode: 'auto',
+                primaryGroupId: 'group-invalid'
+            }
+        ])).rejects.toMatchObject({
+            code: 'INVALID_KEY_ROUTING_ASSIGNMENTS',
+            details: { reason: 'KEY_NOT_FOUND' }
+        });
+
+        expect(await keyManager.getKey(created.id)).toMatchObject({
+            routingMode: 'auto',
+            primaryGroupId: null,
+            manualLock: false
+        });
+        expect(mockAtomicWriteFile).not.toHaveBeenCalled();
+    });
 });
