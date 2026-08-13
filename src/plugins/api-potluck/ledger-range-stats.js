@@ -23,6 +23,11 @@ function createBucket() {
         completionTokens: 0,
         totalTokens: 0,
         cachedTokens: 0,
+        observedCachedTokens: 0,
+        estimatedCachedTokens: 0,
+        dataQuality: 'observed',
+        cacheRateSource: null,
+        baseline: null,
         maxQps: 0,
         maxRpm: 0,
         maxTps: 0,
@@ -42,6 +47,13 @@ function addRowToBucket(bucket, row) {
     bucket.completionTokens += toNumber(usage.completionTokens);
     bucket.totalTokens += toNumber(usage.totalTokens);
     bucket.cachedTokens += toNumber(usage.cachedTokens);
+    const quality = row.dataQuality || usage.dataQuality || 'observed';
+    bucket.observedCachedTokens += toNumber(row.observedCachedTokens ?? usage.observedCachedTokens ?? (quality === 'observed' ? usage.cachedTokens : 0));
+    bucket.estimatedCachedTokens += toNumber(row.estimatedCachedTokens ?? usage.estimatedCachedTokens ?? (quality === 'estimated' || quality === 'mixed' ? usage.cachedTokens : 0));
+    if (quality === 'estimated') bucket.dataQuality = bucket.dataQuality === 'observed' ? 'estimated' : bucket.dataQuality;
+    if (quality === 'mixed' || (bucket.dataQuality === 'estimated' && quality === 'observed')) bucket.dataQuality = 'mixed';
+    if ((row.cacheRateSource || usage.cacheRateSource) && !bucket.cacheRateSource) bucket.cacheRateSource = row.cacheRateSource || usage.cacheRateSource;
+    if ((row.baseline || usage.baseline) && !bucket.baseline) bucket.baseline = row.baseline || usage.baseline;
     bucket.cost.actualUsd += currentCost.usd;
     bucket.cost.missingPriceTokens += currentCost.missingPriceTokens;
 }
