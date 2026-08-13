@@ -52,4 +52,15 @@ describe('production image provenance and blue-green preflight', () => {
         expect(script).toContain('/runtime/health');
         expect(script).toContain('pendingWorkerCount');
     });
+
+    test('candidate snapshot stays bounded and joins the Redis network', () => {
+        const script = read('scripts/ops/blue-green-deploy.sh');
+
+        expect(script).toContain('CANDIDATE_NETWORK');
+        expect(script).toContain('--network "$CANDIDATE_NETWORK"');
+        expect(script).toContain("--exclude='request-audit'");
+        expect(script).toContain("--exclude='app-logs'");
+        expect(script).toContain('SNAPSHOT_REQUIRED_BYTES');
+        expect(script).toContain('insufficient disk space for candidate snapshot');
+    });
 });

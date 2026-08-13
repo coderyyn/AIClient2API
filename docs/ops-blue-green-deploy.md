@@ -51,9 +51,9 @@ docker image inspect --format '{{ index .Config.Labels "yyn.base_commit" }}' <im
 行为如下：
 
 1. 核对镜像 revision。
-2. 把 canonical configs 复制到权限为 700 的候选快照目录。
+2. 把 canonical configs 复制到权限为 700 的候选快照目录；排除可再生且可能很大的 `request-audit/` 与 `app-logs/`，复制前校验剩余空间并保留 512 MiB 安全余量。
 3. 候选限制为 1 CPU、1 GB 内存，只绑定 `127.0.0.1:13001 -> 3000`。
-4. 等待 Docker health，并检查 `/api/health`。
+4. 候选通过 `CANDIDATE_NETWORK`（默认 `aiclient2api-prod-net`）加入 Redis 所在网络，然后等待 Docker health 并检查 `/api/health`。
 5. 检查 `/runtime/health` 的 `providerConfig.currentRevision`、`providerConfig.pendingWorkerCount` 和 execution worker 数量；`pendingWorkerCount` 必须为 0。
 6. 不触碰当前容器、Nginx 或 OAuth 端口。
 

@@ -11,6 +11,7 @@ REVISION=""
 CANDIDATE_PORT=${CANDIDATE_PORT:-13001}
 CANDIDATE_CONTAINER=${CANDIDATE_CONTAINER:-aiclient2api-green-candidate}
 CANDIDATE_EXECUTION_WORKERS=${CANDIDATE_EXECUTION_WORKERS:-3}
+CANDIDATE_NETWORK=${CANDIDATE_NETWORK:-aiclient2api-prod-net}
 DEPLOYMENT_EPOCH=${DEPLOYMENT_EPOCH:-green-${REVISION:-candidate}}
 CONFIG_DIR=${CONFIG_DIR:-/root/ai_client_configs}
 STATE_DIR=${STATE_DIR:-/root/aiclient2api-blue-green}
@@ -112,6 +113,21 @@ prepare_candidate() {
   verify_safe_paths
   [ -d "$CONFIG_DIR" ] || { echo "config dir not found: $CONFIG_DIR" >&2; exit 1; }
   [ -n "${REDIS_URL:-}" ] || { echo "REDIS_URL is required for multi-worker candidate preflight" >&2; exit 1; }
+  docker network inspect "$CANDIDATE_NETWORK" >/dev/null 2>&1 || {
+    echo "candidate network not found: $CANDIDATE_NETWORK" >&2
+    exit 1
+  }
+
+  SNAPSHOT_REQUIRED_BYTES=$(du -sb --exclude='request-audit' --exclude='app-logs' "$CONFIG_DIR" | awk '{print $1}')
+  snapshot_available_bytes=$(df -B1 --output=avail "$STATE_DIR" 2>/dev/null | tail -1 | tr -d ' ')
+  if [ -z "$snapshot_available_bytes" ]; then
+    snapshot_available_bytes=$(df -B1 --output=avail "$(dirname "$STATE_DIR")" | tail -1 | tr -d ' ')
+  fi
+  snapshot_margin_bytes=$((512 * 1024 * 1024))
+  [ "$snapshot_available_bytes" -ge $((SNAPSHOT_REQUIRED_BYTES + snapshot_margin_bytes)) ] || {
+    echo "insufficient disk space for candidate snapshot: required=$SNAPSHOT_REQUIRED_BYTES available=$snapshot_available_bytes" >&2
+    exit 1
+  }
 
   if [ "$APPLY" = "1" ]; then
     mkdir -p "$STATE_DIR"
@@ -119,7 +135,7 @@ prepare_candidate() {
     rm -rf "$SNAPSHOT_DIR"
     mkdir -p "$SNAPSHOT_DIR"
     chmod 700 "$SNAPSHOT_DIR"
-    cp -a "$CONFIG_DIR/." "$SNAPSHOT_DIR/"
+    tar -C "$CONFIG_DIR" --exclude='request-audit' --exclude='app-logs' -cf - . | tar -C "$SNAPSHOT_DIR" -xf -
     if verify_candidate_owner; then docker rm -f "$CANDIDATE_CONTAINER" >/dev/null; fi
   else
     log "[dry-run] create protected config snapshot: $CONFIG_DIR -> $SNAPSHOT_DIR"
@@ -129,6 +145,7 @@ prepare_candidate() {
     --name "$CANDIDATE_CONTAINER" \
     --label yyn.deployment_role=candidate \
     --label "yyn.expected_revision=$REVISION" \
+    --network "$CANDIDATE_NETWORK" \
     --env RUNTIME_MULTI_WORKER_ENABLED=true \
     --env "RUNTIME_EXECUTION_WORKERS=$CANDIDATE_EXECUTION_WORKERS" \
     --env REDIS_URL \
