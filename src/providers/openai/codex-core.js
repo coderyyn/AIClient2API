@@ -688,7 +688,7 @@ export class CodexApiService {
             .find(([key, value]) => key.toLowerCase() === name.toLowerCase() && value !== undefined && value !== null && String(value).trim())?.[1];
         for (const name of [
             'x-codex-turn-metadata', 'x-codex-window-id', 'x-codex-installation-id',
-            'x-client-request-id', 'thread-id', 'x-openai-internal-codex-responses-lite'
+            'x-client-request-id', 'thread-id'
         ]) {
             const value = getInboundHeader(name);
             if (value !== undefined && value !== null && String(value).trim()) {

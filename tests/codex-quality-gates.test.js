@@ -93,7 +93,7 @@ describe('Codex proxy quality gates', () => {
         }
     });
 
-    test('passes Responses Lite only when supplied by the inbound Codex request', () => {
+    test('does not forward the internal Responses Lite marker to upstream', () => {
         const service = createService();
 
         try {
@@ -101,10 +101,8 @@ describe('Codex proxy quality gates', () => {
                 inboundHeaders: { 'x-openai-internal-codex-responses-lite': 'true' },
                 ids: null
             });
-            const absent = service.buildHeaders(null, false, { inboundHeaders: {}, ids: null });
 
-            expect(getHeader(present, 'X-Openai-Internal-Codex-Responses-Lite')).toBe('true');
-            expect(getHeader(absent, 'X-Openai-Internal-Codex-Responses-Lite')).toBeUndefined();
+            expect(getHeader(present, 'X-Openai-Internal-Codex-Responses-Lite')).toBeUndefined();
         } finally {
             service.stopCacheCleanup();
         }
