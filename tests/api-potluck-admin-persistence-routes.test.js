@@ -16,6 +16,7 @@ jest.mock('../src/plugins/api-potluck/key-manager.js', () => ({
     resetKeyTokenStats: jest.fn(),
     toggleKey: jest.fn(),
     updateKeyName: mockUpdateKeyName,
+    updateKeyRouting: jest.fn(),
     regenerateKey: jest.fn(),
     getStats: jest.fn(),
     getAccountUsageSummary: jest.fn(),

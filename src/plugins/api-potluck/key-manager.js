@@ -231,9 +231,63 @@ function addUsageHistoryRatios(usageHistory = {}) {
     return usageHistory;
 }
 
+function createInvalidKeyRoutingError(message) {
+    const error = new Error(message);
+    error.code = 'INVALID_KEY_ROUTING';
+    return error;
+}
+
+function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
+    const routingMode = routing.routingMode === 'fixed'
+        ? 'fixed'
+        : routing.routingMode === 'auto' || routing.routingMode === undefined || routing.routingMode === null
+            ? 'auto'
+            : null;
+
+    if (!routingMode) {
+        throw createInvalidKeyRoutingError('routingMode 必须是 auto 或 fixed');
+    }
+
+    const manualLock = routing.manualLock === true;
+    if (routingMode === 'fixed') {
+        const uuid = typeof routing.fixedCredential?.uuid === 'string'
+            ? routing.fixedCredential.uuid.trim()
+            : '';
+        if (strict && !uuid) {
+            throw createInvalidKeyRoutingError('fixed 模式必须指定凭据 UUID');
+        }
+        return {
+            routingMode,
+            primaryGroupId: null,
+            fixedCredential: uuid
+                ? {
+                    providerType: typeof routing.fixedCredential?.providerType === 'string'
+                        && routing.fixedCredential.providerType.trim()
+                        ? routing.fixedCredential.providerType.trim()
+                        : 'openai-codex-oauth',
+                    uuid
+                }
+                : null,
+            manualLock
+        };
+    }
+
+    const primaryGroupId = typeof routing.primaryGroupId === 'string' && routing.primaryGroupId.trim()
+        ? routing.primaryGroupId.trim()
+        : null;
+    return {
+        routingMode,
+        primaryGroupId,
+        fixedCredential: null,
+        manualLock
+    };
+}
+
 function normalizeKeyData(keyData = {}) {
+    const routing = normalizeKeyRouting(keyData);
     const normalized = {
         ...keyData,
+        ...routing,
         todayUsage: toNumber(keyData.todayUsage),
         totalUsage: toNumber(keyData.totalUsage),
         todayPromptTokens: toNumber(keyData.todayPromptTokens),
@@ -1347,6 +1401,10 @@ export async function createKey(name = '', dailyLimit = null) {
         lastResetDate: today,
         lastUsedAt: null,
         enabled: true,
+        routingMode: 'auto',
+        primaryGroupId: null,
+        fixedCredential: null,
+        manualLock: false,
         usageHistory: {}
     };
 
@@ -1539,6 +1597,20 @@ export async function updateKeyName(keyId, newName) {
     keyStore.keys[keyId].name = newName;
     const targetVersion = markDirty();
     return buildManagementMutationResult(targetVersion, keyStore.keys[keyId]);
+}
+
+/**
+ * 更新 Key 的 Codex 凭据路由配置。
+ */
+export async function updateKeyRouting(keyId, routing = {}) {
+    ensureLoaded();
+    const keyData = keyStore.keys[keyId];
+    if (!keyData) return null;
+
+    const normalizedRouting = normalizeKeyRouting(routing, { strict: true });
+    Object.assign(keyData, normalizedRouting);
+    const targetVersion = markDirty();
+    return buildManagementMutationResult(targetVersion, keyData);
 }
 
 // 用于防止同一 Key 下同一请求重复入账，保留短窗口覆盖 stream/fallback 重复 finalize。
@@ -2031,7 +2103,11 @@ export async function validateKey(apiKey) {
         dailyLimit: updated.dailyLimit,
         todayUsage: updated.todayUsage,
         lastResetDate: updated.lastResetDate,
-        enabled: updated.enabled
+        enabled: updated.enabled,
+        routingMode: updated.routingMode,
+        primaryGroupId: updated.primaryGroupId,
+        fixedCredential: updated.fixedCredential ? { ...updated.fixedCredential } : null,
+        manualLock: updated.manualLock === true
     };
     if (updated.dailyLimit > 0 && updated.todayUsage >= updated.dailyLimit) {
         return { valid: false, reason: 'quota_exceeded', keyData: validationKeyData };

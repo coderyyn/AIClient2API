@@ -13,6 +13,7 @@ import {
     resetKeyTokenStats,
     toggleKey,
     updateKeyName,
+    updateKeyRouting,
     regenerateKey,
     getStats,
     getAccountUsageSummary,
@@ -599,6 +600,22 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
                 return true;
             }
 
+            // PUT /api/potluck/keys/:keyId/routing - 更新 Codex 凭据路由
+            if (method === 'PUT' && subPath === '/routing') {
+                const body = await getRequestBody(req, { maxBytes: 1024 * 1024 });
+                const keyData = await updateKeyRouting(keyId, body || {});
+                if (!keyData) {
+                    sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
+                    return true;
+                }
+                sendManagementMutationResponse(res, {
+                    result: keyData,
+                    message: 'Key 路由更新成功',
+                    data: keyData
+                });
+                return true;
+            }
+
             // POST /api/potluck/keys/:keyId/regenerate - 重新生成 Key
             if (method === 'POST' && subPath === '/regenerate') {
                 const result = await regenerateKey(keyId);
@@ -624,6 +641,13 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         return true;
 
     } catch (error) {
+        if (error?.code === 'INVALID_KEY_ROUTING') {
+            sendJson(res, 400, {
+                success: false,
+                error: { message: error.message, code: error.code }
+            });
+            return true;
+        }
         if (error?.code === 'INVALID_DATE_RANGE') {
             sendJson(res, 400, {
                 success: false,
