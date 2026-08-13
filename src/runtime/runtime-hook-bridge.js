@@ -12,17 +12,13 @@ function containsImage(value, seen = new Set()) {
 }
 
 function compactMetadata(context = {}) {
-    return {
+    const metadata = {
         requestId: context.requestId || context._monitorRequestId || null,
         _monitorRequestId: context._monitorRequestId || context.requestId || null,
         _requestAuditLifecycle: context._requestAuditLifecycle === true,
         model: context.model || null,
         fromProvider: context.fromProvider || null,
         toProvider: context.toProvider || null,
-        providerUuid: context.providerUuid || null,
-        providerName: context.providerName || null,
-        accountIdentity: context.accountIdentity || null,
-        accountEmail: context.accountEmail || null,
         potluckApiKey: context.potluckApiKey || null,
         _codexRouting: context._codexRouting ? {
             affinitySource: context._codexRouting.affinitySource || null,
@@ -33,12 +29,24 @@ function compactMetadata(context = {}) {
         path: context.path || null,
         normalizedPath: context.normalizedPath || null,
         response: context.response ? {
-            statusCode: context.response.statusCode,
+            httpStatus: context.response.httpStatus ?? context.response.statusCode,
+            bytes: context.response.bytes,
+            completed: context.response.completed,
+            clientAborted: context.response.clientAborted,
+            hasImageResult: context.response.hasImageResult,
             durationMs: context.response.durationMs,
             errorCode: context.response.errorCode
         } : undefined,
         errorClass: context.errorClass || null
     };
+
+    for (const key of ['providerUuid', 'providerName', 'accountIdentity', 'accountEmail']) {
+        if (context[key] !== undefined && context[key] !== null && context[key] !== '') metadata[key] = context[key];
+    }
+    if (metadata.response) {
+        metadata.response = Object.fromEntries(Object.entries(metadata.response).filter(([, value]) => value !== undefined));
+    }
+    return metadata;
 }
 
 export class RuntimeHookBridge {

@@ -83,4 +83,23 @@ describe('request audit response lifecycle', () => {
       response: { completed: false, clientAborted: true }
     });
   });
+
+  test('treats an ended response as complete before the finish event arrives', async () => {
+    const completed = jest.fn();
+    const res = new FakeResponse();
+    res.end = function endWithoutImmediateFinish() {
+      this.writableEnded = true;
+      return this;
+    };
+    const lifecycle = instrumentResponseForAudit(res, completed, { autoFinalize: false });
+    lifecycle.markEligible();
+
+    res.end('ok');
+    await lifecycle.complete();
+
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(completed.mock.calls[0][0]).toMatchObject({
+      response: { completed: true, clientAborted: false }
+    });
+  });
 });

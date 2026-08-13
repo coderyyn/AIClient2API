@@ -89,4 +89,23 @@ describe('RuntimeHookBridge', () => {
         expect(serialized).not.toContain('AAAAAA');
         expect(messages[0].args[0].clientResponse.data[0].url).toBe('image://result');
     });
+
+    test('does not send empty provider metadata on request completion', async () => {
+        const messages = [];
+        const bridge = new RuntimeHookBridge({ send: message => messages.push(message) });
+
+        await bridge.handle('onRequestCompleted', {
+            requestId: 'completion-1',
+            response: { statusCode: 200, completed: true }
+        });
+
+        expect(messages[0].args[0]).not.toHaveProperty('providerUuid');
+        expect(messages[0].args[0]).not.toHaveProperty('providerName');
+        expect(messages[0].args[0]).not.toHaveProperty('accountIdentity');
+        expect(messages[0].args[0]).not.toHaveProperty('accountEmail');
+        expect(messages[0].args[0].response).toEqual({
+            httpStatus: 200,
+            completed: true
+        });
+    });
 });
