@@ -234,63 +234,6 @@ function estimateUsageCost(usage, model) {
   };
 }
 
-export function median(values = []) {
-  const numbers = values.map(toNumber).filter(Number.isFinite).sort((a, b) => a - b);
-  if (!numbers.length) return null;
-  const middle = Math.floor(numbers.length / 2);
-  return numbers.length % 2 ? numbers[middle] : (numbers[middle - 1] + numbers[middle]) / 2;
-}
-
-export function cacheRateForUsage(usage = {}) {
-  const prompt = toNumber(usage.promptTokens);
-  return prompt > 0 ? Math.max(0, Math.min(1, toNumber(usage.cachedTokens) / prompt)) : null;
-}
-
-export function selectCacheRateBaseline({ history = {}, targetDate, model } = {}) {
-  const dates = Object.keys(history).filter(date => date < targetDate).sort().slice(-7);
-  if (dates.length < 7) return null;
-  const modelRates = dates.map(date => cacheRateForUsage(history[date]?.models?.[model])).filter(rate => rate !== null);
-  if (modelRates.length === 7) {
-    return {
-      rate: median(modelRates),
-      source: 'estimated:key-model-7d-median',
-      window: `${dates[0]}..${dates.at(-1)}`,
-      sampleDays: modelRates.length,
-    };
-  }
-  const keyRates = dates.map(date => cacheRateForUsage(history[date]?.summary)).filter(rate => rate !== null);
-  if (keyRates.length === 7) {
-    return {
-      rate: median(keyRates),
-      source: 'estimated:key-7d-median',
-      window: `${dates[0]}..${dates.at(-1)}`,
-      sampleDays: keyRates.length,
-    };
-  }
-  return null;
-}
-
-export function estimateCachedTokens({ promptTokens = 0, observedCachedTokens = 0, baseline } = {}) {
-  const prompt = Math.max(0, Math.round(toNumber(promptTokens)));
-  const observed = Math.max(0, Math.round(toNumber(observedCachedTokens)));
-  const estimated = baseline && Number.isFinite(baseline.rate)
-    ? Math.min(prompt, Math.max(0, Math.round(prompt * baseline.rate)))
-    : observed;
-  const cachedTokens = Math.max(observed, estimated);
-  return {
-    cachedTokens,
-    observedCachedTokens: observed,
-    estimatedCachedTokens: estimated,
-    dataQuality: estimated > observed ? (observed > 0 ? 'mixed' : 'estimated') : 'observed',
-    cacheRateSource: estimated > observed ? baseline.source : 'observed',
-    baseline: estimated > observed ? {
-      window: baseline.window,
-      sampleDays: baseline.sampleDays,
-      medianCacheHitRatio: baseline.rate,
-    } : null,
-  };
-}
-
 function baseRow({
   date,
   hour = null,
@@ -1007,117 +950,6 @@ function currentUsageSummary(value = {}) {
   };
 }
 
-function annotateEstimatedBucket(bucket, estimation) {
-  if (!bucket || !estimation || estimation.dataQuality === 'observed') return bucket;
-  bucket.cachedTokens = estimation.cachedTokens;
-  bucket.observedCachedTokens = estimation.observedCachedTokens;
-  bucket.estimatedCachedTokens = estimation.estimatedCachedTokens;
-  bucket.cacheRateSource = estimation.cacheRateSource;
-  bucket.dataQuality = estimation.dataQuality;
-  bucket.baseline = estimation.baseline;
-  bucket.cacheHitRatio = bucket.promptTokens > 0 ? bucket.cachedTokens / bucket.promptTokens : 0;
-  return bucket;
-}
-
-function estimateBucketFromHistory(bucket, history, targetDate, model) {
-  const baseline = selectCacheRateBaseline({ history, targetDate, model });
-  if (!baseline || toNumber(bucket?.promptTokens) <= 0) return bucket;
-  return annotateEstimatedBucket(bucket, estimateCachedTokens({
-    promptTokens: bucket.promptTokens,
-    observedCachedTokens: bucket.cachedTokens,
-    baseline,
-  }));
-}
-
-function estimatePotluckDay(day, history, targetDate) {
-  if (!day) return day;
-  const result = cloneJson(day);
-  for (const [model, bucket] of Object.entries(result.models || {})) {
-    estimateBucketFromHistory(bucket, history, targetDate, model);
-  }
-  for (const account of Object.values(result.accounts || {})) {
-    for (const [model, bucket] of Object.entries(account.models || {})) {
-      estimateBucketFromHistory(bucket, history, targetDate, model);
-    }
-    estimateBucketFromHistory(account.summary, history, targetDate, null);
-  }
-  for (const bucket of Object.values(result.providers || {})) estimateBucketFromHistory(bucket, history, targetDate, null);
-  for (const hour of Object.values(result.hours || {})) {
-    estimateBucketFromHistory(hour.summary, history, targetDate, null);
-    for (const bucket of Object.values(hour.providers || {})) estimateBucketFromHistory(bucket, history, targetDate, null);
-    for (const [model, bucket] of Object.entries(hour.models || {})) estimateBucketFromHistory(bucket, history, targetDate, model);
-    for (const account of Object.values(hour.accounts || {})) {
-      estimateBucketFromHistory(account.summary, history, targetDate, null);
-      for (const [model, bucket] of Object.entries(account.models || {})) estimateBucketFromHistory(bucket, history, targetDate, model);
-    }
-  }
-  estimateBucketFromHistory(result.summary, history, targetDate, null);
-  return result;
-}
-
-function applyPotluckCacheEstimates(candidates, potluckStore, date) {
-  for (const [rawKey, days] of Object.entries(candidates.potluckDaysByKey || {})) {
-    const history = potluckStore.keys?.[rawKey]?.usageHistory || {};
-    if (days[date]) days[date] = estimatePotluckDay(days[date], history, date);
-  }
-  return candidates;
-}
-
-function estimateModelDay(day, dailyHistory, targetDate) {
-  if (!day) return day;
-  const result = cloneJson(day);
-  const history = dailyHistory || {};
-  const modelHistory = Object.fromEntries(Object.entries(history).map(([date, value]) => [date, {
-    models: value?.models || {},
-    summary: value?.summary || value,
-  }]));
-  for (const [model, bucket] of Object.entries(result.models || {})) {
-    estimateBucketFromHistory(bucket, modelHistory, targetDate, model);
-  }
-  estimateBucketFromHistory(result.summary, modelHistory, targetDate, null);
-  for (const account of Object.values(result.accounts || {})) {
-    estimateBucketFromHistory(account.summary, modelHistory, targetDate, null);
-    for (const [model, bucket] of Object.entries(account.models || {})) {
-      estimateBucketFromHistory(bucket, modelHistory, targetDate, model);
-    }
-  }
-  for (const bucket of Object.values(result.providers || {})) {
-    estimateBucketFromHistory(bucket, modelHistory, targetDate, null);
-  }
-  for (const hour of Object.values(result.hours || {})) {
-    estimateBucketFromHistory(hour.summary, modelHistory, targetDate, null);
-    for (const [model, bucket] of Object.entries(hour.models || {})) {
-      estimateBucketFromHistory(bucket, modelHistory, targetDate, model);
-    }
-  }
-  return result;
-}
-
-function applyRowCacheEstimates(rows, potluckStore, date) {
-  return rows.map(row => {
-    if (!row || row.date !== date || !row.keyHash) return row;
-    const rawKey = Object.entries(potluckStore.keys || {}).find(([key]) => hashSecret(key) === row.keyHash)?.[0];
-    const history = rawKey ? potluckStore.keys?.[rawKey]?.usageHistory || {} : null;
-    const baseline = selectCacheRateBaseline({ history, targetDate: date, model: row.model });
-    if (!baseline || toNumber(row.usage?.promptTokens) <= 0) return row;
-    const usage = { ...row.usage };
-    const estimate = estimateCachedTokens({ promptTokens: usage.promptTokens, observedCachedTokens: usage.cachedTokens, baseline });
-    if (estimate.dataQuality === 'observed') return row;
-    usage.cachedTokens = estimate.cachedTokens;
-    row.usage = usage;
-    row.cost = (() => {
-      const cost = estimateUsageCost(usage, row.model);
-      return { actualUsd: cost.actualUsd, missingPriceTokens: cost.missingPriceTokens, pricingModel: cost.pricingModel };
-    })();
-    row.observedCachedTokens = estimate.observedCachedTokens;
-    row.estimatedCachedTokens = estimate.estimatedCachedTokens;
-    row.cacheRateSource = estimate.cacheRateSource;
-    row.dataQuality = estimate.dataQuality;
-    row.baseline = estimate.baseline;
-    return row;
-  });
-}
-
 function makeRepairAccount(event) {
   const provider = event.request?.toProvider || event.request?.fromProvider || 'unknown';
   const email = normalizeEmail(event.account?.accountEmail);
@@ -1431,7 +1263,7 @@ async function buildRepairBaseline({
 }) {
   return {
     potluckSlices: Object.fromEntries(Object.entries(potluckStore.keys || {}).map(([rawKey, keyData]) => [
-      hashSecret(rawKey),
+      rawKey,
       Object.fromEntries(dates.map(date => [date, keyData?.usageHistory?.[date] || null])),
     ])),
     modelSlices: Object.fromEntries(dates.map(date => [date, modelStatsStore.daily?.[date] || null])),
@@ -1448,10 +1280,6 @@ async function buildRepairBaseline({
         : await readLedgerHourlyRows(ledgerRoot, date),
     ]))),
   };
-}
-
-function hashPotluckDaysByKey(daysByRawKey = {}) {
-  return Object.fromEntries(Object.entries(daysByRawKey).map(([rawKey, days]) => [hashSecret(rawKey), days]));
 }
 
 export async function createRepairBundle({ base, from, to, outDir, now = new Date() }) {
@@ -1472,17 +1300,8 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
     collectEvents: false,
     onEvent: event => candidateAccumulator.add(event),
   });
-  const candidates = candidateAccumulator.finish();
   const modelStatsStore = await readJsonIfExists(modelStatsPath, { summary: {}, providers: {}, accounts: {}, accountUsageEvents: {}, daily: {} });
-  for (const date of dateKeys(from, end)) {
-    // Historical cache repair is intentionally scoped to the confirmed incident date.
-    if (date === '2026-08-13') {
-      applyPotluckCacheEstimates(candidates, potluckStore, date);
-      candidates.modelDays[date] = estimateModelDay(candidates.modelDays[date], modelStatsStore.daily, date);
-      candidates.dailyRows = applyRowCacheEstimates(candidates.dailyRows, potluckStore, date);
-      candidates.hourlyRows = applyRowCacheEstimates(candidates.hourlyRows, potluckStore, date);
-    }
-  }
+  const candidates = candidateAccumulator.finish();
   const today = beijingDateNow(now);
   const sourceDateSet = new Set(scan.sourceFiles.map(file => file.utcDate));
   const parseErrorDates = new Set(scan.parseErrors.map(error => repairAuditFileDate(error.file)));
@@ -1569,7 +1388,7 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
     sourceFiles: scan.sourceFiles.map(file => ({ utcDate: file.utcDate, sha256: file.sha256, size: file.size })),
     baselineDigest: sha256Text(stableJson(baseline)),
     baseline,
-    potluckDaysByKey: hashPotluckDaysByKey(candidates.potluckDaysByKey),
+    potluckDaysByKey: candidates.potluckDaysByKey,
     modelDays: candidates.modelDays,
     modelProviderDays: candidates.modelProviderDays,
     modelAccountEvents: candidates.modelAccountEvents,
@@ -1595,36 +1414,20 @@ export async function createRepairBundle({ base, from, to, outDir, now = new Dat
       parseErrorCount: scan.parseErrors.length,
     },
     days,
-    cacheRepair: {
-      targetDate: '2026-08-13',
-      mode: 'estimated:key-model-7d-median-with-key-fallback',
-      dataQuality: 'estimated',
-    },
   };
-
-  const beforeSummary = Object.fromEntries(dateKeys(from, end).map(date => [date, {
-    potluck: summarizePotluckDay(potluckStore, date),
-    modelStats: currentUsageSummary(modelStatsStore.daily?.[date] || {}),
-  }]));
-  const afterSummary = Object.fromEntries(dateKeys(from, end).map(date => [date, {
-    potluck: potluckCandidateSummary(candidates, date),
-    modelStats: currentUsageSummary(candidates.modelDays[date]?.summary || {}),
-  }]));
 
   await fsp.mkdir(outDir, { recursive: true, mode: 0o700 });
   const reportPath = path.join(outDir, 'report.json');
   const patchPath = path.join(outDir, 'patch.json');
   await writeJsonMode(reportPath, report);
   await writeJsonMode(patchPath, patch);
-  await writeJsonMode(path.join(outDir, 'before-summary.json'), beforeSummary);
-  await writeJsonMode(path.join(outDir, 'after-summary.json'), afterSummary);
   for (const date of eligibleDates) {
     await atomicWriteJsonl(path.join(outDir, 'ledger', 'daily', `usage-${date}.jsonl`), repairRowsForDate(candidates.dailyRows, date));
     await atomicWriteJsonl(path.join(outDir, 'ledger', 'hourly', `usage-${date}.jsonl`), repairRowsForDate(candidates.hourlyRows, date));
   }
   const reportSha256 = await sha256File(reportPath);
   const artifacts = [];
-  const artifactPaths = [reportPath, patchPath, path.join(outDir, 'before-summary.json'), path.join(outDir, 'after-summary.json')];
+  const artifactPaths = [reportPath, patchPath];
   for (const date of eligibleDates) {
     artifactPaths.push(path.join(outDir, 'ledger', 'daily', `usage-${date}.jsonl`));
     artifactPaths.push(path.join(outDir, 'ledger', 'hourly', `usage-${date}.jsonl`));
@@ -1748,15 +1551,10 @@ function deriveOldProviderDay(oldDay, candidateProviders = {}) {
 
 function buildNextPotluckStore(currentStore, patch) {
   const next = cloneJson(currentStore);
-  const patchDaysByRawKey = {};
-  for (const [rawKey] of Object.entries(next.keys || {})) {
-    const keyHash = hashSecret(rawKey);
-    if (keyHash && patch.potluckDaysByKey?.[keyHash]) patchDaysByRawKey[rawKey] = patch.potluckDaysByKey[keyHash];
-  }
   for (const date of patch.eligibleDates) {
     for (const [rawKey, keyData] of Object.entries(next.keys || {})) {
       const previousDay = keyData?.usageHistory?.[date] || null;
-      const candidateDay = patchDaysByRawKey[rawKey]?.[date] || null;
+      const candidateDay = patch.potluckDaysByKey?.[rawKey]?.[date] || null;
       if (!candidateDay) continue;
       const replacement = preserveRepairPeaks(candidateDay, previousDay);
       if (!keyData.usageHistory) keyData.usageHistory = {};

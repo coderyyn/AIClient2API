@@ -73,7 +73,3 @@ DECISION: 2026-08-06 Antigravity 继续复用现有 usage cache 与用量页；`
 ## Potluck cache statistics repair - 2026-08-13T11:27:05.4931936+08:00
 DECISION: Reuse the existing multi-worker control-process single-writer architecture and usage-ledger repair-report/apply framework; add one shared usage normalizer because the prior duplicated parsers caused the Responses cached-token field to be lost at the worker bridge.
 
-## Cache estimation repair - 2026-08-13
-DECISION: Reuse the existing repair-report/repair-apply pipeline and cost estimator; historical cache restoration is explicitly limited to 2026-08-13 and requires seven complete per-key history days, preferring model-level median and falling back to key-level median. Estimated metadata is carried through Potluck and ledger aggregation, while raw request/prompt/completion/reasoning fields remain unchanged.
-Verification: focused cache/cost/Potluck tests 38 passed; Node repair suite 15 passed; full Jest 852 passed and 25 existing API integration tests failed with local 401/auth configuration failures.
-
