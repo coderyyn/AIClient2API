@@ -1637,6 +1637,14 @@ export class ProviderPoolManager {
             p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
         );
 
+        if (Array.isArray(options.allowedProviderUuids)) {
+            const allowedProviderUuids = new Set(options.allowedProviderUuids.filter(Boolean).map(String));
+            candidates = candidates.filter(p => {
+                const uuid = p.uuid || p.config?.uuid;
+                return allowedProviderUuids.has(uuid);
+            });
+        }
+
         const excludedProviderUuids = new Set(options.excludeProviderUuids || []);
         if (excludedProviderUuids.size > 0) {
             candidates = candidates.filter(p => {
@@ -2416,6 +2424,14 @@ export class ProviderPoolManager {
             selectionDiagnostics.healthCooldownSkipped = availableProviders.length - availableAndHealthyProviders.length;
         }
 
+        if (Array.isArray(options.allowedProviderUuids)) {
+            const allowedProviderUuids = new Set(options.allowedProviderUuids.filter(Boolean).map(String));
+            availableAndHealthyProviders = availableAndHealthyProviders.filter(p => {
+                const uuid = p.uuid || p.config?.uuid;
+                return allowedProviderUuids.has(uuid);
+            });
+        }
+
         const excludedProviderUuids = new Set(options.excludeProviderUuids || []);
         if (excludedProviderUuids.size > 0) {
             availableAndHealthyProviders = availableAndHealthyProviders.filter(p => {
@@ -2791,6 +2807,17 @@ export class ProviderPoolManager {
             return null;
         }
 
+        if (options.disableProviderFallback === true) {
+            const selectedConfig = await this.acquireSlot(providerType, requestedModel, options);
+            return selectedConfig
+                ? {
+                    config: selectedConfig,
+                    actualProviderType: providerType,
+                    isFallback: false
+                }
+                : null;
+        }
+
         const mixedSlot = options.routingStrategy === 'image-round-robin'
             ? null
             : await this.acquireSlotFromMixedPool(providerType, requestedModel, options);
@@ -2946,6 +2973,17 @@ export class ProviderPoolManager {
         if (!providerType || typeof providerType !== 'string') {
             this._log('error', `Invalid providerType: ${providerType}`);
             return null;
+        }
+
+        if (options.disableProviderFallback === true) {
+            const selectedConfig = await this.selectProvider(providerType, requestedModel, options);
+            return selectedConfig
+                ? {
+                    config: selectedConfig,
+                    actualProviderType: providerType,
+                    isFallback: false
+                }
+                : null;
         }
 
         const mixedSelection = options.routingStrategy === 'image-round-robin'
