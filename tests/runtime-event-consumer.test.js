@@ -18,3 +18,31 @@ test('does not acknowledge a failed persistence event', async () => {
     await expect(consumer.consume({ eventId: 'evt-2' })).rejects.toThrow('write failed');
     expect(ack).not.toHaveBeenCalled();
 });
+
+test('serializes hook application in receive order', async () => {
+    const releaseFirst = {};
+    releaseFirst.promise = new Promise(resolve => { releaseFirst.resolve = resolve; });
+    const applied = [];
+    const consumer = new RuntimeEventConsumer({
+        apply: async event => {
+            applied.push(`start:${event.eventId}`);
+            if (event.eventId === 'evt-first') await releaseFirst.promise;
+            applied.push(`end:${event.eventId}`);
+        },
+        ack: jest.fn()
+    });
+
+    const first = consumer.consume({ eventId: 'evt-first', sourceWorkerId: 'execution-1' });
+    const second = consumer.consume({ eventId: 'evt-second', sourceWorkerId: 'execution-1' });
+    await Promise.resolve();
+
+    expect(applied).toEqual(['start:evt-first']);
+    releaseFirst.resolve();
+    await Promise.all([first, second]);
+    expect(applied).toEqual([
+        'start:evt-first',
+        'end:evt-first',
+        'start:evt-second',
+        'end:evt-second'
+    ]);
+});
