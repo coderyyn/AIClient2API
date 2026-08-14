@@ -100,25 +100,25 @@ afterEach(() => {
 });
 
 describe('API Potluck key credential routing', () => {
-    test('creates new keys with safe auto-routing defaults', async () => {
+    test('creates new keys with explicit whole-pool routing defaults', async () => {
         const { plugin } = await loadPotluckModules();
         const created = await plugin.exports.createKey('Default Routing', 1000);
 
         expect(created).toMatchObject({
-            routingMode: 'auto',
+            routingMode: 'pool',
             primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
         expect(readStore().keys[created.id]).toMatchObject({
-            routingMode: 'auto',
+            routingMode: 'pool',
             primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
     });
 
-    test('normalizes legacy keys without routing fields on load', async () => {
+    test('normalizes legacy keys without routing fields on load as whole-pool routing', async () => {
         writeStore({
             keys: {
                 maki_legacy: {
@@ -133,7 +133,7 @@ describe('API Potluck key credential routing', () => {
 
         const { keyManager } = await loadPotluckModules();
         expect(await keyManager.getKey('maki_legacy')).toMatchObject({
-            routingMode: 'auto',
+            routingMode: 'pool',
             primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
@@ -141,7 +141,7 @@ describe('API Potluck key credential routing', () => {
         expect(await keyManager.validateKey('maki_legacy')).toMatchObject({
             valid: true,
             keyData: {
-                routingMode: 'auto',
+                routingMode: 'pool',
                 primaryGroupId: null,
                 fixedCredential: null,
                 manualLock: false
@@ -184,6 +184,19 @@ describe('API Potluck key credential routing', () => {
         expect(automatic).toMatchObject({
             routingMode: 'auto',
             primaryGroupId: 'group-2',
+            fixedCredential: null,
+            manualLock: false
+        });
+
+        const pooled = await keyManager.updateKeyRouting(created.id, {
+            routingMode: 'pool',
+            primaryGroupId: 'ignored-group',
+            fixedCredential: { providerType: 'openai-codex-oauth', uuid: 'ignored-credential' },
+            manualLock: false
+        });
+        expect(pooled).toMatchObject({
+            routingMode: 'pool',
+            primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
@@ -282,7 +295,7 @@ describe('API Potluck key credential routing', () => {
             id: created.id,
             keyId: created.id,
             name: 'Catalog Key',
-            routingMode: 'auto',
+            routingMode: 'pool',
             primaryGroupId: null,
             fixedCredential: null,
             manualLock: false,
@@ -368,7 +381,7 @@ describe('API Potluck key credential routing', () => {
         });
 
         expect(await keyManager.getKey(created.id)).toMatchObject({
-            routingMode: 'auto',
+            routingMode: 'pool',
             primaryGroupId: null,
             manualLock: false
         });

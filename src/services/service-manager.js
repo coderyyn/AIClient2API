@@ -209,13 +209,21 @@ function resolvePotluckCredentialRouting(keyData = {}, currentConfig = {}) {
     if (keyData.routingMode === 'fixed') {
         return { ...keyData, keyId, routingMode: 'fixed' };
     }
+    if (keyData.routingMode === 'pool') {
+        return { ...keyData, keyId, routingMode: 'pool', primaryGroupId: null, fixedCredential: null };
+    }
     if (keyData.routingMode === 'auto' && keyData.primaryGroupId) {
         return { ...keyData, keyId, routingMode: 'auto' };
     }
     if (storedAssignment) {
-        return { ...storedAssignment, keyId, routingMode: storedAssignment.routingMode === 'fixed' ? 'fixed' : 'auto' };
+        const routingMode = storedAssignment.routingMode === 'fixed'
+            ? 'fixed'
+            : storedAssignment.routingMode === 'auto' && storedAssignment.primaryGroupId
+                ? 'auto'
+                : 'pool';
+        return { ...storedAssignment, keyId, routingMode, primaryGroupId: routingMode === 'auto' ? storedAssignment.primaryGroupId : null };
     }
-    return null;
+    return { keyId, routingMode: 'pool', primaryGroupId: null, fixedCredential: null };
 }
 
 async function resolveCodexCredentialGroupContext(config, providerType) {
@@ -228,14 +236,6 @@ async function resolveCodexCredentialGroupContext(config, providerType) {
     });
     const currentConfig = await service.getCurrentConfig();
     const keyRouting = resolvePotluckCredentialRouting(config.potluckKeyData, currentConfig);
-    if (!keyRouting) {
-        updateCodexRoutingDiagnostics(config, {
-            routingMode: config.potluckKeyData.routingMode === 'fixed' ? 'fixed' : 'auto',
-            assignmentMissing: true
-        });
-        return { handled: false, assignmentMissing: true };
-    }
-
     return {
         handled: true,
         keyRouting,
@@ -371,6 +371,28 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
             if (error?.code === 'FIXED_CREDENTIAL_UNAVAILABLE') throw error;
             throw createFixedCredentialUnavailableError(error);
         }
+    }
+
+    if (keyRouting.routingMode === 'pool') {
+        const poolOptions = withStickyProviderAffinity(config, providerType, {
+            ...options,
+            selectionDiagnostics,
+            requestedModel,
+            preferredProviderUuid: null
+        });
+        const selectedResult = await selectFromPool(poolOptions);
+        const selectedUuid = selectedResult?.config?.uuid || null;
+        updateCodexRoutingDiagnostics(config, {
+            routingMode: 'pool',
+            requestedPrimaryGroupId: null,
+            selectedGroupId: null,
+            selectedProviderUuid: selectedUuid,
+            spillover: false,
+            spilloverReason: null,
+            assignmentMissing: false,
+            hotShardApplied: selectionDiagnostics.hotShardApplied === true
+        });
+        return { handled: true, selectedResult: selectedResult || null, availabilityError: null };
     }
 
     const requestedPrimaryGroupId = keyRouting.primaryGroupId || groups[0]?.id || null;

@@ -238,14 +238,17 @@ function createInvalidKeyRoutingError(message) {
 }
 
 function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
+    const hasPrimaryGroup = typeof routing.primaryGroupId === 'string' && routing.primaryGroupId.trim();
     const routingMode = routing.routingMode === 'fixed'
         ? 'fixed'
-        : routing.routingMode === 'auto' || routing.routingMode === undefined || routing.routingMode === null
-            ? 'auto'
-            : null;
+        : routing.routingMode === 'pool'
+            ? 'pool'
+            : (routing.routingMode === 'auto' || routing.routingMode === undefined || routing.routingMode === null)
+                ? (hasPrimaryGroup ? 'auto' : 'pool')
+                : null;
 
     if (!routingMode) {
-        throw createInvalidKeyRoutingError('routingMode 必须是 auto 或 fixed');
+        throw createInvalidKeyRoutingError('routingMode 必须是 pool、auto 或 fixed');
     }
 
     const manualLock = routing.manualLock === true;
@@ -272,7 +275,7 @@ function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
         };
     }
 
-    const primaryGroupId = typeof routing.primaryGroupId === 'string' && routing.primaryGroupId.trim()
+    const primaryGroupId = routingMode === 'auto' && hasPrimaryGroup
         ? routing.primaryGroupId.trim()
         : null;
     return {
@@ -1420,7 +1423,7 @@ export async function createKey(name = '', dailyLimit = null) {
         lastResetDate: today,
         lastUsedAt: null,
         enabled: true,
-        routingMode: 'auto',
+        routingMode: 'pool',
         primaryGroupId: null,
         fixedCredential: null,
         manualLock: false,

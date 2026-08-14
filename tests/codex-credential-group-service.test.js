@@ -175,6 +175,28 @@ describe('Codex key demand and capacity-aware assignment', () => {
         expect(suggestion.keyAssignments.every(item => item.demand.isNew)).toBe(true);
     });
 
+    test('preserves pool keys without assigning demand to any credential group', () => {
+        const suggestion = generateCredentialGroupSuggestion({
+            credentials: createCredentials(3),
+            keys: [
+                { id: 'key-pool', routingMode: 'pool', usageHistory: { '2026-08-13': day({ totalTokens: 5000 }) } },
+                { id: 'key-auto', routingMode: 'auto', primaryGroupId: 'group-1', usageHistory: { '2026-08-13': day({ totalTokens: 100 }) } }
+            ],
+            currentConfig: {
+                groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+                keyAssignments: [{ keyId: 'key-pool', routingMode: 'pool', primaryGroupId: null }]
+            },
+            now: NOW
+        });
+
+        expect(suggestion.keyAssignments.find(item => item.keyId === 'key-pool')).toMatchObject({
+            routingMode: 'pool',
+            primaryGroupId: null,
+            fixedCredential: null
+        });
+        expect(suggestion.groups.reduce((sum, group) => sum + group.predictedDemand, 0)).toBe(100);
+    });
+
     test('marks clearly high-consumption keys in the preview', () => {
         const suggestion = generateCredentialGroupSuggestion({
             credentials: createCredentials(3),
@@ -266,6 +288,27 @@ describe('Codex credential routing decisions', () => {
             candidateProviderUuids: ['cred-3'],
             spillover: true,
             spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE'
+        });
+    });
+
+    test('pool routing returns all healthy credentials without selecting a group', () => {
+        const result = routeKeyToCredentialCandidates({
+            keyRouting: { routingMode: 'pool', primaryGroupId: null },
+            groups,
+            credentials: [
+                { uuid: 'cred-1', isHealthy: true },
+                { uuid: 'cred-2', isHealthy: false },
+                { uuid: 'cred-3', isHealthy: true }
+            ]
+        });
+
+        expect(result).toMatchObject({
+            routingMode: 'pool',
+            selectedGroupId: null,
+            candidateProviderUuids: ['cred-1', 'cred-3'],
+            fallbackProviderUuids: [],
+            spillover: false,
+            errorCode: null
         });
     });
 });
@@ -455,6 +498,23 @@ describe('Codex credential group suggestion validation', () => {
         ]);
         expect(validated.keyAssignments).toEqual([
             expect.objectContaining({ keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-1' })
+        ]);
+    });
+
+    test('accepts explicit pool assignments without a primary group', () => {
+        const validated = validateCredentialGroupSuggestion({
+            applicable: true,
+            groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+            keyAssignments: [{ keyId: 'key-1', routingMode: 'pool', primaryGroupId: null }]
+        }, { credentials, keys });
+
+        expect(validated.keyAssignments).toEqual([
+            expect.objectContaining({
+                keyId: 'key-1',
+                routingMode: 'pool',
+                primaryGroupId: null,
+                fixedCredential: null
+            })
         ]);
     });
 });

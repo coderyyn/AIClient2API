@@ -385,7 +385,12 @@ function buildPublicGroup(group, credentials, overrides = {}) {
 
 function buildPublicKeyAssignment(key, assignment, credentials, options = {}) {
     const keyId = key?.keyId || key?.id || assignment?.keyId || '';
-    const routingMode = assignment?.routingMode === 'fixed' || key?.routingMode === 'fixed' ? 'fixed' : 'auto';
+    const requestedRoutingMode = assignment?.routingMode || key?.routingMode;
+    const routingMode = requestedRoutingMode === 'fixed'
+        ? 'fixed'
+        : requestedRoutingMode === 'auto' && (assignment?.primaryGroupId || key?.primaryGroupId)
+            ? 'auto'
+            : 'pool';
     const fixedCredential = routingMode === 'fixed'
         ? (assignment?.fixedCredential || key?.fixedCredential || null)
         : null;
@@ -416,7 +421,11 @@ function buildPublicKeyAssignment(key, assignment, credentials, options = {}) {
         manualLock: assignment?.manualLock === true || key?.manualLock === true,
         demand,
         highConsumption: assignment?.highConsumption === true,
-        spilloverPolicy: routingMode === 'auto' ? 'cross-group-when-primary-unavailable' : 'disabled'
+        spilloverPolicy: routingMode === 'auto'
+            ? 'cross-group-when-primary-unavailable'
+            : routingMode === 'pool'
+                ? 'weighted-whole-pool'
+                : 'disabled'
     };
 }
 
@@ -1170,7 +1179,26 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
             // PUT /api/potluck/keys/:keyId/routing - 更新 Codex 凭据路由
             if (method === 'PUT' && subPath === '/routing') {
                 const body = await getRequestBody(req, { maxBytes: 1024 * 1024 });
-                const keyData = await updateKeyRouting(keyId, body || {});
+                let routing = body || {};
+                if (routing.routingMode === 'fixed' && routing.fixedCredential?.credentialRef && !routing.fixedCredential?.uuid) {
+                    const credentials = await loadCodexCredentialCatalog();
+                    const matched = credentials.find(credential => getCredentialRef(
+                        credential.providerType,
+                        credential.uuid
+                    ) === routing.fixedCredential.credentialRef);
+                    if (!matched) {
+                        sendJson(res, 400, { success: false, error: { message: '未找到指定凭据', code: 'FIXED_CREDENTIAL_NOT_FOUND' } });
+                        return true;
+                    }
+                    routing = {
+                        ...routing,
+                        fixedCredential: {
+                            providerType: matched.providerType,
+                            uuid: matched.uuid
+                        }
+                    };
+                }
+                const keyData = await updateKeyRouting(keyId, routing);
                 if (!keyData) {
                     sendJson(res, 404, { success: false, error: { message: '未找到 Key' } });
                     return true;

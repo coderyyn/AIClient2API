@@ -91,12 +91,17 @@ function normalizeGroup(group = {}, index = 0) {
 }
 
 function normalizeKeyAssignment(assignment = {}) {
-    const routingMode = assignment.routingMode === 'fixed' ? 'fixed' : 'auto';
+    const hasPrimaryGroup = Boolean(String(assignment.primaryGroupId || '').trim());
+    const routingMode = assignment.routingMode === 'fixed'
+        ? 'fixed'
+        : assignment.routingMode === 'pool' || !hasPrimaryGroup
+            ? 'pool'
+            : 'auto';
     return {
         ...cloneJson(assignment),
         keyId: String(assignment.keyId || assignment.id || ''),
         routingMode,
-        primaryGroupId: routingMode === 'auto' ? (assignment.primaryGroupId || null) : null,
+        primaryGroupId: routingMode === 'auto' ? String(assignment.primaryGroupId) : null,
         fixedCredential: routingMode === 'fixed' && assignment.fixedCredential?.uuid
             ? {
                 providerType: assignment.fixedCredential.providerType || 'openai-codex-oauth',
@@ -244,6 +249,8 @@ export function validateCredentialGroupSuggestion(suggestion, options = {}) {
             }
             continue;
         }
+
+        if (assignment.routingMode === 'pool') continue;
 
         const fixed = assignment.fixedCredential;
         const credential = fixed?.uuid ? credentialByUuid.get(String(fixed.uuid)) : null;
@@ -531,10 +538,23 @@ export function generateCredentialGroupSuggestion(options = {}) {
 
     for (const item of unlockedDemands) {
         const existing = currentAssignments.get(item.keyId);
-        const routingMode = item.key.routingMode === 'fixed' || existing?.routingMode === 'fixed' ? 'fixed' : 'auto';
+        const routingMode = item.key.routingMode === 'fixed' || existing?.routingMode === 'fixed'
+            ? 'fixed'
+            : item.key.routingMode === 'pool' || existing?.routingMode === 'pool'
+                ? 'pool'
+                : 'auto';
         if (routingMode === 'fixed') {
             assignments.push({
                 ...normalizeKeyAssignment({ ...existing, ...item.key, keyId: item.keyId, routingMode: 'fixed' }),
+                demand: item.demand,
+                highConsumption: highConsumptionKeyIds.has(item.keyId)
+            });
+            continue;
+        }
+
+        if (routingMode === 'pool') {
+            assignments.push({
+                ...normalizeKeyAssignment({ ...existing, ...item.key, keyId: item.keyId, routingMode: 'pool' }),
                 demand: item.demand,
                 highConsumption: highConsumptionKeyIds.has(item.keyId)
             });
@@ -590,6 +610,19 @@ export function routeKeyToCredentialCandidates(options = {}) {
             .filter(isCredentialRouteAvailable)
             .map(credential => [getCredentialUuid(credential), credential])
     );
+
+    if (keyRouting.routingMode === 'pool') {
+        return {
+            routingMode: 'pool',
+            requestedPrimaryGroupId: null,
+            selectedGroupId: null,
+            candidateProviderUuids: [...availableByUuid.keys()],
+            fallbackProviderUuids: [],
+            spillover: false,
+            spilloverReason: null,
+            errorCode: null
+        };
+    }
 
     if (keyRouting.routingMode === 'fixed') {
         const fixed = keyRouting.fixedCredential;

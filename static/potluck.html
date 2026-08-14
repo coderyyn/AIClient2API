@@ -569,6 +569,11 @@
             color: var(--primary-color);
             border-color: color-mix(in srgb, var(--primary-color) 35%, var(--border-color));
         }
+        .key-routing-summary.is-pool {
+            color: var(--info-color);
+            background: rgba(14, 165, 233, 0.10);
+            border-color: rgba(14, 165, 233, 0.28);
+        }
         .btn-copy {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
@@ -1509,6 +1514,38 @@
                 <input type="hidden" id="editNameKeyId">
                 <button class="btn btn-primary btn-block" onclick="updateName()">
                     <i class="fas fa-save"></i> 保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 修改凭据路由模态框 -->
+    <div id="editRoutingModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-route"></i> 修改凭据路由</h3>
+                <button class="modal-close" onclick="closeModal('editRoutingModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editRoutingKeyId">
+                <div class="form-group">
+                    <label for="routingMode">路由模式</label>
+                    <select id="routingMode" class="sort-select" style="width:100%" onchange="updateRoutingFields()">
+                        <option value="pool">全池加权</option>
+                        <option value="auto">主组优先</option>
+                        <option value="fixed">固定凭据</option>
+                    </select>
+                </div>
+                <div class="form-group" id="routingGroupField" hidden>
+                    <label for="routingPrimaryGroup">主凭据组</label>
+                    <select id="routingPrimaryGroup" class="sort-select" style="width:100%"></select>
+                </div>
+                <div class="form-group" id="routingCredentialField" hidden>
+                    <label for="routingFixedCredential">固定凭据</label>
+                    <select id="routingFixedCredential" class="sort-select" style="width:100%"></select>
+                </div>
+                <button class="btn btn-primary btn-block" onclick="updateRouting()">
+                    <i class="fas fa-save"></i> 保存路由
                 </button>
             </div>
         </div>
@@ -2937,11 +2974,17 @@
 
         function renderKeyRoutingSummary(key) {
             const isFixed = key?.routingMode === 'fixed';
+            const isPool = key?.routingMode === 'pool' || (key?.routingMode === 'auto' && !key?.primaryGroupId);
             const manualLockSuffix = key?.manualLock === true ? ' · 手工锁定' : '';
             if (isFixed) {
                 const summary = `固定凭据 · 禁止降级${manualLockSuffix}`;
                 const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
                 return `<span class="key-routing-summary is-fixed" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">fixed${lockIcon}</span>`;
+            }
+            if (isPool) {
+                const summary = `全池加权 · 按权重、额度与负载选择${manualLockSuffix}`;
+                const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
+                return `<span class="key-routing-summary is-pool" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">pool${lockIcon}</span>`;
             }
 
             const primaryGroupId = typeof key?.primaryGroupId === 'string'
@@ -3045,6 +3088,7 @@
                         <button class="btn btn-secondary btn-sm" onclick="resetUsage('${key.id}')" title="重置今日用量"><i class="fas fa-redo"></i> <span class="btn-text">重置</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="resetTokenStats('${key.id}')" title="重置 Token 统计"><i class="fas fa-eraser"></i> <span class="btn-text">Token</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="openEditLimit('${key.id}', ${key.dailyLimit})" title="修改限额"><i class="fas fa-sliders-h"></i> <span class="btn-text">限额</span></button>
+                        <button class="btn btn-secondary btn-sm" onclick="openEditRouting('${key.id}', '${key.routingMode || 'pool'}', '${key.primaryGroupId || ''}')" title="修改凭据路由"><i class="fas fa-route"></i> <span class="btn-text">路由</span></button>
                         <button class="btn btn-secondary btn-sm" onclick="toggleKey('${key.id}')" title="${key.enabled ? '禁用' : '启用'}">${key.enabled ? '<i class="fas fa-toggle-on"></i>' : '<i class="fas fa-toggle-off"></i>'} <span class="btn-text">${key.enabled ? '禁用' : '启用'}</span></button>
                         <button class="btn btn-danger btn-sm" onclick="deleteKey('${key.id}')" title="删除"><i class="fas fa-trash"></i> <span class="btn-text">删除</span></button>
                     </div>
@@ -3312,6 +3356,46 @@
             if (!name) { showToast('请输入有效的名称', 'error'); return; }
             const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/name`, { method: 'PUT', body: JSON.stringify({ name }) });
             if (result && result.success) { closeModal('editNameModal'); handleManagementMutationResult(result, '名称已更新'); }
+            else { showToast(result?.error?.message || '操作失败', 'error'); }
+        }
+
+        function updateRoutingFields() {
+            const mode = document.getElementById('routingMode').value;
+            document.getElementById('routingGroupField').hidden = mode !== 'auto';
+            document.getElementById('routingCredentialField').hidden = mode !== 'fixed';
+        }
+
+        async function openEditRouting(keyId, currentMode = 'pool', currentGroupId = '') {
+            document.getElementById('editRoutingKeyId').value = keyId;
+            document.getElementById('routingMode').value = currentMode === 'fixed' || currentMode === 'auto' ? currentMode : 'pool';
+            const result = await apiRequest(`${API_BASE}/credential-groups`);
+            const view = result?.data || {};
+            const groupSelect = document.getElementById('routingPrimaryGroup');
+            groupSelect.innerHTML = (view.groups || []).map(group => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name || group.id)}</option>`).join('');
+            if (currentGroupId) groupSelect.value = currentGroupId;
+            const credentialSelect = document.getElementById('routingFixedCredential');
+            credentialSelect.innerHTML = (view.credentials || []).map(credential => `<option value="${escapeHtml(credential.credentialRef)}">${escapeHtml(credential.customName || credential.credentialRef)}</option>`).join('');
+            updateRoutingFields();
+            openModal('editRoutingModal');
+        }
+
+        async function updateRouting() {
+            const keyId = document.getElementById('editRoutingKeyId').value;
+            const routingMode = document.getElementById('routingMode').value;
+            const body = { routingMode, primaryGroupId: null, fixedCredential: null, manualLock: false };
+            if (routingMode === 'auto') {
+                body.primaryGroupId = document.getElementById('routingPrimaryGroup').value || null;
+                if (!body.primaryGroupId) { showToast('请选择主凭据组', 'error'); return; }
+            } else if (routingMode === 'fixed') {
+                const credentialRef = document.getElementById('routingFixedCredential').value;
+                if (!credentialRef) { showToast('请选择固定凭据', 'error'); return; }
+                body.fixedCredential = { providerType: 'openai-codex-oauth', credentialRef };
+            }
+            const result = await apiRequest(`${API_BASE}/keys/${encodeURIComponent(keyId)}/routing`, {
+                method: 'PUT',
+                body: JSON.stringify(body)
+            });
+            if (result && result.success) { closeModal('editRoutingModal'); handleManagementMutationResult(result, '凭据路由已更新'); }
             else { showToast(result?.error?.message || '操作失败', 'error'); }
         }
 

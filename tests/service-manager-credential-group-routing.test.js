@@ -270,7 +270,36 @@ describe('Service Manager Codex credential-group routing', () => {
         expect(['codex-a', 'codex-b']).toContain(result.uuid);
         expect(selectSpy).toHaveBeenCalledTimes(1);
         expect(selectSpy.mock.calls[0][2].allowedProviderUuids).toBeUndefined();
-        expect(config._codexRouting).toMatchObject({ assignmentMissing: true });
+        expect(config._codexRouting).toMatchObject({
+            routingMode: 'pool',
+            selectedGroupId: null,
+            assignmentMissing: false
+        });
+    });
+
+    test('an explicit pool assignment uses the weighted whole pool without provider constraints', async () => {
+        writeGroupConfig({
+            groups: [
+                { id: 'group-a', credentialUuids: ['codex-a'] },
+                { id: 'group-b', credentialUuids: ['codex-b'] }
+            ],
+            keyAssignments: [{ keyId: 'key-1', routingMode: 'pool', primaryGroupId: null }]
+        });
+        const config = createConfig({ keyData: { routingMode: 'pool' } });
+        const manager = await initialize(config);
+        const selectSpy = jest.spyOn(manager, 'selectProviderWithFallback');
+
+        const result = await getApiServiceWithFallback(config, 'gpt-5.4-mini');
+
+        expect(['codex-a', 'codex-b']).toContain(result.uuid);
+        expect(selectSpy).toHaveBeenCalledTimes(1);
+        expect(selectSpy.mock.calls[0][2].allowedProviderUuids).toBeUndefined();
+        expect(config._codexRouting).toMatchObject({
+            routingMode: 'pool',
+            selectedGroupId: null,
+            selectedProviderUuid: result.uuid,
+            assignmentMissing: false
+        });
     });
 
     test('group routing never crosses into a configured provider fallback type', async () => {

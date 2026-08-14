@@ -90,6 +90,8 @@ describe('Codex credential-group UI source', () => {
         expect(helper).not.toContain("compactGroup = primaryGroupId ? primaryGroupId.replace(/^group-/i, '') : '?'");
         expect(helper).toContain('fixed');
         expect(helper).toContain('auto');
+        expect(helper).toContain('pool');
+        expect(helper).toContain('全池加权');
         expect(helper).toContain('固定凭据 · 禁止降级');
         expect(helper).toContain('不可用时跨组降级');
         expect(helper).toContain('手工锁定');
@@ -101,5 +103,16 @@ describe('Codex credential-group UI source', () => {
         const keyNameLine = potluckHtml.match(/<div class="key-name">[^\n]+/u)?.[0] || '';
         expect(keyNameLine).toContain('renderKeyRoutingSummary(key)');
         expect(potluckHtml).not.toMatch(/<div class="key-id">[^\n]+<\/div>\s*\$\{renderKeyRoutingSummary\(key\)\}/u);
+    });
+
+    test('lets administrators switch a Key between pool, auto, and fixed routing', () => {
+        expect(potluckHtml).toContain('id="editRoutingModal"');
+        expect(potluckHtml).toContain('id="routingMode"');
+        expect(potluckHtml).toContain('<option value="pool">全池加权</option>');
+        expect(potluckHtml).toContain('<option value="auto">主组优先</option>');
+        expect(potluckHtml).toContain('<option value="fixed">固定凭据</option>');
+        expect(potluckHtml).toContain('function openEditRouting');
+        expect(potluckHtml).toContain('function updateRouting');
+        expect(potluckHtml).toContain("/routing`");
     });
 });
