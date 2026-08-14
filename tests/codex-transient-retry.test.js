@@ -70,7 +70,48 @@ describe('Codex transient credential retry', () => {
         mockGetApiServiceWithFallback.mockResolvedValueOnce({
             service: secondService,
             uuid: 'codex-b',
-            actualModel: 'gpt-5.4-mini',
+            actualModel: 'gpt-5.5',
+            actualProviderType: 'openai-codex-oauth',
+            serviceConfig: {}
+        });
+        const providerPoolManager = createProviderPoolManager();
+        const res = new FakeResponse();
+        const config = { CREDENTIAL_SWITCH_MAX_RETRIES: 1 };
+
+        await handleUnaryRequest(
+            res,
+            firstService,
+            'gpt-5.5',
+            { input: [] },
+            'openai-codex-oauth',
+            'openai-codex-oauth',
+            'none',
+            null,
+            providerPoolManager,
+            'codex-a',
+            'Codex A',
+            { CONFIG: config, maxRetries: 1 }
+        );
+
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(config, 'gpt-5.5', expect.objectContaining({
+            acquireSlot: true,
+            excludeProviderUuids: ['codex-a'],
+            allowExcludedProviderFallback: true
+        }));
+        expect(secondService.generateContent).toHaveBeenCalledTimes(1);
+        expect(res.body).toContain('resp_retry_success');
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kind=capacity'));
+        expect(mockGetApiServiceWithFallback.mock.calls[0][2]).not.toHaveProperty('forceCodexModelFallback');
+    });
+
+    test('requests a one-time Luna fallback after an upstream 429 for 5.4 mini', async () => {
+        const firstError = createCapacityError();
+        const firstService = { generateContent: jest.fn().mockRejectedValue(firstError) };
+        const lunaService = { generateContent: jest.fn().mockResolvedValue({ id: 'resp_luna_success' }) };
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: lunaService,
+            uuid: 'codex-luna',
+            actualModel: 'gpt-5.6-luna',
             actualProviderType: 'openai-codex-oauth',
             serviceConfig: {}
         });
@@ -94,12 +135,10 @@ describe('Codex transient credential retry', () => {
         );
 
         expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(config, 'gpt-5.4-mini', expect.objectContaining({
-            acquireSlot: true,
-            excludeProviderUuids: ['codex-a'],
-            allowExcludedProviderFallback: true
+            forceCodexModelFallback: true,
+            modelFallbackReason: 'UPSTREAM_429'
         }));
-        expect(secondService.generateContent).toHaveBeenCalledTimes(1);
-        expect(res.body).toContain('resp_retry_success');
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kind=capacity'));
+        expect(lunaService.generateContent).toHaveBeenCalledTimes(1);
+        expect(res.body).toContain('resp_luna_success');
     });
 });

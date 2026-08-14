@@ -1,6 +1,6 @@
 import { getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
-import { ProviderPoolManager } from '../providers/provider-pool-manager.js';
+import { ProviderPoolManager, getCodexModelFallbackTarget } from '../providers/provider-pool-manager.js';
 import deepmerge from 'deepmerge';
 import crypto from 'crypto';
 import * as fs from 'fs';
@@ -27,6 +27,16 @@ import { CredentialGroupService, routeKeyToCredentialCandidates } from './codex-
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
 const DEFAULT_CODEX_FALLBACK_MODEL = 'gpt-5.4-mini';
+
+function isCodexModelFallbackEligibleError(error) {
+    if (!error) return false;
+    if (error.status === 401 || error.status === 403 || error.status >= 500 && error.status !== 503) return false;
+    return error.status === 429
+        || error.code === 429
+        || error.code === 'FIXED_CREDENTIAL_UNAVAILABLE'
+        || error.code === 'NO_CREDENTIAL_AVAILABLE'
+        || /No healthy provider|unavailable|support.*model|model.*support/i.test(String(error.message || ''));
+}
 
 function isTruthyConfigFlag(value) {
     return value === true || value === 1 || value === '1' || value === 'true';
@@ -1285,6 +1295,26 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     const { effectiveProvider, actualModelName } = await _resolveEffectiveRouting(config, requestedModel);
     config.MODEL_PROVIDER = effectiveProvider;
 
+    const codexFallbackTarget = isCodexProviderType(effectiveProvider)
+        ? getCodexModelFallbackTarget(actualModelName, config)
+        : null;
+    if (codexFallbackTarget && options.forceCodexModelFallback === true && options.modelFallbackAttempted !== true) {
+        const fallbackResult = await getApiServiceWithFallback(config, codexFallbackTarget, {
+            ...options,
+            forceCodexModelFallback: false,
+            modelFallbackAttempted: true,
+            excludeProviderUuids: []
+        });
+        return {
+            ...fallbackResult,
+            isFallback: true,
+            actualModel: fallbackResult.actualModel || codexFallbackTarget,
+            modelFallbackFrom: actualModelName,
+            modelFallbackTo: fallbackResult.actualModel || codexFallbackTarget,
+            modelFallbackReason: options.modelFallbackReason || 'MODEL_UNAVAILABLE'
+        };
+    }
+
     // 模型列表特殊场景：AUTO 且无模型名
     if (effectiveProvider === MODEL_PROVIDER.AUTO && !actualModelName) {
         return { service: null, serviceConfig: config, actualProviderType: effectiveProvider, isFallback: false, uuid: null, actualModel: null };
@@ -1295,6 +1325,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     let isFallback = false;
     let selectedUuid = null;
     let actualModel = actualModelName;
+    let selectedModelFallbackReason = null;
     const selectionDiagnostics = initializeSelectionDiagnostics(options.selectionDiagnostics || {});
     const routingOptions = {
         ...options,
@@ -1308,17 +1339,38 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         const useAcquire = options.acquireSlot === true;
         let selectedResult;
         let availabilityError = null;
-        const groupSelection = await selectCodexCredentialGroupProvider(
-            config,
-            config.MODEL_PROVIDER,
-            actualModelName,
-            routingOptions,
-            selectionDiagnostics
-        );
+        let groupSelection;
+        try {
+            groupSelection = await selectCodexCredentialGroupProvider(
+                config,
+                config.MODEL_PROVIDER,
+                actualModelName,
+                routingOptions,
+                selectionDiagnostics
+            );
+        } catch (error) {
+            if (codexFallbackTarget && options.modelFallbackAttempted !== true && isCodexModelFallbackEligibleError(error)) {
+                return getApiServiceWithFallback(config, actualModelName, {
+                    ...options,
+                    forceCodexModelFallback: true,
+                    modelFallbackAttempted: false,
+                    modelFallbackReason: error.status === 429 ? 'PROVIDER_SELECTION_429' : 'MODEL_UNAVAILABLE'
+                });
+            }
+            throw error;
+        }
 
         if (groupSelection.handled) {
             selectedResult = groupSelection.selectedResult;
             availabilityError = groupSelection.availabilityError;
+            if (!selectedResult && codexFallbackTarget && options.modelFallbackAttempted !== true) {
+                return getApiServiceWithFallback(config, actualModelName, {
+                    ...options,
+                    forceCodexModelFallback: true,
+                    modelFallbackAttempted: false,
+                    modelFallbackReason: 'MODEL_UNAVAILABLE'
+                });
+            }
         } else {
             const failoverKey = isCodexProviderType(config.MODEL_PROVIDER)
                 ? config._codexOverloadFailoverKey
@@ -1400,7 +1452,13 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         }
         
         if (selectedResult) {
-            const { config: selectedProviderConfig, actualProviderType: selectedType, isFallback: fallbackUsed, actualModel: fallbackModel } = selectedResult;
+            const {
+                config: selectedProviderConfig,
+                actualProviderType: selectedType,
+                isFallback: fallbackUsed,
+                actualModel: fallbackModel,
+                modelFallbackReason: fallbackReason
+            } = selectedResult;
             
             // 合并选中的提供者配置到当前请求的 config 中
             serviceConfig = deepmerge(config, selectedProviderConfig);
@@ -1410,6 +1468,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             isFallback = fallbackUsed;
             selectedUuid = selectedProviderConfig.uuid;
             actualModel = fallbackModel || actualModelName;
+            selectedModelFallbackReason = fallbackReason || null;
 
             // mixed pool/fallback 可能跨 providerType 命中真实节点，需要切到真实 adapter。
             if (actualProviderType && actualProviderType !== config.MODEL_PROVIDER) {
@@ -1449,7 +1508,14 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         actualProviderType,
         isFallback,
         uuid: selectedUuid,
-        actualModel
+        actualModel,
+        ...(isFallback && codexFallbackTarget && actualModel !== actualModelName
+            ? {
+                modelFallbackFrom: actualModelName,
+                modelFallbackTo: actualModel,
+                modelFallbackReason: selectedModelFallbackReason || options.modelFallbackReason || 'MODEL_UNAVAILABLE'
+            }
+            : {})
     };
 }
 

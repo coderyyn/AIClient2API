@@ -1662,6 +1662,9 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     excludeProviderUuids: failedCredentialUuids,
                     deprioritizeProviderTypes: failedProviderTypes,
                     allowExcludedProviderFallback: isCodexTransient,
+                    ...(isCodexProviderType(toProvider) && getErrorStatusCode(error) === 429 && /^gpt-5\.[34]-mini(?:-fast)?$|^gpt-5\.3-codex-spark(?:-fast)?$/i.test(String(model))
+                        ? { forceCodexModelFallback: true, modelFallbackReason: 'UPSTREAM_429' }
+                        : {}),
                     selectionDiagnostics
                 });
                 if (shouldRecordRetryAudit(error)) {
@@ -1953,6 +1956,9 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     excludeProviderUuids: failedCredentialUuids,
                     deprioritizeProviderTypes: failedProviderTypes,
                     allowExcludedProviderFallback: isCodexTransient,
+                    ...(isCodexProviderType(toProvider) && getErrorStatusCode(error) === 429 && /^gpt-5\.[34]-mini(?:-fast)?$|^gpt-5\.3-codex-spark(?:-fast)?$/i.test(String(model))
+                        ? { forceCodexModelFallback: true, modelFallbackReason: 'UPSTREAM_429' }
+                        : {}),
                     selectionDiagnostics
                 });
                 if (shouldRecordRetryAudit(error)) {

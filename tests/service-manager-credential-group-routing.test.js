@@ -302,6 +302,75 @@ describe('Service Manager Codex credential-group routing', () => {
         });
     });
 
+    test('pool routing falls back unavailable 5.4 mini requests to Luna', async () => {
+        writeGroupConfig({ groups: [], keyAssignments: [{ keyId: 'key-1', routingMode: 'pool' }] });
+        const config = createConfig({
+            providers: [
+                provider('codex-a', { notSupportedModels: ['gpt-5.4-mini'] }),
+                provider('codex-b', { notSupportedModels: ['gpt-5.4-mini'] })
+            ],
+            keyData: { routingMode: 'pool' }
+        });
+        await initialize(config);
+
+        const result = await getApiServiceWithFallback(config, 'gpt-5.4-mini');
+
+        expect(result).toMatchObject({
+            actualModel: 'gpt-5.6-luna',
+            isFallback: true,
+            modelFallbackFrom: 'gpt-5.4-mini',
+            modelFallbackTo: 'gpt-5.6-luna'
+        });
+        expect(config._codexRouting).toMatchObject({ routingMode: 'pool', selectedGroupId: null });
+    });
+
+    test('fixed routing falls back only when the same credential supports Luna', async () => {
+        writeGroupConfig({
+            groups: [{ id: 'group-a', credentialUuids: ['codex-a'] }],
+            keyAssignments: [{
+                keyId: 'key-1',
+                routingMode: 'fixed',
+                fixedCredential: { providerType, uuid: 'codex-a' }
+            }]
+        });
+        const config = createConfig({
+            providers: [provider('codex-a', { supportedModels: ['gpt-5.6-luna'] })],
+            keyData: {
+                routingMode: 'fixed',
+                fixedCredential: { providerType, uuid: 'codex-a' }
+            }
+        });
+        await initialize(config);
+
+        const result = await getApiServiceWithFallback(config, 'gpt-5.4-mini');
+
+        expect(result).toMatchObject({ uuid: 'codex-a', actualModel: 'gpt-5.6-luna', isFallback: true });
+    });
+
+    test('fixed routing fails closed when a 429 source credential does not support Luna', async () => {
+        writeGroupConfig({
+            groups: [{ id: 'group-a', credentialUuids: ['codex-a'] }],
+            keyAssignments: [{
+                keyId: 'key-1',
+                routingMode: 'fixed',
+                fixedCredential: { providerType, uuid: 'codex-a' }
+            }]
+        });
+        const config = createConfig({
+            providers: [provider('codex-a', { supportedModels: ['gpt-5.4-mini'] })],
+            keyData: {
+                routingMode: 'fixed',
+                fixedCredential: { providerType, uuid: 'codex-a' }
+            }
+        });
+        const manager = await initialize(config);
+        jest.spyOn(manager, 'selectProviderWithFallback').mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 429, code: 429 }));
+
+        await expect(getApiServiceWithFallback(config, 'gpt-5.4-mini')).rejects.toMatchObject({
+            code: 'FIXED_CREDENTIAL_UNAVAILABLE'
+        });
+    });
+
     test('group routing never crosses into a configured provider fallback type', async () => {
         writeGroupConfig({
             groups: [{ id: 'group-a', credentialUuids: ['codex-a'] }],
@@ -326,8 +395,10 @@ describe('Service Manager Codex credential-group routing', () => {
         const selectSpy = jest.spyOn(manager, 'selectProviderWithFallback');
 
         await expect(getApiServiceWithFallback(config, 'gpt-5.4-mini')).rejects.toThrow('No healthy provider found');
-        expect(selectSpy).toHaveBeenCalledTimes(1);
+        expect(selectSpy).toHaveBeenCalledTimes(2);
         expect(selectSpy.mock.calls[0]).toEqual(expect.arrayContaining([providerType, 'gpt-5.4-mini']));
         expect(selectSpy.mock.calls[0][2]).toMatchObject({ disableProviderFallback: true });
+        expect(selectSpy.mock.calls[1]).toEqual(expect.arrayContaining([providerType, 'gpt-5.6-luna']));
+        expect(selectSpy.mock.calls[1][2]).toMatchObject({ disableProviderFallback: true });
     });
 });

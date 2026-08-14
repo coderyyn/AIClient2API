@@ -357,7 +357,7 @@ describe('provider pool Codex token quota', () => {
         expect(provider.codexQuotaHealth.general?.isHealthy).not.toBe(false);
     });
 
-    test('falls back Codex 5.3 Spark requests to 5.4 mini when every 5.3 quota bucket is exhausted', async () => {
+    test('falls back Codex 5.3 Spark requests to Luna when every 5.3 quota bucket is exhausted', async () => {
         writeCodexUsageCache([
             {
                 uuid: 'aaa-codex-over',
@@ -388,8 +388,8 @@ describe('provider pool Codex token quota', () => {
         ]);
 
         const manager = createQuotaPoolManager({
-            over: { supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'] },
-            ok: { supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'] }
+            over: { supportedModels: ['gpt-5.6-luna', 'gpt-5.3-codex-spark'] },
+            ok: { supportedModels: ['gpt-5.6-luna', 'gpt-5.3-codex-spark'] }
         });
 
         const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.3-codex-spark');
@@ -397,7 +397,7 @@ describe('provider pool Codex token quota', () => {
         expect(selected).toMatchObject({
             actualProviderType: 'openai-codex-oauth',
             isFallback: true,
-            actualModel: 'gpt-5.4-mini'
+            actualModel: 'gpt-5.6-luna'
         });
         expect(['aaa-codex-over', 'zzz-codex-ok']).toContain(selected.config.uuid);
     });
@@ -434,12 +434,12 @@ describe('provider pool Codex token quota', () => {
 
         const manager = createQuotaPoolManager({
             over: {
-                supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+                supportedModels: ['gpt-5.6-luna', 'gpt-5.3-codex-spark'],
                 codex53Max5hPercent: undefined,
                 codex53MaxWeeklyPercent: undefined
             },
             ok: {
-                supportedModels: ['gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+                supportedModels: ['gpt-5.6-luna', 'gpt-5.3-codex-spark'],
                 codex53Max5hPercent: undefined,
                 codex53MaxWeeklyPercent: undefined
             }
@@ -450,8 +450,40 @@ describe('provider pool Codex token quota', () => {
         expect(selected).toMatchObject({
             actualProviderType: 'openai-codex-oauth',
             isFallback: true,
-            actualModel: 'gpt-5.4-mini'
+            actualModel: 'gpt-5.6-luna'
         });
+    });
+
+    test('falls back unavailable 5.4 mini requests to Luna within the same provider pool', async () => {
+        writeCodexUsageCache([
+            { uuid: 'aaa-codex-over', success: true, usage: { summary: { plan: 'Pro' }, items: [] } },
+            { uuid: 'zzz-codex-ok', success: true, usage: { summary: { plan: 'Plus' }, items: [] } }
+        ]);
+        const manager = createQuotaPoolManager({
+            over: { notSupportedModels: ['gpt-5.4-mini'] },
+            ok: { notSupportedModels: ['gpt-5.4-mini'] }
+        });
+
+        const selected = await manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.4-mini');
+
+        expect(selected).toMatchObject({
+            actualProviderType: 'openai-codex-oauth',
+            isFallback: true,
+            actualModel: 'gpt-5.6-luna'
+        });
+    });
+
+    test('does not apply the Luna mapping to unrelated models', async () => {
+        writeCodexUsageCache([
+            { uuid: 'aaa-codex-over', success: true, usage: { summary: { plan: 'Pro' }, items: [] } },
+            { uuid: 'zzz-codex-ok', success: true, usage: { summary: { plan: 'Plus' }, items: [] } }
+        ]);
+        const manager = createQuotaPoolManager({
+            over: { notSupportedModels: ['gpt-5.5'] },
+            ok: { notSupportedModels: ['gpt-5.5'] }
+        });
+
+        await expect(manager.selectProviderWithFallback('openai-codex-oauth', 'gpt-5.5')).resolves.toBeNull();
     });
 
     test('uses 100 percent as the default Codex general bucket limit when no override is configured', async () => {
