@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const TARGET_DATE = '2026-08-13';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PRICING_PATH = path.resolve(SCRIPT_DIR, '../../src/plugins/api-potluck/pricing.json');
+const PRICING_PATH = process.env.USAGE_LEDGER_PRICING_FILE || path.resolve(SCRIPT_DIR, '../../src/plugins/api-potluck/pricing.json');
 const PRICING = JSON.parse(fs.readFileSync(PRICING_PATH, 'utf8'));
 
 function num(value) { const n = Number(value); return Number.isFinite(n) ? n : 0; }
@@ -60,6 +60,8 @@ function recalcCost(bucket, model) {
 function estimate(bucket, base) {
   if (!base || num(bucket?.promptTokens) <= 0) return null;
   const observed = Math.max(0, Math.round(num(bucket.cachedTokens)));
+  const observedRate = observed / num(bucket.promptTokens);
+  if (observed > 0 && observedRate >= base.rate * 0.25) return null;
   const estimated = Math.min(Math.round(num(bucket.promptTokens)), Math.max(0, Math.round(num(bucket.promptTokens) * base.rate)));
   if (estimated <= observed) return null;
   return { delta: estimated - observed, observed, estimated, base };
@@ -77,20 +79,6 @@ function getAt(root, parts) { return parts.reduce((value, part) => value?.[part]
 function summarizeDay(day) {
   const summary = day?.summary || {};
   return { requestCount: num(summary.requestCount), promptTokens: num(summary.promptTokens), cachedTokens: num(summary.cachedTokens), completionTokens: num(summary.completionTokens), reasoningTokens: num(summary.reasoningTokens), totalTokens: num(summary.totalTokens), cost: summary.cost || null };
-}
-function recalcDayCosts(day) {
-  if (!day) return;
-  if (day.summary) day.summary.cost = day.models ? Object.fromEntries(Object.entries(day.models).map(([model, usage]) => [model, recalcCost(usage, model)])) : day.summary.cost;
-  for (const [model, usage] of Object.entries(day.models || {})) usage.cost = recalcCost(usage, model);
-  for (const account of Object.values(day.accounts || {})) {
-    for (const [model, usage] of Object.entries(account.models || {})) usage.cost = recalcCost(usage, model);
-  }
-  for (const hour of Object.values(day.hours || {})) {
-    for (const [model, usage] of Object.entries(hour.models || {})) usage.cost = recalcCost(usage, model);
-    for (const account of Object.values(hour.accounts || {})) {
-      for (const [model, usage] of Object.entries(account.models || {})) usage.cost = recalcCost(usage, model);
-    }
-  }
 }
 function parseArgs(argv) {
   const args = { base: process.cwd(), outDir: null, bundle: null, backupDir: null, apply: false };
@@ -148,12 +136,17 @@ async function main() {
       target.baseline = { window: change.base.window, sampleDays: change.base.sampleDays, medianCacheHitRatio: change.base.rate };
       target.cacheHitRatio = num(target.promptTokens) > 0 ? target.cachedTokens / num(target.promptTokens) : 0;
       if (model) target.cost = recalcCost(target, model);
-      patches.push({ keyHash: keyId, date: TARGET_DATE, path: bucketPath.join('.'), model, deltaCachedTokens: change.delta, observedCachedTokens: change.observed, estimatedCachedTokens: change.estimated, dataQuality: target.dataQuality, cacheRateSource: target.cacheRateSource, baseline: target.baseline });
+      patches.push({ keyHash: keyId, date: TARGET_DATE, path: bucketPath, pathLabel: bucketPath.join('.'), model, deltaCachedTokens: change.delta, observedCachedTokens: change.observed, estimatedCachedTokens: change.estimated, dataQuality: target.dataQuality, cacheRateSource: target.cacheRateSource, baseline: target.baseline });
     });
     after[keyId] = summarizeDay(nextDay);
   }
 
-  const report = { schemaVersion: 1, mode: 'dry-run', targetDate: TARGET_DATE, generatedAt: new Date().toISOString(), affectedKeys: Object.keys(after).length, patchCount: patches.length, totalDeltaCachedTokens: patches.reduce((sum, item) => sum + item.deltaCachedTokens, 0), before, after };
+  const summaryPatches = patches.filter(item => item.pathLabel === 'summary');
+  const affectedKeyHashes = new Set(patches.map(item => item.keyHash));
+  for (const keyId of Object.keys(before)) {
+    if (!affectedKeyHashes.has(keyId)) { delete before[keyId]; delete after[keyId]; }
+  }
+  const report = { schemaVersion: 1, mode: 'dry-run', targetDate: TARGET_DATE, generatedAt: new Date().toISOString(), affectedKeys: affectedKeyHashes.size, patchCount: patches.length, summaryPatchCount: summaryPatches.length, totalDeltaCachedTokens: summaryPatches.reduce((sum, item) => sum + item.deltaCachedTokens, 0), anomalyThreshold: 'observed=0 or observedRate<25% of baseline', before, after };
   const manifest = { schemaVersion: 1, targetDate: TARGET_DATE, source: { path: path.basename(potluckPath), sha256: sha256File(potluckPath) }, patchSha256: sha256(JSON.stringify(patches)), apply: Boolean(args.apply) };
   if (!args.apply) {
     await fsp.mkdir(outDir, { recursive: true, mode: 0o700 });
@@ -177,7 +170,9 @@ async function main() {
     for (const item of approvedPatches) {
       const rawKey = Object.keys(appliedNext.keys || {}).find(key => keyHash(key) === item.keyHash);
       if (!rawKey) throw new Error(`key hash no longer exists: ${item.keyHash}`);
-      const target = getAt(appliedNext.keys[rawKey].usageHistory[TARGET_DATE], item.path.split('.'));
+      if (!Array.isArray(item.path)) throw new Error(`invalid patch path for ${item.keyHash}`);
+      const target = getAt(appliedNext.keys[rawKey].usageHistory[TARGET_DATE], item.path);
+      if (!target) throw new Error(`patch path no longer exists: ${item.keyHash}:${item.pathLabel || item.path.join('.')}`);
       target.cachedTokens = num(target.cachedTokens) + num(item.deltaCachedTokens);
       target.observedCachedTokens = num(item.observedCachedTokens);
       target.estimatedCachedTokens = num(item.estimatedCachedTokens);
@@ -185,12 +180,11 @@ async function main() {
       target.cacheRateSource = item.cacheRateSource;
       target.baseline = item.baseline;
       target.cacheHitRatio = num(target.promptTokens) > 0 ? target.cachedTokens / num(target.promptTokens) : 0;
-      if (item.path === 'summary') {
+      if (item.pathLabel === 'summary') {
         deltasByKey[rawKey] = (deltasByKey[rawKey] || 0) + num(item.deltaCachedTokens);
       }
     }
     for (const rawKey of Object.keys(appliedNext.keys || {})) {
-      recalcDayCosts(appliedNext.keys[rawKey].usageHistory?.[TARGET_DATE]);
       if (deltasByKey[rawKey]) {
         appliedNext.keys[rawKey].totalCachedTokens = num(appliedNext.keys[rawKey].totalCachedTokens) + deltasByKey[rawKey];
       }
