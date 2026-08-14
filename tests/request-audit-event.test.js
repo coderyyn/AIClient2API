@@ -2,7 +2,7 @@ import { buildRequestAuditEvent } from '../src/plugins/request-audit/audit-event
 import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
 
 describe('request audit event', () => {
-  test('builds a self-contained v2 event with request network and response facts', () => {
+  test('builds a self-contained v3 event with request network and response facts', () => {
     const event = buildRequestAuditEvent({
       requestId: 'req-v2',
       method: 'POST',
@@ -22,7 +22,7 @@ describe('request audit event', () => {
     });
 
     expect(event).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       request: {
         method: 'POST',
         path: '/openai-codex-oauth/v1/chat/completions',
@@ -175,6 +175,11 @@ describe('request audit event', () => {
         requestedPrimaryGroupId: 'group-a',
         selectedGroupId: 'group-b',
         selectedProviderUuid: 'private-selected-provider-uuid',
+        actualProviderGroupId: 'group-b',
+        providerSwitchCount: 2,
+        modelFallbackFrom: 'gpt-5.4-mini',
+        modelFallbackTo: 'gpt-5.6-luna',
+        modelFallbackReason: 'UPSTREAM_429',
         spillover: true,
         spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
         assignmentMissing: false,
@@ -190,6 +195,12 @@ describe('request audit event', () => {
       requestedPrimaryGroupId: 'group-a',
       selectedGroupId: 'group-b',
       selectedProviderUuidHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
+      consistencyStatus: 'mismatch',
+      actualProviderGroupId: 'group-b',
+      providerSwitchCount: 2,
+      modelFallbackFrom: 'gpt-5.4-mini',
+      modelFallbackTo: 'gpt-5.6-luna',
+      modelFallbackReason: 'UPSTREAM_429',
       spillover: true,
       spilloverReason: 'PRIMARY_GROUP_UNAVAILABLE',
       assignmentMissing: false,
@@ -202,6 +213,39 @@ describe('request audit event', () => {
     expect(serialized).not.toContain('private-selected-provider-uuid');
     expect(serialized).not.toContain('private-affinity-value');
     expect(serialized).not.toContain('private-oauth-token');
+  });
+
+  test('marks successful Codex routing consistent when selected and actual provider hashes match', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'req-routing-consistent',
+      providerUuid: 'provider-final',
+      model: 'gpt-5.6-luna',
+      _codexRouting: {
+        routingMode: 'pool',
+        selectedGroupId: null,
+        selectedProviderUuid: 'provider-final',
+        actualProviderGroupId: null,
+        assignmentMissing: false
+      },
+      response: { httpStatus: 200, completed: true }
+    });
+
+    expect(event.routing.consistencyStatus).toBe('consistent');
+    expect(event.routing.selectedProviderUuidHash).toBe(event.account.providerUuidHash);
+    expect(event.routing.assignmentMissing).toBe(false);
+  });
+
+  test('continues summarizing legacy schema v2 events', () => {
+    const summary = buildAuditSummary([{
+      schemaVersion: 2,
+      requestId: 'legacy-v2',
+      request: { model: 'gpt-5.4-mini' },
+      account: { providerUuidHash: 'sha256:legacy' },
+      status: { outcome: 'success' },
+      usage: { totalTokens: 12 }
+    }]);
+
+    expect(summary.summary.requestCount).toBe(1);
   });
 
   test('uses account email as the summary account key when present', () => {

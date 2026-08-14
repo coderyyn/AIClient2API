@@ -130,9 +130,14 @@ export function buildRequestAuditEvent(context = {}) {
     const cacheAffinityScope = context._codexCacheAffinityScope || {};
     const response = normalizeResponse(context);
     const derivedStatus = deriveStatus(context, response);
+    const selectedProviderUuid = context._codexRouting?.selectedProviderUuid || null;
+    const actualProviderUuid = context.providerUuid || null;
+    const consistencyStatus = selectedProviderUuid && actualProviderUuid
+        ? selectedProviderUuid === actualProviderUuid ? 'consistent' : 'mismatch'
+        : 'unverifiable';
 
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         timestamp,
         beijingDate: beijing.date,
         beijingHour: beijing.hour,
@@ -167,12 +172,18 @@ export function buildRequestAuditEvent(context = {}) {
             providerNameDisplay: sanitizeProviderName(context.providerName)
         },
         routing: {
-            routingMode: context._codexRouting?.routingMode === 'fixed' || context._codexRouting?.routingMode === 'auto'
+            routingMode: ['pool', 'auto', 'fixed'].includes(context._codexRouting?.routingMode)
                 ? context._codexRouting.routingMode
                 : null,
             requestedPrimaryGroupId: context._codexRouting?.requestedPrimaryGroupId || null,
             selectedGroupId: context._codexRouting?.selectedGroupId || null,
-            selectedProviderUuidHash: hashSecret(context._codexRouting?.selectedProviderUuid),
+            selectedProviderUuidHash: hashSecret(selectedProviderUuid),
+            consistencyStatus,
+            actualProviderGroupId: context._codexRouting?.actualProviderGroupId || null,
+            providerSwitchCount: toNumber(context._codexRouting?.providerSwitchCount),
+            modelFallbackFrom: context._codexRouting?.modelFallbackFrom || null,
+            modelFallbackTo: context._codexRouting?.modelFallbackTo || null,
+            modelFallbackReason: context._codexRouting?.modelFallbackReason || null,
             spillover: context._codexRouting?.spillover === true,
             spilloverReason: context._codexRouting?.spilloverReason || null,
             assignmentMissing: context._codexRouting?.assignmentMissing === true,

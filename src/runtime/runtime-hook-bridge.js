@@ -14,12 +14,17 @@ function containsImage(value, seen = new Set()) {
 function compactCodexRouting(routing) {
     if (!routing || typeof routing !== 'object') return undefined;
     return {
-        routingMode: routing.routingMode === 'fixed' || routing.routingMode === 'auto'
+        routingMode: ['pool', 'auto', 'fixed'].includes(routing.routingMode)
             ? routing.routingMode
             : null,
         requestedPrimaryGroupId: routing.requestedPrimaryGroupId || null,
         selectedGroupId: routing.selectedGroupId || null,
         selectedProviderUuid: routing.selectedProviderUuid || null,
+        actualProviderGroupId: routing.actualProviderGroupId || null,
+        providerSwitchCount: Math.max(0, Number(routing.providerSwitchCount) || 0),
+        modelFallbackFrom: routing.modelFallbackFrom || null,
+        modelFallbackTo: routing.modelFallbackTo || null,
+        modelFallbackReason: routing.modelFallbackReason || null,
         spillover: routing.spillover === true,
         spilloverReason: routing.spilloverReason || null,
         assignmentMissing: routing.assignmentMissing === true,

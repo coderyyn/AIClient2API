@@ -23,6 +23,7 @@ import { codexCredentialGroupAffinityStore } from '../providers/openai/codex-cre
 import { readGeminiCredentialEmail } from '../utils/gemini-account.js';
 import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
 import { CredentialGroupService, routeKeyToCredentialCandidates } from './codex-credential-group-service.js';
+import { getCodexRoutingConsistencyStatus } from './codex-routing-integrity.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
@@ -136,6 +137,12 @@ const CODEX_ROUTING_DIAGNOSTIC_FIELDS = new Set([
     'requestedPrimaryGroupId',
     'selectedGroupId',
     'selectedProviderUuid',
+    'actualProviderGroupId',
+    'providerSwitchCount',
+    'modelFallbackFrom',
+    'modelFallbackTo',
+    'modelFallbackReason',
+    'consistencyStatus',
     'spillover',
     'spilloverReason',
     'affinitySource',
@@ -1305,7 +1312,7 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             modelFallbackAttempted: true,
             excludeProviderUuids: []
         });
-        return {
+        const result = {
             ...fallbackResult,
             isFallback: true,
             actualModel: fallbackResult.actualModel || codexFallbackTarget,
@@ -1313,6 +1320,14 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
             modelFallbackTo: fallbackResult.actualModel || codexFallbackTarget,
             modelFallbackReason: options.modelFallbackReason || 'MODEL_UNAVAILABLE'
         };
+        finalizeCodexRouteResult(config, {
+            selectedProviderUuid: result.uuid,
+            actualModel: result.actualModel,
+            modelFallbackFrom: result.modelFallbackFrom,
+            modelFallbackTo: result.modelFallbackTo,
+            modelFallbackReason: result.modelFallbackReason
+        });
+        return result;
     }
 
     // 模型列表特殊场景：AUTO 且无模型名
@@ -1501,6 +1516,19 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     if (config._codexRouting) {
         config._codexRouting.hotShardApplied = selectionDiagnostics.hotShardApplied === true;
     }
+
+    const fallbackMetadata = isFallback && codexFallbackTarget && actualModel !== actualModelName
+        ? {
+            modelFallbackFrom: actualModelName,
+            modelFallbackTo: actualModel,
+            modelFallbackReason: selectedModelFallbackReason || options.modelFallbackReason || 'MODEL_UNAVAILABLE'
+        }
+        : {};
+    finalizeCodexRouteResult(config, {
+        selectedProviderUuid: selectedUuid,
+        actualModel,
+        ...fallbackMetadata
+    });
     
     return {
         service,
@@ -1509,14 +1537,48 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         isFallback,
         uuid: selectedUuid,
         actualModel,
-        ...(isFallback && codexFallbackTarget && actualModel !== actualModelName
-            ? {
-                modelFallbackFrom: actualModelName,
-                modelFallbackTo: actualModel,
-                modelFallbackReason: selectedModelFallbackReason || options.modelFallbackReason || 'MODEL_UNAVAILABLE'
-            }
+        ...fallbackMetadata
+    };
+}
+
+function finalizeCodexRouteResult(config, {
+    selectedProviderUuid = null,
+    actualModel = null,
+    modelFallbackFrom = null,
+    modelFallbackTo = null,
+    modelFallbackReason = null
+} = {}) {
+    const diagnostics = config._codexRouting || {};
+    const previous = config._codexRouteResult || {};
+    const routingMode = diagnostics.routingMode || previous.routingMode || null;
+    const finalProviderUuid = selectedProviderUuid || diagnostics.selectedProviderUuid || previous.selectedProviderUuid || null;
+    const previousProviderUuid = previous.selectedProviderUuid || null;
+    const selectedGroupId = routingMode === 'pool'
+        ? null
+        : diagnostics.selectedGroupId || previous.selectedGroupId || null;
+    const actualProviderGroupId = routingMode === 'pool' ? null : selectedGroupId;
+    const providerSwitchCount = Number(previous.providerSwitchCount || 0)
+        + (previousProviderUuid && finalProviderUuid && previousProviderUuid !== finalProviderUuid ? 1 : 0);
+    const routeResult = {
+        ...previous,
+        ...diagnostics,
+        routingMode,
+        selectedGroupId,
+        selectedProviderUuid: finalProviderUuid,
+        actualProviderGroupId,
+        providerSwitchCount,
+        actualModel: actualModel || previous.actualModel || null,
+        modelFallbackFrom: modelFallbackFrom || previous.modelFallbackFrom || null,
+        modelFallbackTo: modelFallbackTo || previous.modelFallbackTo || null,
+        modelFallbackReason: modelFallbackReason || previous.modelFallbackReason || null,
+        ...(routingMode === 'fixed'
+            ? { fixedCredentialUuid: config.potluckKeyData?.fixedCredential?.uuid || previous.fixedCredentialUuid || null }
             : {})
     };
+    routeResult.consistencyStatus = getCodexRoutingConsistencyStatus(routeResult, finalProviderUuid);
+    config._codexRouteResult = routeResult;
+    updateCodexRoutingDiagnostics(config, routeResult);
+    return routeResult;
 }
 
 /**

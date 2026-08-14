@@ -27,6 +27,7 @@ import {
     initApiService
 } from '../src/services/service-manager.js';
 import { codexCredentialGroupAffinityStore } from '../src/providers/openai/codex-credential-group-affinity.js';
+import { assertCodexRoutingIntegrity } from '../src/services/codex-routing-integrity.js';
 
 const providerType = 'openai-codex-oauth';
 let tempDir;
@@ -300,6 +301,61 @@ describe('Service Manager Codex credential-group routing', () => {
             selectedProviderUuid: result.uuid,
             assignmentMissing: false
         });
+        expect(config._codexRouteResult).toMatchObject({
+            routingMode: 'pool',
+            selectedGroupId: null,
+            selectedProviderUuid: result.uuid,
+            actualProviderGroupId: null,
+            providerSwitchCount: 0,
+            consistencyStatus: 'consistent'
+        });
+    });
+
+    test('fails closed before sending when final provider routing is inconsistent', () => {
+        const config = createConfig({ keyData: { routingMode: 'auto', primaryGroupId: 'group-a' } });
+        config._codexRouteResult = {
+            routingMode: 'auto',
+            selectedGroupId: 'group-a',
+            actualProviderGroupId: 'group-b',
+            selectedProviderUuid: 'codex-a'
+        };
+
+        expect(() => assertCodexRoutingIntegrity(config, 'codex-b')).toThrow(expect.objectContaining({
+            code: 'ROUTING_INTEGRITY_VIOLATION'
+        }));
+    });
+
+    test('updates the final route result after a provider switch', async () => {
+        writeGroupConfig({
+            groups: [
+                { id: 'group-a', credentialUuids: ['codex-a'] },
+                { id: 'group-b', credentialUuids: ['codex-b'] }
+            ],
+            keyAssignments: [{ keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-a' }]
+        });
+        const config = createConfig();
+        await initialize(config);
+
+        const first = await getApiServiceWithFallback(config, 'gpt-5.4-mini');
+        const second = await getApiServiceWithFallback(config, 'gpt-5.4-mini', {
+            excludeProviderUuids: [first.uuid]
+        });
+
+        expect(first.uuid).toBe('codex-a');
+        expect(second.uuid).toBe('codex-b');
+        expect(config._codexRouteResult).toMatchObject({
+            routingMode: 'auto',
+            selectedGroupId: 'group-b',
+            selectedProviderUuid: 'codex-b',
+            actualProviderGroupId: 'group-b',
+            providerSwitchCount: 1,
+            consistencyStatus: 'consistent'
+        });
+        expect(config._codexRouting).toMatchObject({
+            selectedGroupId: 'group-b',
+            selectedProviderUuid: 'codex-b',
+            providerSwitchCount: 1
+        });
     });
 
     test('pool routing falls back unavailable 5.4 mini requests to Luna', async () => {
@@ -322,6 +378,15 @@ describe('Service Manager Codex credential-group routing', () => {
             modelFallbackTo: 'gpt-5.6-luna'
         });
         expect(config._codexRouting).toMatchObject({ routingMode: 'pool', selectedGroupId: null });
+        expect(config._codexRouteResult).toMatchObject({
+            routingMode: 'pool',
+            selectedProviderUuid: result.uuid,
+            actualModel: 'gpt-5.6-luna',
+            modelFallbackFrom: 'gpt-5.4-mini',
+            modelFallbackTo: 'gpt-5.6-luna',
+            modelFallbackReason: 'SOURCE_MODEL_UNAVAILABLE',
+            consistencyStatus: 'consistent'
+        });
     });
 
     test('fixed routing falls back only when the same credential supports Luna', async () => {

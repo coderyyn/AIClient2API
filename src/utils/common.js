@@ -20,6 +20,7 @@ import {
     extractOriginalCodexSessionId
 } from '../providers/openai/codex-fingerprint.js';
 import requestContext from './context.js';
+import { assertCodexRoutingIntegrity } from '../services/codex-routing-integrity.js';
 
 const CODEX_FINGERPRINT_HEADER_NAMES = Object.freeze([
     'x-codex-turn-metadata',
@@ -1395,6 +1396,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // The service returns a stream in its native format (toProvider).
         const needsConversion = getProtocolPrefix(fromProvider) !== getProtocolPrefix(toProvider);
         requestBody.model = model;
+        assertCodexRoutingIntegrity(CONFIG || {}, pooluuid);
         const nativeStream = await service.generateContentStream(model, requestBody);
         
         // 如果提供者内部发生了模型回退（如 Antigravity 自动降级），同步更新本地 model 变量
@@ -1818,6 +1820,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         const needsConversion = getProtocolPrefix(fromProvider) !== getProtocolPrefix(toProvider);
         requestBody.model = model;
         // fs.writeFile('oldRequest'+Date.now()+'.json', JSON.stringify(requestBody));
+        assertCodexRoutingIntegrity(CONFIG || {}, pooluuid);
         const nativeResponse = await service.generateContent(model, requestBody);
         
         // 如果提供者内部发生了模型回退（如 Antigravity 自动降级），同步更新本地 model 变量
@@ -2371,7 +2374,9 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     if (processedRequestBody.model && processedRequestBody.model !== model) {
         model = processedRequestBody.model;
     }
+    const finalRouteResult = CONFIG._codexRouteResult || null;
     const finalUsageModel = getUsageTrackingModel(model, processedRequestBody, toProvider);
+    const finalUsageModelForAudit = finalRouteResult?.actualModel || finalUsageModel;
 
     // 执行插件钩子：内容生成后
     try {
@@ -2382,11 +2387,11 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             processedRequestBody,
             fromProvider,
             toProvider,
-            providerUuid: actualUuid,
+            providerUuid: finalRouteResult?.selectedProviderUuid || actualUuid,
             providerName: actualCustomName,
             accountIdentity: actualAccountIdentity,
             accountEmail: actualAccountEmail,
-            model: finalUsageModel,
+            model: finalUsageModelForAudit,
             isStream
         });
     } catch (e) { /* 静默失败，不影响主流程 */ }
