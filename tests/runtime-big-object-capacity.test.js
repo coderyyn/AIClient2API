@@ -16,6 +16,53 @@ describe('BigObjectCapacity', () => {
         await expect(capacity.acquire({ bytes: 1, kind: 'image' })).rejects.toMatchObject({ code: 'IMAGE_CAPACITY_EXCEEDED', statusCode: 429 });
     });
 
+    test('does not treat cumulative output backpressure as a permanent image admission block', async () => {
+        const capacity = new BigObjectCapacity({
+            budgetBytes: 100,
+            queueLimit: 0,
+            waitMs: 5,
+            metrics: {
+                rssBytes: 10,
+                rssLimitBytes: 1000,
+                eventLoopP95Ms: 20,
+                backpressureMs: 10_000
+            }
+        });
+
+        await expect(capacity.acquire({ bytes: 20, kind: 'image' })).resolves.toMatchObject({
+            bytes: 20,
+            kind: 'image'
+        });
+    });
+
+    test('reports safe capacity diagnostics when a current pressure gate rejects work', async () => {
+        const capacity = new BigObjectCapacity({
+            budgetBytes: 100,
+            queueLimit: 0,
+            waitMs: 5,
+            metrics: {
+                rssBytes: 850,
+                rssLimitBytes: 1000,
+                eventLoopP95Ms: 250,
+                backpressureMs: 99_999
+            }
+        });
+
+        await expect(capacity.acquire({ bytes: 20, kind: 'image-edit' })).rejects.toMatchObject({
+            code: 'IMAGE_CAPACITY_EXCEEDED',
+            details: {
+                blockedReasons: ['rss', 'event_loop'],
+                activeBytes: 0,
+                budgetBytes: 100,
+                estimatedBytes: 20,
+                rssBytes: 850,
+                rssLimitBytes: 1000,
+                eventLoopP95Ms: 250,
+                queued: 0
+            }
+        });
+    });
+
     test('uses 25% of a container limit and scales queue size with healthy credentials', () => {
         expect(resolveBigObjectBudget({ containerLimitBytes: 8 * 1024 ** 3 })).toBe(2 * 1024 ** 3);
         expect(resolveBigObjectBudget({ containerLimitBytes: null })).toBe(2 * 1024 ** 3);

@@ -106,3 +106,6 @@ DECISION: Reuse the existing multi-worker control-process single-writer architec
 验证：6 个 Jest suite、65 个测试通过；4 个 JS 文件 node --check 通过；Potluck 内嵌脚本检查通过；git diff --check 通过。未执行真实浏览器截图或页面 smoke，未执行 git push。
 环境记录：一次 PowerShell 传递正则的 node -e 命令因双重转义失败，改用单引号包裹的内存 vm.Script 检查成功；此前临时文件语法检查方式受本机策略拦截，未改用写盘绕过。
 RETROSPECTIVE: No high-signal memory updates.
+
+## gpt-image-2 Capacity Hotfix - 2026-08-14T19:06:29+08:00
+DECISION: 复用现有 BigObjectCapacity、RuntimeMetrics 与分块响应机制，不新增第二套限流器；累计 backpressureMs 仅保留观测用途，图片准入继续由 active byte budget、单 worker RSS 与 event-loop p95 控制，避免累计指标形成永久熔断。

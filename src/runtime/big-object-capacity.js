@@ -1,11 +1,12 @@
 export class ImageCapacityExceededError extends Error {
-    constructor(message = 'Image capacity exceeded') {
+    constructor(message = 'Image capacity exceeded', details = null) {
         super(message);
         this.name = 'ImageCapacityExceededError';
         this.code = 'IMAGE_CAPACITY_EXCEEDED';
         this.status = 429;
         this.statusCode = 429;
         this.retryAfterSeconds = 5;
+        if (details) this.details = details;
     }
 }
 
@@ -28,13 +29,35 @@ export class BigObjectCapacity {
         this.queue = [];
     }
 
-    _blocked(bytes) {
+    _blockedReasons(bytes) {
         const rssLimit = Number(this.metrics.rssLimitBytes);
         const rss = Number(this.metrics.rssBytes);
-        return this.activeBytes + bytes > this.budgetBytes
-            || (rssLimit > 0 && rss >= rssLimit * 0.8)
-            || Number(this.metrics.eventLoopP95Ms) > 200
-            || Number(this.metrics.backpressureMs) > 0;
+        const reasons = [];
+        if (this.activeBytes + bytes > this.budgetBytes) reasons.push('budget');
+        if (rssLimit > 0 && rss >= rssLimit * 0.8) reasons.push('rss');
+        if (Number(this.metrics.eventLoopP95Ms) > 200) reasons.push('event_loop');
+        return reasons;
+    }
+
+    _blocked(bytes) {
+        return this._blockedReasons(bytes).length > 0;
+    }
+
+    _capacityDetails(bytes) {
+        return {
+            blockedReasons: this._blockedReasons(bytes),
+            activeBytes: this.activeBytes,
+            budgetBytes: this.budgetBytes,
+            estimatedBytes: bytes,
+            rssBytes: Number(this.metrics.rssBytes) || 0,
+            rssLimitBytes: Number(this.metrics.rssLimitBytes) || 0,
+            eventLoopP95Ms: Number(this.metrics.eventLoopP95Ms) || 0,
+            queued: this.queue.length
+        };
+    }
+
+    _capacityError(bytes) {
+        return new ImageCapacityExceededError('Image capacity exceeded', this._capacityDetails(bytes));
     }
 
     acquire({ bytes, kind = 'image' } = {}) {
@@ -43,13 +66,13 @@ export class BigObjectCapacity {
             this.activeBytes += estimatedBytes;
             return Promise.resolve({ bytes: estimatedBytes, kind });
         }
-        if (this.queue.length >= this.queueLimit) return Promise.reject(new ImageCapacityExceededError());
+        if (this.queue.length >= this.queueLimit) return Promise.reject(this._capacityError(estimatedBytes));
         return new Promise((resolve, reject) => {
             const item = { bytes: estimatedBytes, kind, resolve, reject };
             item.timer = setTimeout(() => {
                 const index = this.queue.indexOf(item);
                 if (index >= 0) this.queue.splice(index, 1);
-                reject(new ImageCapacityExceededError());
+                reject(this._capacityError(estimatedBytes));
             }, this.waitMs);
             item.timer.unref?.();
             this.queue.push(item);

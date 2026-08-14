@@ -1,5 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals';
-import { buildImageGenerationErrorAudit } from '../src/services/api-manager.js';
+import { buildImageCapacityErrorLog, buildImageGenerationErrorAudit } from '../src/services/api-manager.js';
 
 jest.mock('../src/services/service-manager.js', () => ({
     getProviderPoolManager: jest.fn(),
@@ -7,6 +7,25 @@ jest.mock('../src/services/service-manager.js', () => ({
 }));
 
 describe('image generation error audit', () => {
+    test('keeps capacity diagnostics safe and separate from the client-facing error message', () => {
+        const error = new Error('Image capacity exceeded');
+        error.code = 'IMAGE_CAPACITY_EXCEEDED';
+        error.details = {
+            blockedReasons: ['rss', 'event_loop'],
+            activeBytes: 0,
+            budgetBytes: 100,
+            estimatedBytes: 20,
+            rssBytes: 850,
+            rssLimitBytes: 1000,
+            eventLoopP95Ms: 250,
+            queued: 0
+        };
+
+        expect(buildImageCapacityErrorLog(error)).toEqual(error.details);
+        expect(buildImageCapacityErrorLog(new Error('upstream failed'))).toBeNull();
+        expect(JSON.stringify(buildImageCapacityErrorLog(error))).not.toMatch(/token|cookie|apiKey|uuid/i);
+    });
+
     test('captures upstream 429 details and retry decision without raw payloads', () => {
         const error = new Error('rate limited');
         error.response = {

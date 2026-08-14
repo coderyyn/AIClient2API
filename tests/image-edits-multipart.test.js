@@ -31,6 +31,7 @@ jest.mock('../src/utils/logger.js', () => ({
 }));
 
 import logger from '../src/utils/logger.js';
+import { runtimeMetrics } from '../src/runtime/runtime-metrics.js';
 
 function makeMultipartRequest(parts) {
     const boundary = '----aiclient2api-test-boundary';
@@ -400,6 +401,36 @@ describe('/v1/images/edits multipart handling', () => {
             expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[Image Edits] internal overload retry 1/1'));
         } finally {
             randomSpy.mockRestore();
+        }
+    });
+
+    test('continues to call the image provider when cumulative output backpressure is already high', async () => {
+        const previousBackpressureMs = runtimeMetrics.output.backpressureMs;
+        runtimeMetrics.output.backpressureMs = 10_000;
+        try {
+            const req = makeMultipartRequest([
+                { name: 'model', value: 'gpt-image-2' },
+                { name: 'prompt', value: 'edit this image' },
+                { name: 'image', file: true, filename: 'input.png', contentType: 'image/png', value: 'input-image' }
+            ]);
+            const res = makeResponse();
+
+            const handled = await handleAPIRequests(
+                'POST',
+                '/v1/images/edits',
+                req,
+                res,
+                { MODEL_PROVIDER: 'openai-codex-oauth' },
+                null,
+                null,
+                null
+            );
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+        } finally {
+            runtimeMetrics.output.backpressureMs = previousBackpressureMs;
         }
     });
 

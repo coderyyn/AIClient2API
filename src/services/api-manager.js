@@ -287,6 +287,27 @@ function logImagePayloadSummary(scope, model, payload) {
     }
 }
 
+export function buildImageCapacityErrorLog(error) {
+    if (error?.code !== 'IMAGE_CAPACITY_EXCEEDED' || !error?.details) return null;
+    const details = error.details;
+    return {
+        blockedReasons: Array.isArray(details.blockedReasons) ? details.blockedReasons : [],
+        activeBytes: Number(details.activeBytes) || 0,
+        budgetBytes: Number(details.budgetBytes) || 0,
+        estimatedBytes: Number(details.estimatedBytes) || 0,
+        rssBytes: Number(details.rssBytes) || 0,
+        rssLimitBytes: Number(details.rssLimitBytes) || 0,
+        eventLoopP95Ms: Number(details.eventLoopP95Ms) || 0,
+        queued: Number(details.queued) || 0
+    };
+}
+
+function logImageRequestError(scope, error) {
+    logger.error(`[${scope}] Error:`, error.message);
+    const capacity = buildImageCapacityErrorLog(error);
+    if (capacity) logger.error(`[${scope}] Capacity diagnostics: ${JSON.stringify(capacity)}`);
+}
+
 function getHeaderValue(headers = {}, name) {
     const lowerName = name.toLowerCase();
     for (const [key, value] of Object.entries(headers || {})) {
@@ -729,7 +750,7 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             headers: processingMetadata ? buildImageProcessingHeaders(processingMetadata) : {}
         });
     } catch (error) {
-        logger.error('[Image Generation] Error:', error.message);
+        logImageRequestError('Image Generation', error);
 
         if (!res.writableEnded && writeImageProcessingError(res, error)) {
             return;
@@ -1194,7 +1215,7 @@ async function handleImageEditsRequest(req, res, currentConfig, providerPoolMana
             headers: processingMetadata ? buildImageProcessingHeaders(processingMetadata) : {}
         });
     } catch (error) {
-        logger.error('[Image Edits] Error:', error.message);
+        logImageRequestError('Image Edits', error);
         if (!res.writableEnded && writeImageProcessingError(res, error)) {
             return;
         }

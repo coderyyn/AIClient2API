@@ -29,12 +29,17 @@ export function estimateImageResponseBytes({ n = 1, inputBytes = 0 } = {}) {
     return Math.ceil(images * perImage + Math.max(0, Number(inputBytes) || 0) * 1.5);
 }
 
+export function buildImageCapacitySignals(snapshot = {}, rssLimitBytes = 0) {
+    return {
+        rssBytes: Number(snapshot?.process?.rss) || 0,
+        rssLimitBytes: Number(rssLimitBytes) || 0,
+        eventLoopP95Ms: Number(snapshot?.process?.eventLoopDelay?.p95) || 0
+    };
+}
+
 export function updateImageCapacitySignals(providerPoolManager) {
     const snapshot = runtimeMetrics.snapshot();
-    metrics.rssBytes = snapshot.process.rss;
-    metrics.rssLimitBytes = readContainerLimitBytes() || 0;
-    metrics.eventLoopP95Ms = snapshot.stages.eventLoopDelay?.p95 || 0;
-    metrics.backpressureMs = snapshot.output.backpressureMs > 1000 ? snapshot.output.backpressureMs : 0;
+    Object.assign(metrics, buildImageCapacitySignals(snapshot, readContainerLimitBytes()));
     const healthy = Object.keys(providerPoolManager?.providerStatus || {})
         .reduce((total, type) => total + providerPoolManager.getHealthyCount(type), 0);
     runtimeImageCapacity.queueLimit = resolveImageQueueLimit(healthy);
