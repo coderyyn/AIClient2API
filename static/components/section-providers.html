@@ -44,6 +44,110 @@
             </div>
         </div>
     </div>
+
+    <div class="credential-groups-panel" id="credentialGroupsPanel" aria-labelledby="credential-groups-title">
+        <div class="credential-groups-header">
+            <div class="credential-groups-heading">
+                <span class="credential-groups-heading-icon" aria-hidden="true"><i class="fas fa-diagram-project"></i></span>
+                <div>
+                    <h3 id="credential-groups-title" data-i18n="providers.credentialGroups.title">Codex OAuth 凭据组路由</h3>
+                    <p data-i18n="providers.credentialGroups.subtitle">查看脱敏后的 Key、凭据组与凭据关系；重新计算只生成 5 分钟预览，确认后才会应用。</p>
+                </div>
+            </div>
+            <div class="credential-groups-actions">
+                <button type="button" class="btn btn-secondary" id="credentialGroupsRefreshBtn">
+                    <i class="fas fa-rotate"></i>
+                    <span data-i18n="providers.credentialGroups.refresh">刷新关系</span>
+                </button>
+                <button type="button" class="btn btn-secondary" id="credentialGroupsRollbackBtn" hidden>
+                    <i class="fas fa-rotate-left"></i>
+                    <span id="credentialGroupsRollbackLabel" data-i18n="providers.credentialGroups.rollback">回滚上一版本</span>
+                </button>
+                <button type="button" class="btn btn-primary" id="credentialGroupsPreviewBtn">
+                    <i class="fas fa-wand-magic-sparkles"></i>
+                    <span data-i18n="providers.credentialGroups.recalculate">重新计算分配</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="credential-groups-status is-loading" id="credentialGroupsStatus" role="status" aria-live="polite">
+            <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+            <span data-i18n="providers.credentialGroups.loading">正在加载凭据组关系...</span>
+        </div>
+
+        <div class="credential-groups-content" id="credentialGroupsContent" hidden>
+            <div class="credential-groups-summary" id="credentialGroupsSummary"></div>
+
+            <div class="credential-groups-policy" id="credentialGroupsPolicy"></div>
+
+            <section class="credential-groups-preview" id="credentialGroupsPreview" hidden aria-labelledby="credential-groups-preview-title">
+                <div class="credential-groups-section-head">
+                    <div>
+                        <h4 id="credential-groups-preview-title"><i class="fas fa-eye"></i> <span data-i18n="providers.credentialGroups.previewTitle">待应用预览</span></h4>
+                        <p data-i18n="providers.credentialGroups.previewDesc">预览不会修改线上路由；应用时会校验 base revision，版本变化后必须重新计算。</p>
+                    </div>
+                    <div class="credential-groups-preview-actions">
+                        <button type="button" class="btn btn-secondary" id="credentialGroupsDiscardPreviewBtn">
+                            <i class="fas fa-xmark"></i>
+                            <span data-i18n="providers.credentialGroups.discardPreview">丢弃预览</span>
+                        </button>
+                        <button type="button" class="btn btn-primary" id="credentialGroupsApplyPreviewBtn">
+                            <i class="fas fa-check"></i>
+                            <span data-i18n="providers.credentialGroups.applyPreview">确认应用</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="credential-groups-preview-warning">
+                    <i class="fas fa-clock" aria-hidden="true"></i>
+                    <span data-i18n="providers.credentialGroups.previewWarning">预览仅保留 5 分钟；过期或 revision 冲突时不会写入任何分配。</span>
+                </div>
+                <div class="credential-groups-preview-meta" id="credentialGroupsPreviewMeta"></div>
+                <div class="credential-groups-card-grid" id="credentialGroupsPreviewGroups"></div>
+                <div class="credential-groups-table-wrap credential-groups-preview-keys" id="credentialGroupsPreviewKeys"></div>
+            </section>
+
+            <section class="credential-groups-section" aria-labelledby="credential-groups-current-title">
+                <div class="credential-groups-section-head">
+                    <div>
+                        <h4 id="credential-groups-current-title"><i class="fas fa-layer-group"></i> <span data-i18n="providers.credentialGroups.groupsTitle">当前凭据组</span></h4>
+                        <p data-i18n="providers.credentialGroups.groupsDesc">容量取组内可用凭据的保守配额系数；预测需求来自最近 7 个完整自然日。</p>
+                    </div>
+                </div>
+                <div class="credential-groups-card-grid" id="credentialGroupsCurrentGroups"></div>
+            </section>
+
+            <section class="credential-groups-section" aria-labelledby="credential-groups-credentials-title">
+                <div class="credential-groups-section-head">
+                    <div>
+                        <h4 id="credential-groups-credentials-title"><i class="fas fa-id-card-clip"></i> <span data-i18n="providers.credentialGroups.credentialsTitle">Codex OAuth 凭据</span></h4>
+                        <p data-i18n="providers.credentialGroups.credentialsDesc">仅显示脱敏凭据引用、健康状态与额度比例，不显示 OAuth Token、Cookie 或原始 UUID。</p>
+                    </div>
+                </div>
+                <div class="credential-groups-table-wrap" id="credentialGroupsCredentials"></div>
+            </section>
+
+            <section class="credential-groups-section" aria-labelledby="credential-groups-keys-title">
+                <div class="credential-groups-section-head">
+                    <div>
+                        <h4 id="credential-groups-keys-title"><i class="fas fa-key"></i> <span data-i18n="providers.credentialGroups.keysTitle">Potluck Key 路由关系</span></h4>
+                        <p data-i18n="providers.credentialGroups.keysDesc">fixed Key 只请求指定凭据；auto Key 优先主组，主组不可用时临时跨组降级。</p>
+                    </div>
+                </div>
+                <div class="credential-groups-table-wrap" id="credentialGroupsKeys"></div>
+            </section>
+
+            <section class="credential-groups-section credential-groups-revisions-section" aria-labelledby="credential-groups-revisions-title">
+                <div class="credential-groups-section-head">
+                    <div>
+                        <h4 id="credential-groups-revisions-title"><i class="fas fa-clock-rotate-left"></i> <span data-i18n="providers.credentialGroups.revisionsTitle">Revision 历史</span></h4>
+                        <p data-i18n="providers.credentialGroups.revisionsDesc">回滚会创建一个新 revision，并恢复当前版本的直接上一版本；历史记录不包含具体凭据或 Key 配置。</p>
+                    </div>
+                </div>
+                <div class="credential-groups-table-wrap" id="credentialGroupsRevisions"></div>
+            </section>
+        </div>
+    </div>
+
     <!-- Provider Pool Stats -->
     <div class="stats-grid">
         <div class="stat-card">

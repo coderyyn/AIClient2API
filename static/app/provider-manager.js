@@ -24,6 +24,603 @@ let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
 let latestProvidersAccessInfo = null;
+let credentialGroupView = null;
+let credentialGroupRevisions = [];
+let activeCredentialGroupPreview = null;
+let credentialGroupBusyAction = null;
+let credentialGroupEventsBound = false;
+
+function getCredentialGroupResponseData(response) {
+    return response?.data || response || {};
+}
+
+function formatCredentialGroupNumber(value, maximumFractionDigits = 2) {
+    if (value === null || value === undefined || value === '') {
+        return t('providers.credentialGroups.unknown');
+    }
+    const number = Number(value);
+    if (!Number.isFinite(number)) return t('providers.credentialGroups.unknown');
+    return number.toLocaleString(getCurrentLanguage() === 'en-US' ? 'en-US' : 'zh-CN', {
+        maximumFractionDigits,
+        minimumFractionDigits: 0
+    });
+}
+
+function formatCredentialGroupPercent(value) {
+    if (value === null || value === undefined || value === '') {
+        return t('providers.credentialGroups.unknown');
+    }
+    let number = Number(value);
+    if (!Number.isFinite(number)) return t('providers.credentialGroups.unknown');
+    if (number <= 1) number *= 100;
+    number = Math.max(0, Math.min(100, number));
+    return `${number.toLocaleString(getCurrentLanguage() === 'en-US' ? 'en-US' : 'zh-CN', {
+        maximumFractionDigits: 1,
+        minimumFractionDigits: 0
+    })}%`;
+}
+
+function formatCredentialGroupRatio(value) {
+    if (value === null || value === undefined || value === '') {
+        return t('providers.credentialGroups.unknown');
+    }
+    return formatCredentialGroupPercent(value);
+}
+
+function formatCredentialGroupUsd(value) {
+    if (value === null || value === undefined || value === '') {
+        return t('providers.credentialGroups.unknown');
+    }
+    const number = Number(value);
+    if (!Number.isFinite(number)) return t('providers.credentialGroups.unknown');
+    return `$${number.toLocaleString(getCurrentLanguage() === 'en-US' ? 'en-US' : 'zh-CN', {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4
+    })}`;
+}
+
+function formatCredentialGroupDate(value) {
+    if (!value) return t('providers.credentialGroups.unknown');
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return t('providers.credentialGroups.unknown');
+    return date.toLocaleString(getCurrentLanguage() === 'en-US' ? 'en-US' : 'zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function credentialGroupBadge(text, className = 'is-neutral') {
+    return `<span class="credential-groups-badge ${className}">${escapeHtml(text)}</span>`;
+}
+
+function credentialGroupEmpty(icon, messageKey) {
+    return `<div class="credential-groups-empty"><i class="fas ${icon}" aria-hidden="true"></i><span>${escapeHtml(t(messageKey))}</span></div>`;
+}
+
+function setCredentialGroupStatus(type, message, icon = 'fa-circle-info') {
+    const status = document.getElementById('credentialGroupsStatus');
+    if (!status) return;
+    const normalizedType = ['loading', 'error', 'success'].includes(type) ? type : 'info';
+    status.className = `credential-groups-status is-${normalizedType}`;
+    status.innerHTML = `<i class="fas ${icon}${normalizedType === 'loading' ? ' fa-spin' : ''}" aria-hidden="true"></i><span>${escapeHtml(message)}</span>`;
+}
+
+function setCredentialGroupBusy(action = null) {
+    credentialGroupBusyAction = action;
+    const buttonIds = [
+        'credentialGroupsRefreshBtn',
+        'credentialGroupsRollbackBtn',
+        'credentialGroupsPreviewBtn',
+        'credentialGroupsDiscardPreviewBtn',
+        'credentialGroupsApplyPreviewBtn'
+    ];
+    buttonIds.forEach(id => {
+        const button = document.getElementById(id);
+        if (!button) return;
+        button.disabled = Boolean(action);
+        button.classList.toggle('is-busy', Boolean(action));
+    });
+    const panel = document.getElementById('credentialGroupsPanel');
+    if (panel) panel.setAttribute('aria-busy', action ? 'true' : 'false');
+}
+
+function getCredentialGroupErrorCode(error) {
+    return error?.data?.error?.code || error?.data?.code || error?.code || '';
+}
+
+function getCredentialGroupErrorMessage(error) {
+    const code = getCredentialGroupErrorCode(error);
+    const messageByCode = {
+        CREDENTIAL_GROUP_REVISION_CONFLICT: 'providers.credentialGroups.revisionConflict',
+        PREVIEW_EXPIRED: 'providers.credentialGroups.previewExpired',
+        PREVIEW_NOT_FOUND: 'providers.credentialGroups.previewMissing',
+        CREDENTIAL_GROUP_SUGGESTION_NOT_APPLICABLE: 'providers.credentialGroups.noApplicable'
+    };
+    if (messageByCode[code]) return t(messageByCode[code]);
+    return error?.message || t('providers.credentialGroups.requestFailed');
+}
+
+function clearCredentialGroupPreview() {
+    activeCredentialGroupPreview = null;
+    renderCredentialGroupPreview();
+}
+
+function getCredentialGroupCurrentRevisionEntry() {
+    const revision = Number(credentialGroupView?.revision || 0);
+    return credentialGroupRevisions.find(entry => Number(entry.revision) === revision)
+        || credentialGroupRevisions.find(entry => entry.isCurrent === true)
+        || null;
+}
+
+function updateCredentialGroupRollbackButton() {
+    const button = document.getElementById('credentialGroupsRollbackBtn');
+    const label = document.getElementById('credentialGroupsRollbackLabel');
+    if (!button) return;
+    const currentEntry = getCredentialGroupCurrentRevisionEntry();
+    const canRollback = Number(credentialGroupView?.revision || 0) > 0
+        && currentEntry
+        && currentEntry.previousRevision !== null
+        && currentEntry.previousRevision !== undefined;
+    button.hidden = !canRollback;
+    if (label && canRollback) {
+        label.textContent = t('providers.credentialGroups.rollbackTo', {
+            revision: currentEntry.previousRevision
+        });
+    }
+}
+
+function renderCredentialGroupSummary() {
+    const container = document.getElementById('credentialGroupsSummary');
+    if (!container || !credentialGroupView) return;
+    const credentials = Array.isArray(credentialGroupView.credentials) ? credentialGroupView.credentials : [];
+    const groups = Array.isArray(credentialGroupView.groups) ? credentialGroupView.groups : [];
+    const keys = Array.isArray(credentialGroupView.keys) ? credentialGroupView.keys : [];
+    const healthyCredentials = credentials.filter(credential => credential.available === true).length;
+    const cards = [
+        ['providers.credentialGroups.summary.revision', formatCredentialGroupNumber(credentialGroupView.revision, 0)],
+        ['providers.credentialGroups.summary.groups', formatCredentialGroupNumber(groups.length, 0)],
+        ['providers.credentialGroups.summary.credentials', formatCredentialGroupNumber(credentials.length, 0)],
+        ['providers.credentialGroups.summary.healthy', formatCredentialGroupNumber(healthyCredentials, 0)],
+        ['providers.credentialGroups.summary.keys', formatCredentialGroupNumber(keys.length, 0)],
+        ['providers.credentialGroups.summary.history', `${formatCredentialGroupNumber(credentialGroupView.historyDays || 7, 0)} ${getCurrentLanguage() === 'en-US' ? 'days' : '天'}`]
+    ];
+    container.innerHTML = cards.map(([labelKey, value]) => `
+        <div class="credential-groups-summary-card">
+            <span>${escapeHtml(t(labelKey))}</span>
+            <strong>${escapeHtml(value)}</strong>
+        </div>
+    `).join('');
+}
+
+function renderCredentialGroupPolicy() {
+    const container = document.getElementById('credentialGroupsPolicy');
+    if (!container) return;
+    container.innerHTML = `
+        <div class="credential-groups-policy-card">
+            <i class="fas fa-lock" aria-hidden="true"></i>
+            <div>
+                <strong>${escapeHtml(t('providers.credentialGroups.policy.fixedTitle'))}</strong>
+                <p>${escapeHtml(t('providers.credentialGroups.policy.fixedDesc'))}</p>
+            </div>
+        </div>
+        <div class="credential-groups-policy-card">
+            <i class="fas fa-shuffle" aria-hidden="true"></i>
+            <div>
+                <strong>${escapeHtml(t('providers.credentialGroups.policy.autoTitle'))}</strong>
+                <p>${escapeHtml(t('providers.credentialGroups.policy.autoDesc'))}</p>
+            </div>
+        </div>
+    `;
+}
+
+function renderCredentialGroupCards(groups, emptyKey = 'providers.credentialGroups.empty.groups') {
+    if (!Array.isArray(groups) || groups.length === 0) {
+        return credentialGroupEmpty('fa-layer-group', emptyKey);
+    }
+    return groups.map((group, index) => {
+        const groupId = String(group?.id || `group-${index + 1}`);
+        const groupName = String(group?.name || groupId);
+        const credentialRefs = Array.isArray(group?.credentialRefs) ? group.credentialRefs : [];
+        const credentialCount = Number(group?.credentialCount ?? credentialRefs.length);
+        const capacity = formatCredentialGroupNumber(group?.capacity, 2);
+        const predictedDemand = formatCredentialGroupNumber(group?.predictedDemand, 2);
+        const utilization = formatCredentialGroupPercent(group?.predictedUtilization);
+        const lockBadge = group?.manualLock === true
+            ? credentialGroupBadge(t('providers.credentialGroups.status.locked'), 'is-locked')
+            : '';
+        const confidenceBadge = group?.confidence && group.confidence !== 'high'
+            ? credentialGroupBadge(t('providers.credentialGroups.status.lowConfidence'), 'is-warning')
+            : '';
+        const members = credentialRefs.length > 0
+            ? credentialRefs.map(ref => `<span class="credential-group-member"><i class="fas fa-id-card" aria-hidden="true"></i><code>${escapeHtml(ref)}</code></span>`).join('')
+            : `<span class="credential-group-member">${escapeHtml(t('providers.credentialGroups.unknown'))}</span>`;
+        return `
+            <article class="credential-group-card${group?.manualLock === true ? ' is-locked' : ''}">
+                <div class="credential-group-card-head">
+                    <div>
+                        <h5>${escapeHtml(groupName)}</h5>
+                        <div class="credential-group-card-id">${escapeHtml(groupId)}</div>
+                    </div>
+                    <div class="credential-groups-table-badges">${lockBadge}${confidenceBadge}</div>
+                </div>
+                <div class="credential-group-metrics">
+                    <div class="credential-group-metric"><span>${escapeHtml(t('providers.credentialGroups.label.credentials'))}</span><strong>${escapeHtml(formatCredentialGroupNumber(credentialCount, 0))}</strong></div>
+                    <div class="credential-group-metric"><span>${escapeHtml(t('providers.credentialGroups.label.capacity'))}</span><strong>${escapeHtml(capacity)}</strong></div>
+                    <div class="credential-group-metric"><span>${escapeHtml(t('providers.credentialGroups.label.predictedDemand'))}</span><strong>${escapeHtml(predictedDemand)}</strong></div>
+                    <div class="credential-group-metric"><span>${escapeHtml(t('providers.credentialGroups.label.utilization'))}</span><strong>${escapeHtml(utilization)}</strong></div>
+                </div>
+                <div class="credential-group-members">${members}</div>
+            </article>
+        `;
+    }).join('');
+}
+
+function getCredentialGroupCredentialStatus(credential) {
+    if (credential?.needsRefresh === true) {
+        return { text: t('providers.credentialGroups.status.needsRefresh'), className: 'is-warning' };
+    }
+    if (credential?.isDisabled === true) {
+        return { text: t('providers.credentialGroups.status.disabled'), className: 'is-disabled' };
+    }
+    if (credential?.isHealthy === false || credential?.available !== true) {
+        return { text: t('providers.credentialGroups.status.unavailable'), className: 'is-unavailable' };
+    }
+    return { text: t('providers.credentialGroups.status.available'), className: 'is-available' };
+}
+
+function renderCredentialGroupCredentialsTable() {
+    const container = document.getElementById('credentialGroupsCredentials');
+    if (!container || !credentialGroupView) return;
+    const credentials = Array.isArray(credentialGroupView.credentials) ? credentialGroupView.credentials : [];
+    if (credentials.length === 0) {
+        container.innerHTML = credentialGroupEmpty('fa-id-card-clip', 'providers.credentialGroups.empty.credentials');
+        return;
+    }
+    container.innerHTML = `
+        <table class="credential-groups-table">
+            <thead><tr>
+                <th>${escapeHtml(t('providers.credentialGroups.label.credential'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.provider'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.capacity'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.remaining5h'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.remainingWeekly'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.status'))}</th>
+            </tr></thead>
+            <tbody>${credentials.map(credential => {
+                const status = getCredentialGroupCredentialStatus(credential);
+                const lockBadge = credential.manualLock === true
+                    ? credentialGroupBadge(t('providers.credentialGroups.status.locked'), 'is-locked')
+                    : '';
+                const name = credential.customName ? `<small>${escapeHtml(credential.customName)}</small>` : '';
+                return `<tr>
+                    <td><div class="credential-groups-table-primary"><code>${escapeHtml(credential.credentialRef || t('providers.credentialGroups.unknown'))}</code>${name}</div></td>
+                    <td>${escapeHtml(credential.providerType || t('providers.credentialGroups.unknown'))}</td>
+                    <td>${escapeHtml(formatCredentialGroupNumber(credential.capacity, 2))}</td>
+                    <td>${escapeHtml(formatCredentialGroupRatio(credential.fiveHourRemainingRatio))}</td>
+                    <td>${escapeHtml(formatCredentialGroupRatio(credential.weeklyRemainingRatio))}</td>
+                    <td><div class="credential-groups-table-badges">${credentialGroupBadge(status.text, status.className)}${lockBadge}</div></td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>
+    `;
+}
+
+function formatCredentialGroupDemand(demand) {
+    if (!demand || demand.isNew === true) {
+        return t('providers.credentialGroups.metricNewKey');
+    }
+    const cost = Number(demand.actualUsd) > 0
+        ? t('providers.credentialGroups.costSuffix', { cost: formatCredentialGroupUsd(demand.actualUsd) })
+        : '';
+    return t('providers.credentialGroups.metricDemand', {
+        requests: formatCredentialGroupNumber(demand.requestCount, 0),
+        tokens: formatCredentialGroupNumber(demand.totalTokens, 0),
+        cost
+    });
+}
+
+function renderCredentialGroupKeyTable(keys, emptyKey = 'providers.credentialGroups.empty.keys') {
+    if (!Array.isArray(keys) || keys.length === 0) {
+        return credentialGroupEmpty('fa-key', emptyKey);
+    }
+    return `
+        <table class="credential-groups-table">
+            <thead><tr>
+                <th>${escapeHtml(t('providers.credentialGroups.label.key'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.route'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.primaryGroup'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.fixedCredential'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.demand'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.status'))}</th>
+            </tr></thead>
+            <tbody>${keys.map(key => {
+                const fixed = key?.fixedCredential?.credentialRef || t('providers.credentialGroups.unknown');
+                const isFixed = key?.routingMode === 'fixed';
+                const routeBadge = credentialGroupBadge(
+                    isFixed ? t('providers.credentialGroups.route.fixed') : t('providers.credentialGroups.route.auto'),
+                    isFixed ? 'is-fixed' : 'is-auto'
+                );
+                const spillover = !isFixed && key?.spilloverPolicy === 'cross-group-when-primary-unavailable'
+                    ? credentialGroupBadge(t('providers.credentialGroups.route.spillover'), 'is-neutral')
+                    : '';
+                const lockBadge = key?.manualLock === true
+                    ? credentialGroupBadge(t('providers.credentialGroups.status.locked'), 'is-locked')
+                    : '';
+                const highUsageBadge = key?.highConsumption === true
+                    ? credentialGroupBadge(t('providers.credentialGroups.status.highConsumption'), 'is-warning')
+                    : '';
+                const enabledBadge = key?.enabled === false
+                    ? credentialGroupBadge(t('providers.credentialGroups.status.disabled'), 'is-disabled')
+                    : credentialGroupBadge(t('providers.credentialGroups.status.available'), 'is-available');
+                const primaryGroup = isFixed
+                    ? t('providers.credentialGroups.notAvailable')
+                    : (key?.primaryGroupId || t('providers.credentialGroups.route.noPrimary'));
+                return `<tr>
+                    <td><div class="credential-groups-table-primary"><code>${escapeHtml(key?.maskedKey || key?.keyRef || t('providers.credentialGroups.unknown'))}</code><small>${escapeHtml(key?.name || t('providers.credentialGroups.unknown'))}</small></div></td>
+                    <td><div class="credential-groups-table-badges">${routeBadge}${spillover}</div></td>
+                    <td>${escapeHtml(primaryGroup)}</td>
+                    <td>${escapeHtml(isFixed ? fixed : t('providers.credentialGroups.notAvailable'))}</td>
+                    <td>${escapeHtml(formatCredentialGroupDemand(key?.demand))}</td>
+                    <td><div class="credential-groups-table-badges">${enabledBadge}${lockBadge}${highUsageBadge}</div></td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>
+    `;
+}
+
+function renderCredentialGroupRevisionsTable() {
+    const container = document.getElementById('credentialGroupsRevisions');
+    if (!container) return;
+    if (!Array.isArray(credentialGroupRevisions) || credentialGroupRevisions.length === 0) {
+        container.innerHTML = credentialGroupEmpty('fa-clock-rotate-left', 'providers.credentialGroups.empty.revisions');
+        return;
+    }
+    container.innerHTML = `
+        <table class="credential-groups-table">
+            <thead><tr>
+                <th>${escapeHtml(t('providers.credentialGroups.label.revision'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.action'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.createdAt'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.previousRevision'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.sourceRevision'))}</th>
+                <th>${escapeHtml(t('providers.credentialGroups.label.assignments'))}</th>
+            </tr></thead>
+            <tbody>${credentialGroupRevisions.map(entry => {
+                const currentBadge = entry?.isCurrent === true
+                    ? credentialGroupBadge(t('providers.credentialGroups.status.current'), 'is-current')
+                    : '';
+                const previous = entry?.previousRevision === null || entry?.previousRevision === undefined
+                    ? t('providers.credentialGroups.notAvailable')
+                    : String(entry.previousRevision);
+                const source = entry?.sourceRevision === null || entry?.sourceRevision === undefined
+                    ? t('providers.credentialGroups.notAvailable')
+                    : String(entry.sourceRevision);
+                return `<tr>
+                    <td><div class="credential-groups-table-badges"><strong>${escapeHtml(String(entry?.revision ?? t('providers.credentialGroups.unknown')))}</strong>${currentBadge}</div></td>
+                    <td>${escapeHtml(entry?.action || t('providers.credentialGroups.action.apply'))}</td>
+                    <td>${escapeHtml(formatCredentialGroupDate(entry?.createdAt))}</td>
+                    <td>${escapeHtml(previous)}</td>
+                    <td>${escapeHtml(source)}</td>
+                    <td>${escapeHtml(`${formatCredentialGroupNumber(entry?.groupCount, 0)} groups · ${formatCredentialGroupNumber(entry?.assignmentCount, 0)} Keys`)}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>
+    `;
+}
+
+function renderCredentialGroupPreview() {
+    const section = document.getElementById('credentialGroupsPreview');
+    const meta = document.getElementById('credentialGroupsPreviewMeta');
+    const groups = document.getElementById('credentialGroupsPreviewGroups');
+    const keys = document.getElementById('credentialGroupsPreviewKeys');
+    if (!section || !meta || !groups || !keys) return;
+    if (!activeCredentialGroupPreview) {
+        section.hidden = true;
+        meta.innerHTML = '';
+        groups.innerHTML = '';
+        keys.innerHTML = '';
+        return;
+    }
+    const suggestion = activeCredentialGroupPreview.suggestion || {};
+    section.hidden = false;
+    meta.innerHTML = [
+        ['providers.credentialGroups.preview.baseRevision', formatCredentialGroupNumber(activeCredentialGroupPreview.baseRevision, 0)],
+        ['providers.credentialGroups.preview.expiresAt', formatCredentialGroupDate(activeCredentialGroupPreview.expiresAt)],
+        ['providers.credentialGroups.preview.healthyCredentials', formatCredentialGroupNumber(suggestion.healthyCredentialCount, 0)],
+        ['providers.credentialGroups.preview.groupCount', formatCredentialGroupNumber(suggestion.groupCount, 0)],
+        ['providers.credentialGroups.preview.history', `${formatCredentialGroupNumber(suggestion.historyDays || 7, 0)} ${getCurrentLanguage() === 'en-US' ? 'days' : '天'}`],
+        ['providers.credentialGroups.preview.generatedAt', formatCredentialGroupDate(suggestion.generatedAt)]
+    ].map(([labelKey, value]) => `
+        <div class="credential-groups-preview-meta-card">
+            <span>${escapeHtml(t(labelKey))}</span>
+            <strong>${escapeHtml(value)}</strong>
+        </div>
+    `).join('');
+    groups.innerHTML = renderCredentialGroupCards(suggestion.groups, 'providers.credentialGroups.empty.previewGroups');
+    keys.innerHTML = renderCredentialGroupKeyTable(suggestion.keyAssignments, 'providers.credentialGroups.empty.previewKeys');
+}
+
+function renderCredentialGroupManagement() {
+    const content = document.getElementById('credentialGroupsContent');
+    if (!content || !credentialGroupView) return;
+    content.hidden = false;
+    renderCredentialGroupSummary();
+    renderCredentialGroupPolicy();
+    renderCredentialGroupPreview();
+    const currentGroups = document.getElementById('credentialGroupsCurrentGroups');
+    if (currentGroups) {
+        currentGroups.innerHTML = renderCredentialGroupCards(credentialGroupView.groups);
+    }
+    renderCredentialGroupCredentialsTable();
+    const currentKeys = document.getElementById('credentialGroupsKeys');
+    if (currentKeys) currentKeys.innerHTML = renderCredentialGroupKeyTable(credentialGroupView.keys);
+    renderCredentialGroupRevisionsTable();
+    updateCredentialGroupRollbackButton();
+}
+
+function initCredentialGroupManagement() {
+    const refreshButton = document.getElementById('credentialGroupsRefreshBtn');
+    const previewButton = document.getElementById('credentialGroupsPreviewBtn');
+    const discardButton = document.getElementById('credentialGroupsDiscardPreviewBtn');
+    const applyButton = document.getElementById('credentialGroupsApplyPreviewBtn');
+    const rollbackButton = document.getElementById('credentialGroupsRollbackBtn');
+
+    bindOnce(refreshButton, 'click', () => loadCredentialGroupManagement({ statusKey: 'refreshing' }), 'credentialGroupsRefresh');
+    bindOnce(previewButton, 'click', () => createCredentialGroupPreview(), 'credentialGroupsPreview');
+    bindOnce(discardButton, 'click', () => {
+        if (credentialGroupBusyAction) return;
+        clearCredentialGroupPreview();
+        if (credentialGroupView) {
+            setCredentialGroupStatus('success', t('providers.credentialGroups.loadSuccess', {
+                revision: credentialGroupView.revision || 0
+            }), 'fa-circle-check');
+        }
+    }, 'credentialGroupsDiscardPreview');
+    bindOnce(applyButton, 'click', () => applyCredentialGroupPreview(), 'credentialGroupsApplyPreview');
+    bindOnce(rollbackButton, 'click', () => rollbackCredentialGroups(), 'credentialGroupsRollback');
+
+    if (!credentialGroupEventsBound) {
+        window.addEventListener('languageChanged', () => {
+            if (credentialGroupView) renderCredentialGroupManagement();
+            else if (activeCredentialGroupPreview) renderCredentialGroupPreview();
+        });
+        credentialGroupEventsBound = true;
+    }
+}
+
+async function loadCredentialGroupManagement(options = {}) {
+    const panel = document.getElementById('credentialGroupsPanel');
+    if (!panel || !window.apiClient) return null;
+    initCredentialGroupManagement();
+    if (credentialGroupBusyAction && options.allowWhileBusy !== true) return credentialGroupView;
+    const statusKey = options.statusKey || 'loading';
+    const statusMessage = statusKey === 'refreshing'
+        ? t('providers.credentialGroups.refreshing')
+        : t('providers.credentialGroups.loading');
+    setCredentialGroupStatus('loading', statusMessage, 'fa-spinner');
+    try {
+        const [viewResponse, revisionsResponse] = await Promise.all([
+            window.apiClient.get('/potluck/credential-groups'),
+            window.apiClient.get('/potluck/credential-groups/revisions')
+        ]);
+        credentialGroupView = getCredentialGroupResponseData(viewResponse);
+        const revisionData = getCredentialGroupResponseData(revisionsResponse);
+        credentialGroupRevisions = Array.isArray(revisionData.revisions) ? revisionData.revisions : [];
+        clearCredentialGroupPreview();
+        renderCredentialGroupManagement();
+        setCredentialGroupStatus('success', t('providers.credentialGroups.loadSuccess', {
+            revision: credentialGroupView.revision || 0
+        }), 'fa-circle-check');
+        return credentialGroupView;
+    } catch (error) {
+        console.error('Failed to load credential-group management data:', error);
+        if (!credentialGroupView) {
+            const content = document.getElementById('credentialGroupsContent');
+            if (content) content.hidden = true;
+        }
+        const message = getCredentialGroupErrorMessage(error);
+        setCredentialGroupStatus('error', message, 'fa-circle-exclamation');
+        return null;
+    }
+}
+
+async function createCredentialGroupPreview() {
+    if (credentialGroupBusyAction || !window.apiClient) return null;
+    const days = Number(credentialGroupView?.historyDays || 7);
+    setCredentialGroupBusy('preview');
+    setCredentialGroupStatus('loading', t('providers.credentialGroups.recalculating', { days }), 'fa-spinner');
+    try {
+        const response = await window.apiClient.post('/potluck/credential-groups/preview', {});
+        activeCredentialGroupPreview = getCredentialGroupResponseData(response);
+        renderCredentialGroupPreview();
+        setCredentialGroupStatus('success', t('providers.credentialGroups.previewReady'), 'fa-eye');
+        return activeCredentialGroupPreview;
+    } catch (error) {
+        console.error('Failed to create credential-group preview:', error);
+        const message = getCredentialGroupErrorMessage(error);
+        setCredentialGroupStatus('error', message, 'fa-circle-exclamation');
+        showToast(t('common.error'), message, 'error');
+        return null;
+    } finally {
+        setCredentialGroupBusy(null);
+    }
+}
+
+async function applyCredentialGroupPreview() {
+    if (credentialGroupBusyAction || !activeCredentialGroupPreview?.previewId || !window.apiClient) return null;
+    if (typeof window.confirm === 'function' && !window.confirm(t('providers.credentialGroups.applyConfirm'))) {
+        return null;
+    }
+    setCredentialGroupBusy('apply');
+    setCredentialGroupStatus('loading', t('providers.credentialGroups.applying'), 'fa-spinner');
+    try {
+        const response = await window.apiClient.post('/potluck/credential-groups/apply', {
+            previewId: activeCredentialGroupPreview.previewId
+        });
+        const revision = response?.data?.revision || 0;
+        const pending = response?.persistencePending === true;
+        clearCredentialGroupPreview();
+        await loadCredentialGroupManagement({ statusKey: 'refreshing', allowWhileBusy: true });
+        showToast(
+            pending ? t('common.warning') : t('common.success'),
+            pending
+                ? t('providers.credentialGroups.applyPending')
+                : t('providers.credentialGroups.applySuccess', { revision }),
+            pending ? 'warning' : 'success'
+        );
+        return response;
+    } catch (error) {
+        console.error('Failed to apply credential-group preview:', error);
+        const code = getCredentialGroupErrorCode(error);
+        if (['PREVIEW_NOT_FOUND', 'PREVIEW_EXPIRED', 'CREDENTIAL_GROUP_REVISION_CONFLICT'].includes(code)) {
+            clearCredentialGroupPreview();
+        }
+        const message = getCredentialGroupErrorMessage(error);
+        setCredentialGroupStatus('error', message, 'fa-circle-exclamation');
+        showToast(t('common.error'), message, 'error');
+        return null;
+    } finally {
+        setCredentialGroupBusy(null);
+    }
+}
+
+async function rollbackCredentialGroups() {
+    if (credentialGroupBusyAction || !credentialGroupView?.revision || !window.apiClient) return null;
+    const currentEntry = getCredentialGroupCurrentRevisionEntry();
+    if (!currentEntry || currentEntry.previousRevision === null || currentEntry.previousRevision === undefined) {
+        return null;
+    }
+    if (typeof window.confirm === 'function' && !window.confirm(t('providers.credentialGroups.rollbackConfirm'))) {
+        return null;
+    }
+    setCredentialGroupBusy('rollback');
+    setCredentialGroupStatus('loading', t('providers.credentialGroups.rollingBack'), 'fa-spinner');
+    try {
+        const response = await window.apiClient.post('/potluck/credential-groups/rollback', {
+            baseRevision: credentialGroupView.revision
+        });
+        const revision = response?.data?.revision || 0;
+        clearCredentialGroupPreview();
+        await loadCredentialGroupManagement({ statusKey: 'refreshing', allowWhileBusy: true });
+        showToast(t('common.success'), t('providers.credentialGroups.rollbackSuccess', { revision }), 'success');
+        return response;
+    } catch (error) {
+        console.error('Failed to rollback credential groups:', error);
+        const code = getCredentialGroupErrorCode(error);
+        if (code === 'CREDENTIAL_GROUP_REVISION_CONFLICT') {
+            clearCredentialGroupPreview();
+        }
+        const message = getCredentialGroupErrorMessage(error);
+        setCredentialGroupStatus('error', message, 'fa-circle-exclamation');
+        showToast(t('common.error'), message, 'error');
+        return null;
+    } finally {
+        setCredentialGroupBusy(null);
+    }
+}
 
 function navigateToSection(sectionId) {
     const navItem = document.querySelector(`.nav-item[data-section="${sectionId}"]`);
@@ -305,7 +902,10 @@ async function loadProviders(forceRefreshSupported = false) {
 }
 
 async function loadProvidersPageData(forceRefreshSupported = false) {
-    const data = await loadProviders(forceRefreshSupported);
+    const [data] = await Promise.all([
+        loadProviders(forceRefreshSupported),
+        loadCredentialGroupManagement()
+    ]);
     if (data?.providers) {
         await refreshProvidersHandoffSummary(data.providers, data.supportedProviders || cachedSupportedProviders || []);
     }
@@ -5419,6 +6019,7 @@ export {
     updateTimeDisplay,
     loadProviders,
     loadProvidersPageData,
+    loadCredentialGroupManagement,
     openProviderManager,
     showAuthModal,
     executeGenerateAuthUrl,

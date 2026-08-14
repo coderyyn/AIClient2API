@@ -22,17 +22,32 @@ import {
     applyDailyLimitToAllKeys,
     getAllKeyIds,
     getLedgerKeyIdentities,
-    resetAllTokenStats
+    resetAllTokenStats,
+    getCredentialRoutingKeyCatalog,
+    applyKeyRoutingAssignments
 } from './key-manager.js';
 import { getRequestBody } from '../../utils/common.js';
 import { extractCodexCredentialIdentity } from '../../utils/codex-utils.js';
 import { getBeijingDateKey, listLedgerDates, readLedgerRangeStats, resolveRangeDates } from './ledger-range-stats.js';
+import {
+    CredentialGroupService,
+    calculateCredentialCapacity,
+    generateCredentialGroupSuggestion,
+    summarizeKeyDemand,
+    validateCredentialGroupSuggestion
+} from '../../services/codex-credential-group-service.js';
+import { readFreshUsageCacheSync, getCachedCodexUsageInstance } from '../../utils/codex-plan.js';
+import { normalizeCodexRateLimitWindows } from '../../utils/codex-rate-limit.js';
+import { hashSecret, sanitizeProviderName } from '../request-audit/audit-event.js';
+import { randomUUID } from 'crypto';
 import logger from '../../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
 
 const STATS_CACHE_TTL_MS = 30 * 1000;
 const statsCache = new Map();
+const CREDENTIAL_GROUP_PREVIEW_TTL_MS = 5 * 60 * 1000;
+const credentialGroupPreviews = new Map();
 
 /**
  * 发送 JSON 响应
@@ -129,6 +144,421 @@ function sendManagementMutationResponse(res, {
         message: persistencePending ? `${message} ${PERSISTENCE_PENDING_MESSAGE}` : message,
         data: responseData
     });
+}
+
+function createCredentialGroupApiError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === 'openai-codex-oauth'
+        || String(providerType || '').startsWith('openai-codex-oauth-');
+}
+
+function normalizeRemainingRatio(value) {
+    if (value === undefined || value === null || value === '') return null;
+    let ratio = Number(value);
+    if (!Number.isFinite(ratio)) return null;
+    if (ratio > 1 && ratio <= 100) ratio /= 100;
+    return Math.max(0, Math.min(1, ratio));
+}
+
+function normalizeUsedPercent(value) {
+    const percent = Number(value);
+    return Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+}
+
+function getUsageWindowUsedPercent(window) {
+    return normalizeUsedPercent(
+        window?.percent
+        ?? window?.usedPercent
+        ?? window?.used
+        ?? window?.used_percent
+    );
+}
+
+function getCodexQuotaRemainingRatios(usage) {
+    if (!usage || typeof usage !== 'object') {
+        return { fiveHourRemainingRatio: null, weeklyRemainingRatio: null };
+    }
+
+    const itemWindows = (Array.isArray(usage.items) ? usage.items : [])
+        .filter(item => item && typeof item === 'object')
+        .map(item => ({
+            ...item,
+            id: item.id || item.sourceWindow || null,
+            sourceWindow: item.sourceWindow || item.id || null,
+            scope: item.scope || 'general',
+            windowKind: item.windowKind || null,
+            usedPercent: getUsageWindowUsedPercent(item)
+        }));
+    const rawWindows = normalizeCodexRateLimitWindows(usage.raw || usage)
+        .map(window => ({
+            ...window,
+            usedPercent: getUsageWindowUsedPercent(window)
+        }));
+    const windows = [...itemWindows, ...rawWindows]
+        .filter(window => window.scope === 'general' && window.usedPercent !== null);
+
+    const shortWindow = windows.find(window => window.windowKind === 'short')
+        || windows.find(window => window.id === 'primary_window' || window.sourceWindow === 'primary_window');
+    const weeklyWindow = windows.find(window => window.windowKind === 'weekly')
+        || windows.find(window => window.id === 'secondary_window' || window.sourceWindow === 'secondary_window');
+
+    return {
+        fiveHourRemainingRatio: shortWindow ? 1 - shortWindow.usedPercent / 100 : null,
+        weeklyRemainingRatio: weeklyWindow ? 1 - weeklyWindow.usedPercent / 100 : null
+    };
+}
+
+function normalizeCodexCredential(providerType, provider, usageCache) {
+    const config = provider?.config && typeof provider.config === 'object'
+        ? provider.config
+        : (provider || {});
+    const uuid = provider?.uuid || config.uuid || null;
+    if (!uuid || !isCodexProviderType(providerType)) return null;
+
+    const cachedInstance = getCachedCodexUsageInstance(providerType, uuid, usageCache);
+    const quotaRatios = getCodexQuotaRemainingRatios(cachedInstance?.usage);
+    const quotaHealth = config.codexQuotaHealth || cachedInstance?.codexQuotaHealth || null;
+    const fiveHourRemainingRatio = normalizeRemainingRatio(
+        config.fiveHourRemainingRatio
+        ?? config.shortWindowRemainingRatio
+        ?? config.quota?.fiveHourRemainingRatio
+        ?? config.quota?.shortRemainingRatio
+        ?? quotaRatios.fiveHourRemainingRatio
+    );
+    const weeklyRemainingRatio = normalizeRemainingRatio(
+        config.weeklyRemainingRatio
+        ?? config.quota?.weeklyRemainingRatio
+        ?? quotaRatios.weeklyRemainingRatio
+    );
+
+    return {
+        providerType,
+        uuid: String(uuid),
+        customName: config.customName || cachedInstance?.name || '',
+        providerWeight: config.providerWeight ?? config.weight,
+        isHealthy: config.isHealthy !== false,
+        isDisabled: config.isDisabled === true,
+        needsRefresh: config.needsRefresh === true,
+        available: config.available,
+        hasCapacity: config.hasCapacity,
+        isAtCapacity: config.isAtCapacity,
+        quotaAvailable: config.quotaAvailable === false || quotaHealth?.general?.isHealthy === false
+            ? false
+            : config.quotaAvailable,
+        manualLock: config.credentialGroupManualLock === true || config.manualLock === true,
+        fiveHourRemainingRatio,
+        weeklyRemainingRatio
+    };
+}
+
+function readProviderPoolsFallback() {
+    const filePath = path.join(process.cwd(), 'configs', 'provider_pools.json');
+    try {
+        if (!fs.existsSync(filePath)) return {};
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+        logger.warn('[API Potluck] Failed to read provider pools for credential groups:', error.message);
+        return {};
+    }
+}
+
+async function loadCodexCredentialCatalog() {
+    let providerStatus = null;
+    try {
+        const { getProviderPoolManager } = await import('../../services/service-manager.js');
+        providerStatus = getProviderPoolManager()?.providerStatus || null;
+    } catch (error) {
+        logger.warn('[API Potluck] Provider pool manager unavailable for credential groups:', error.message);
+    }
+
+    const pools = providerStatus && typeof providerStatus === 'object'
+        ? providerStatus
+        : readProviderPoolsFallback();
+    const usageCache = readFreshUsageCacheSync();
+    const credentials = [];
+
+    for (const [poolType, providers] of Object.entries(pools || {})) {
+        if (!isCodexProviderType(poolType) || !Array.isArray(providers)) continue;
+        for (const provider of providers) {
+            const providerType = provider?.type || provider?.providerType || poolType;
+            const credential = normalizeCodexCredential(providerType, provider, usageCache);
+            if (credential) credentials.push(credential);
+        }
+    }
+
+    return credentials;
+}
+
+function getCredentialRef(providerType, uuid) {
+    return hashSecret(`${providerType || 'openai-codex-oauth'}:${uuid || ''}`);
+}
+
+function maskKeyId(keyId) {
+    const value = String(keyId || '');
+    if (!value) return null;
+    if (value.length <= 12) return `${value.slice(0, 4)}...`;
+    return `${value.slice(0, 8)}...${value.slice(-4)}`;
+}
+
+function isCredentialAvailable(credential) {
+    if (!credential) return false;
+    if (
+        credential.isHealthy === false
+        || credential.isDisabled === true
+        || credential.needsRefresh === true
+        || credential.available === false
+        || credential.quotaAvailable === false
+        || credential.hasCapacity === false
+        || credential.isAtCapacity === true
+    ) {
+        return false;
+    }
+    return calculateCredentialCapacity(credential).capacity > 0;
+}
+
+function buildCredentialIndexes(credentials) {
+    const byUuid = new Map();
+    const refsByUuid = new Map();
+    for (const credential of credentials || []) {
+        byUuid.set(credential.uuid, credential);
+        refsByUuid.set(credential.uuid, getCredentialRef(credential.providerType, credential.uuid));
+    }
+    return { byUuid, refsByUuid };
+}
+
+function buildPublicCredential(credential) {
+    const capacity = calculateCredentialCapacity(credential);
+    return {
+        credentialRef: getCredentialRef(credential.providerType, credential.uuid),
+        providerType: credential.providerType,
+        customName: sanitizeProviderName(credential.customName),
+        manualLock: credential.manualLock === true,
+        isHealthy: credential.isHealthy !== false,
+        isDisabled: credential.isDisabled === true,
+        needsRefresh: credential.needsRefresh === true,
+        available: isCredentialAvailable(credential),
+        capacity: capacity.capacity,
+        confidence: capacity.confidence,
+        fiveHourRemainingRatio: capacity.fiveHourRemainingRatio,
+        weeklyRemainingRatio: capacity.weeklyRemainingRatio
+    };
+}
+
+function buildPublicGroup(group, credentials, overrides = {}) {
+    const { byUuid, refsByUuid } = buildCredentialIndexes(credentials);
+    const credentialUuids = Array.isArray(group?.credentialUuids) ? group.credentialUuids : [];
+    let capacity = 0;
+    let confidence = 'high';
+    for (const uuid of credentialUuids) {
+        const credential = byUuid.get(uuid);
+        const details = calculateCredentialCapacity(credential || {});
+        capacity += details.capacity;
+        if (!credential || details.confidence !== 'high') confidence = 'low';
+    }
+    const publicCapacity = Number.isFinite(Number(overrides.capacity ?? group?.capacity))
+        ? Number(overrides.capacity ?? group.capacity)
+        : capacity;
+    const predictedDemand = Number(overrides.predictedDemand ?? group?.predictedDemand ?? 0) || 0;
+
+    return {
+        id: String(group?.id || ''),
+        name: String(group?.name || ''),
+        manualLock: group?.manualLock === true,
+        credentialCount: credentialUuids.length,
+        credentialRefs: credentialUuids.map(uuid => (
+            refsByUuid.get(uuid) || hashSecret(`missing-codex-credential:${uuid}`)
+        )),
+        capacity: publicCapacity,
+        confidence: overrides.confidence || group?.confidence || confidence,
+        predictedDemand,
+        predictedUtilization: Number.isFinite(Number(overrides.predictedUtilization ?? group?.predictedUtilization))
+            ? Number(overrides.predictedUtilization ?? group.predictedUtilization)
+            : predictedDemand / (publicCapacity > 0 ? publicCapacity : 0.5)
+    };
+}
+
+function buildPublicKeyAssignment(key, assignment, credentials, options = {}) {
+    const keyId = key?.keyId || key?.id || assignment?.keyId || '';
+    const routingMode = assignment?.routingMode === 'fixed' || key?.routingMode === 'fixed' ? 'fixed' : 'auto';
+    const fixedCredential = routingMode === 'fixed'
+        ? (assignment?.fixedCredential || key?.fixedCredential || null)
+        : null;
+    const demand = options.demand || assignment?.demand || summarizeKeyDemand(key || {}, {
+        now: options.now || new Date(),
+        days: 7,
+        timeZone: 'Asia/Shanghai'
+    });
+
+    return {
+        keyRef: hashSecret(keyId),
+        maskedKey: maskKeyId(keyId),
+        name: sanitizeProviderName(key?.name) || '未命名 Key',
+        enabled: key?.enabled !== false,
+        routingMode,
+        primaryGroupId: routingMode === 'auto'
+            ? (assignment?.primaryGroupId || key?.primaryGroupId || null)
+            : null,
+        fixedCredential: fixedCredential?.uuid
+            ? {
+                providerType: fixedCredential.providerType || 'openai-codex-oauth',
+                credentialRef: getCredentialRef(
+                    fixedCredential.providerType || 'openai-codex-oauth',
+                    fixedCredential.uuid
+                )
+            }
+            : null,
+        manualLock: assignment?.manualLock === true || key?.manualLock === true,
+        demand,
+        highConsumption: assignment?.highConsumption === true,
+        spilloverPolicy: routingMode === 'auto' ? 'cross-group-when-primary-unavailable' : 'disabled'
+    };
+}
+
+function buildPublicCredentialGroupView(currentConfig, credentials, keys, now = new Date()) {
+    const assignmentByKeyId = new Map(
+        (currentConfig?.keyAssignments || []).map(assignment => [String(assignment.keyId || ''), assignment])
+    );
+    const publicKeys = (keys || []).map(key => {
+        const keyId = String(key?.keyId || key?.id || '');
+        return buildPublicKeyAssignment(key, assignmentByKeyId.get(keyId), credentials, { now });
+    });
+    const keyDemandByGroup = new Map();
+    for (const key of publicKeys) {
+        if (key.routingMode !== 'auto' || !key.primaryGroupId) continue;
+        const demandUnits = key.demand?.isNew ? 1 : (Number(key.demand?.totalDemand) || 0);
+        keyDemandByGroup.set(key.primaryGroupId, (keyDemandByGroup.get(key.primaryGroupId) || 0) + demandUnits);
+    }
+
+    const { byUuid } = buildCredentialIndexes(credentials);
+    const groups = (currentConfig?.groups || []).map(group => {
+        let capacity = 0;
+        let confidence = 'high';
+        for (const uuid of group.credentialUuids || []) {
+            const credential = byUuid.get(uuid);
+            const details = calculateCredentialCapacity(credential || {});
+            capacity += details.capacity;
+            if (!credential || details.confidence !== 'high') confidence = 'low';
+        }
+        const predictedDemand = keyDemandByGroup.get(group.id) || 0;
+        return buildPublicGroup(group, credentials, {
+            capacity,
+            confidence,
+            predictedDemand,
+            predictedUtilization: predictedDemand / (capacity > 0 ? capacity : 0.5)
+        });
+    });
+
+    return {
+        revision: Number(currentConfig?.revision || 0),
+        action: currentConfig?.action || null,
+        generatedAt: currentConfig?.generatedAt || null,
+        timeZone: currentConfig?.timeZone || 'Asia/Shanghai',
+        historyDays: Number(currentConfig?.historyDays || 7),
+        groups,
+        credentials: (credentials || []).map(buildPublicCredential),
+        keys: publicKeys,
+        policy: {
+            fixed: 'strict-no-fallback',
+            auto: 'primary-group-with-cross-group-spillover'
+        }
+    };
+}
+
+function buildPublicSuggestion(suggestion, credentials, keys) {
+    const keyById = new Map((keys || []).map(key => [String(key?.keyId || key?.id || ''), key]));
+    return {
+        applicable: suggestion?.applicable === true,
+        reason: suggestion?.reason || null,
+        generatedAt: suggestion?.generatedAt || null,
+        timeZone: suggestion?.timeZone || 'Asia/Shanghai',
+        historyDays: Number(suggestion?.historyDays || 7),
+        groupCount: Number(suggestion?.groupCount || 0),
+        healthyCredentialCount: Number(suggestion?.healthyCredentialCount || 0),
+        groups: (suggestion?.groups || []).map(group => buildPublicGroup(group, credentials)),
+        keyAssignments: (suggestion?.keyAssignments || []).map(assignment => (
+            buildPublicKeyAssignment(keyById.get(String(assignment.keyId || '')), assignment, credentials, {
+                demand: assignment.demand
+            })
+        ))
+    };
+}
+
+function pruneExpiredCredentialGroupPreviews(now = Date.now()) {
+    for (const [previewId, preview] of credentialGroupPreviews.entries()) {
+        if (preview.expiresAtMs <= now) credentialGroupPreviews.delete(previewId);
+    }
+}
+
+function getCredentialGroupPreview(previewId) {
+    if (!previewId || !credentialGroupPreviews.has(previewId)) {
+        throw createCredentialGroupApiError('PREVIEW_NOT_FOUND', '未找到凭据组预览，请重新计算');
+    }
+    const preview = credentialGroupPreviews.get(previewId);
+    if (preview.expiresAtMs <= Date.now()) {
+        credentialGroupPreviews.delete(previewId);
+        throw createCredentialGroupApiError('PREVIEW_EXPIRED', '凭据组预览已过期，请重新计算');
+    }
+    return preview;
+}
+
+function sanitizeRoutingSyncResult(sync = {}) {
+    return {
+        total: Number(sync.total || 0),
+        updated: Number(sync.updated || 0),
+        unchanged: Number(sync.unchanged || 0),
+        skippedLocked: Number(sync.skippedLocked || 0)
+    };
+}
+
+async function loadCredentialGroupContext() {
+    const service = new CredentialGroupService();
+    const [credentials, keys, currentConfig] = await Promise.all([
+        loadCodexCredentialCatalog(),
+        Promise.resolve(getCredentialRoutingKeyCatalog()),
+        service.getCurrentConfig()
+    ]);
+    return {
+        service,
+        credentials: Array.isArray(credentials) ? credentials : [],
+        keys: Array.isArray(keys) ? keys : [],
+        currentConfig: currentConfig || { revision: 0, groups: [], keyAssignments: [] }
+    };
+}
+
+function buildRevisionMutationData(entry, sync, extra = {}) {
+    return {
+        revision: Number(entry?.revision || 0),
+        action: entry?.action || 'apply',
+        createdAt: entry?.createdAt || null,
+        previousRevision: entry?.previousRevision || null,
+        sourceRevision: entry?.sourceRevision || null,
+        sync: sanitizeRoutingSyncResult(sync),
+        ...extra
+    };
+}
+
+function getCredentialGroupErrorStatus(error) {
+    switch (error?.code) {
+        case 'PREVIEW_NOT_FOUND':
+            return 404;
+        case 'PREVIEW_EXPIRED':
+            return 410;
+        case 'CREDENTIAL_GROUP_REVISION_CONFLICT':
+        case 'NO_CREDENTIAL_GROUP_REVISION_TO_ROLLBACK':
+            return 409;
+        case 'CREDENTIAL_GROUP_SUGGESTION_NOT_APPLICABLE':
+        case 'INVALID_CREDENTIAL_GROUP_CONFIG':
+        case 'INVALID_KEY_ROUTING_ASSIGNMENTS':
+            return 400;
+        default:
+            return null;
+    }
 }
 
 function readProviderCredentialEmail(provider) {
@@ -350,6 +780,143 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
     }
 
     try {
+        // GET /api/potluck/credential-groups - 获取脱敏后的凭据组、凭据与 Key 关系
+        if (method === 'GET' && path === '/api/potluck/credential-groups') {
+            const context = await loadCredentialGroupContext();
+            const data = buildPublicCredentialGroupView(
+                context.currentConfig,
+                context.credentials,
+                context.keys,
+                new Date()
+            );
+            sendJson(res, 200, { success: true, data });
+            return true;
+        }
+
+        // POST /api/potluck/credential-groups/preview - 生成临时分配预览
+        if (method === 'POST' && path === '/api/potluck/credential-groups/preview') {
+            const context = await loadCredentialGroupContext();
+            const suggestion = generateCredentialGroupSuggestion({
+                credentials: context.credentials,
+                keys: context.keys,
+                currentConfig: context.currentConfig,
+                now: new Date(),
+                days: 7,
+                timeZone: 'Asia/Shanghai'
+            });
+
+            if (!suggestion.applicable) {
+                const error = createCredentialGroupApiError(
+                    'CREDENTIAL_GROUP_SUGGESTION_NOT_APPLICABLE',
+                    '当前没有可用的 Codex OAuth 凭据，无法生成可应用的分配建议'
+                );
+                error.details = { reason: suggestion.reason || 'NO_HEALTHY_CREDENTIALS' };
+                throw error;
+            }
+
+            const validatedSuggestion = validateCredentialGroupSuggestion(suggestion, {
+                credentials: context.credentials,
+                keys: context.keys
+            });
+            pruneExpiredCredentialGroupPreviews();
+            const previewId = randomUUID();
+            const createdAtMs = Date.now();
+            const expiresAtMs = createdAtMs + CREDENTIAL_GROUP_PREVIEW_TTL_MS;
+            credentialGroupPreviews.set(previewId, {
+                suggestion: validatedSuggestion,
+                baseRevision: Number(context.currentConfig.revision || 0),
+                createdAtMs,
+                expiresAtMs,
+                credentials: context.credentials,
+                keys: context.keys
+            });
+
+            sendJson(res, 200, {
+                success: true,
+                data: {
+                    previewId,
+                    baseRevision: Number(context.currentConfig.revision || 0),
+                    createdAt: new Date(createdAtMs).toISOString(),
+                    expiresAt: new Date(expiresAtMs).toISOString(),
+                    suggestion: buildPublicSuggestion(validatedSuggestion, context.credentials, context.keys)
+                }
+            });
+            return true;
+        }
+
+        // POST /api/potluck/credential-groups/apply - 应用指定的预览
+        if (method === 'POST' && path === '/api/potluck/credential-groups/apply') {
+            const body = await getRequestBody(req, { maxBytes: 64 * 1024 });
+            const preview = getCredentialGroupPreview(body?.previewId);
+            const context = await loadCredentialGroupContext();
+            const suggestion = validateCredentialGroupSuggestion(preview.suggestion, {
+                credentials: context.credentials,
+                keys: context.keys
+            });
+            const entry = await context.service.apply(suggestion, {
+                baseRevision: preview.baseRevision,
+                action: 'apply'
+            });
+            const sync = await applyKeyRoutingAssignments(suggestion.keyAssignments || []);
+            credentialGroupPreviews.delete(body.previewId);
+
+            const result = {
+                ...entry,
+                persistencePending: sync?.persistencePending === true
+            };
+            sendManagementMutationResponse(res, {
+                result,
+                message: '凭据组分配已应用',
+                data: buildRevisionMutationData(entry, sync)
+            });
+            return true;
+        }
+
+        // GET /api/potluck/credential-groups/revisions - 获取 revision 元数据
+        if (method === 'GET' && path === '/api/potluck/credential-groups/revisions') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const context = await loadCredentialGroupContext();
+            const revisions = await context.service.listRevisions({
+                limit: url.searchParams.has('limit')
+                    ? url.searchParams.get('limit')
+                    : undefined
+            });
+            sendJson(res, 200, {
+                success: true,
+                data: {
+                    currentRevision: Number(context.currentConfig.revision || 0),
+                    revisions
+                }
+            });
+            return true;
+        }
+
+        // POST /api/potluck/credential-groups/rollback - 创建新的回滚 revision
+        if (method === 'POST' && path === '/api/potluck/credential-groups/rollback') {
+            const body = await getRequestBody(req, { maxBytes: 64 * 1024 });
+            const context = await loadCredentialGroupContext();
+            const target = await context.service.getRollbackTarget({ baseRevision: body?.baseRevision });
+            const targetSuggestion = validateCredentialGroupSuggestion({
+                applicable: true,
+                ...target.config
+            }, {
+                credentials: context.credentials,
+                keys: context.keys
+            });
+            const entry = await context.service.rollback({ baseRevision: body?.baseRevision });
+            const sync = await applyKeyRoutingAssignments(targetSuggestion.keyAssignments || []);
+            const result = {
+                ...entry,
+                persistencePending: sync?.persistencePending === true
+            };
+            sendManagementMutationResponse(res, {
+                result,
+                message: '凭据组分配已回滚',
+                data: buildRevisionMutationData(entry, sync)
+            });
+            return true;
+        }
+
         // GET /api/potluck/stats - 获取统计信息
         if (method === 'GET' && path === '/api/potluck/stats') {
             const stats = enrichPotluckStatsAccountEmails(await getCachedStats(getRequestCostOptions(req)));
@@ -641,6 +1208,18 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         return true;
 
     } catch (error) {
+        const credentialGroupStatus = getCredentialGroupErrorStatus(error);
+        if (credentialGroupStatus) {
+            sendJson(res, credentialGroupStatus, {
+                success: false,
+                error: {
+                    message: error.message,
+                    code: error.code,
+                    ...(error.details ? { details: error.details } : {})
+                }
+            });
+            return true;
+        }
         if (error?.code === 'INVALID_KEY_ROUTING') {
             sendJson(res, 400, {
                 success: false,

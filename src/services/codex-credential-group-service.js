@@ -119,6 +119,160 @@ function getRevision(store, revision) {
     return (store.revisions || []).find(entry => entry.revision === revision) || null;
 }
 
+function createCredentialGroupError(code, message, details = null) {
+    const error = new Error(message);
+    error.code = code;
+    if (details) error.details = details;
+    return error;
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === 'openai-codex-oauth'
+        || String(providerType || '').startsWith('openai-codex-oauth-');
+}
+
+function assertBaseRevision(store, baseRevision) {
+    if (baseRevision === undefined || baseRevision === null) return;
+    const normalizedBaseRevision = Number(baseRevision);
+    if (!Number.isInteger(normalizedBaseRevision) || normalizedBaseRevision !== Number(store.currentRevision || 0)) {
+        throw createCredentialGroupError(
+            'CREDENTIAL_GROUP_REVISION_CONFLICT',
+            'Credential group revision changed; create a new preview before applying',
+            {
+                expectedRevision: Number.isInteger(normalizedBaseRevision) ? normalizedBaseRevision : null,
+                currentRevision: Number(store.currentRevision || 0)
+            }
+        );
+    }
+}
+
+export function validateCredentialGroupSuggestion(suggestion, options = {}) {
+    if (!suggestion || suggestion.applicable === false || !Array.isArray(suggestion.groups)) {
+        throw createCredentialGroupError(
+            'CREDENTIAL_GROUP_SUGGESTION_NOT_APPLICABLE',
+            'Credential group suggestion is not applicable'
+        );
+    }
+
+    const credentials = Array.isArray(options.credentials) ? options.credentials : [];
+    const credentialByUuid = new Map();
+    for (const credential of credentials) {
+        const uuid = getCredentialUuid(credential);
+        if (!uuid) continue;
+        if (credentialByUuid.has(String(uuid))) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'Credential catalog contains an ambiguous UUID',
+                { reason: 'DUPLICATE_CREDENTIAL_UUID' }
+            );
+        }
+        credentialByUuid.set(String(uuid), credential);
+    }
+
+    const knownKeyIds = new Set(
+        (Array.isArray(options.keys) ? options.keys : (Array.isArray(options.keyIds) ? options.keyIds : []))
+            .map(key => String(key?.id || key?.keyId || key || ''))
+            .filter(Boolean)
+    );
+    const groups = suggestion.groups.map(normalizeGroup);
+    const groupIds = new Set();
+    const assignedCredentialUuids = new Set();
+
+    for (const group of groups) {
+        if (!group.id || groupIds.has(group.id)) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'Credential group IDs must be unique',
+                { reason: group.id ? 'DUPLICATE_GROUP_ID' : 'GROUP_ID_REQUIRED' }
+            );
+        }
+        groupIds.add(group.id);
+
+        for (const uuid of group.credentialUuids) {
+            const credential = credentialByUuid.get(uuid);
+            if (!credential) {
+                throw createCredentialGroupError(
+                    'INVALID_CREDENTIAL_GROUP_CONFIG',
+                    'Credential group references an unavailable credential',
+                    { reason: 'CREDENTIAL_NOT_FOUND' }
+                );
+            }
+            if (!isCodexProviderType(getCredentialProviderType(credential))) {
+                throw createCredentialGroupError(
+                    'INVALID_CREDENTIAL_GROUP_CONFIG',
+                    'Credential group references a non-Codex credential',
+                    { reason: 'CREDENTIAL_PROVIDER_TYPE_INVALID' }
+                );
+            }
+            if (assignedCredentialUuids.has(uuid)) {
+                throw createCredentialGroupError(
+                    'INVALID_CREDENTIAL_GROUP_CONFIG',
+                    'A credential may belong to only one credential group',
+                    { reason: 'CREDENTIAL_ASSIGNED_TO_MULTIPLE_GROUPS' }
+                );
+            }
+            assignedCredentialUuids.add(uuid);
+        }
+    }
+
+    const keyAssignments = (suggestion.keyAssignments || []).map(normalizeKeyAssignment);
+    const assignedKeyIds = new Set();
+    for (const assignment of keyAssignments) {
+        if (!assignment.keyId || !knownKeyIds.has(assignment.keyId)) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'Credential group assignment references an unavailable Key',
+                { reason: assignment.keyId ? 'KEY_NOT_FOUND' : 'KEY_ID_REQUIRED' }
+            );
+        }
+        if (assignedKeyIds.has(assignment.keyId)) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'A Key may have only one credential routing assignment',
+                { reason: 'DUPLICATE_KEY_ASSIGNMENT' }
+            );
+        }
+        assignedKeyIds.add(assignment.keyId);
+
+        if (assignment.routingMode === 'auto') {
+            if (!assignment.primaryGroupId || !groupIds.has(String(assignment.primaryGroupId))) {
+                throw createCredentialGroupError(
+                    'INVALID_CREDENTIAL_GROUP_CONFIG',
+                    'Automatic Key routing must reference an existing credential group',
+                    { reason: 'GROUP_NOT_FOUND' }
+                );
+            }
+            continue;
+        }
+
+        const fixed = assignment.fixedCredential;
+        const credential = fixed?.uuid ? credentialByUuid.get(String(fixed.uuid)) : null;
+        if (!credential) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'Fixed Key routing references an unavailable credential',
+                { reason: 'FIXED_CREDENTIAL_NOT_FOUND' }
+            );
+        }
+        if (
+            !isCodexProviderType(fixed.providerType)
+            || getCredentialProviderType(credential) !== fixed.providerType
+        ) {
+            throw createCredentialGroupError(
+                'INVALID_CREDENTIAL_GROUP_CONFIG',
+                'Fixed Key routing references the wrong provider type',
+                { reason: 'FIXED_CREDENTIAL_PROVIDER_TYPE_INVALID' }
+            );
+        }
+    }
+
+    return {
+        ...cloneJson(suggestion),
+        groups,
+        keyAssignments
+    };
+}
+
 export function calculateTargetGroupCount(healthyCredentialCount) {
     const count = Math.max(0, Math.floor(toFiniteNumber(healthyCredentialCount, 0)));
     if (count <= 2) return count;
@@ -248,7 +402,7 @@ function markHighConsumption(demands) {
 
 export function generateCredentialGroupSuggestion(options = {}) {
     const credentials = (options.credentials || [])
-        .filter(credential => getCredentialUuid(credential) && isCredentialHealthy(credential));
+        .filter(credential => getCredentialUuid(credential) && isCredentialRouteAvailable(credential));
     const targetGroupCount = calculateTargetGroupCount(credentials.length);
     const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
     const currentGroups = (options.currentConfig?.groups || []).map(normalizeGroup);
@@ -548,6 +702,34 @@ export class CredentialGroupService {
             : { revision: 0, action: null, groups: [], keyAssignments: [] };
     }
 
+    /**
+     * Return revision metadata for management UIs without exposing the
+     * revision's credential/key assignments or any future sensitive fields.
+     */
+    async listRevisions(options = {}) {
+        const store = this.readStoreSync();
+        const requestedLimit = Number(options.limit);
+        const limit = Number.isFinite(requestedLimit)
+            ? Math.max(1, Math.min(100, Math.floor(requestedLimit)))
+            : 50;
+
+        return (store.revisions || [])
+            .slice(-limit)
+            .reverse()
+            .map(entry => ({
+                revision: entry.revision,
+                action: entry.action || 'apply',
+                createdAt: entry.createdAt || null,
+                previousRevision: entry.previousRevision || null,
+                sourceRevision: entry.sourceRevision || null,
+                groupCount: Array.isArray(entry.config?.groups) ? entry.config.groups.length : 0,
+                assignmentCount: Array.isArray(entry.config?.keyAssignments)
+                    ? entry.config.keyAssignments.length
+                    : 0,
+                isCurrent: entry.revision === store.currentRevision
+            }));
+    }
+
     async apply(suggestion, options = {}) {
         if (!suggestion || suggestion.applicable === false || !Array.isArray(suggestion.groups)) {
             const error = new Error('Credential group suggestion is not applicable');
@@ -555,6 +737,7 @@ export class CredentialGroupService {
             throw error;
         }
         const store = this.readStoreSync();
+        assertBaseRevision(store, options.baseRevision);
         const revision = toFiniteNumber(store.currentRevision, 0) + 1;
         const config = {
             groups: suggestion.groups.map(normalizeGroup),
@@ -578,8 +761,9 @@ export class CredentialGroupService {
         return cloneJson(entry);
     }
 
-    async rollback() {
+    async getRollbackTarget(options = {}) {
         const store = this.readStoreSync();
+        assertBaseRevision(store, options.baseRevision);
         const current = getRevision(store, store.currentRevision);
         const targetRevision = current?.previousRevision;
         const target = targetRevision ? getRevision(store, targetRevision) : null;
@@ -588,12 +772,18 @@ export class CredentialGroupService {
             error.code = 'NO_CREDENTIAL_GROUP_REVISION_TO_ROLLBACK';
             throw error;
         }
+        return cloneJson(target);
+    }
+
+    async rollback(options = {}) {
+        const target = await this.getRollbackTarget(options);
         return this.apply({
             applicable: true,
             ...cloneJson(target.config)
         }, {
             action: 'rollback',
-            sourceRevision: target.revision
+            sourceRevision: target.revision,
+            baseRevision: options.baseRevision
         });
     }
 }

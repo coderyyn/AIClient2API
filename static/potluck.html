@@ -542,6 +542,29 @@
             white-space: nowrap;
             overflow: hidden;
         }
+        .key-routing-summary {
+            margin-top: 8px;
+            padding: 5px 8px;
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+        .key-routing-summary.is-fixed {
+            color: var(--warning-color);
+            border-color: color-mix(in srgb, var(--warning-color) 35%, var(--border-color));
+        }
+        .key-routing-summary.is-auto {
+            color: var(--primary-color);
+            border-color: color-mix(in srgb, var(--primary-color) 35%, var(--border-color));
+        }
         .btn-copy {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
@@ -2908,6 +2931,22 @@
             });
         }
 
+        function renderKeyRoutingSummary(key) {
+            const isFixed = key?.routingMode === 'fixed';
+            const manualLockSuffix = key?.manualLock === true ? ' · 手工锁定' : '';
+            if (isFixed) {
+                return `<div class="key-routing-summary is-fixed">${escapeHtml(`固定凭据 · 禁止降级${manualLockSuffix}`)}</div>`;
+            }
+
+            const primaryGroupId = typeof key?.primaryGroupId === 'string'
+                ? key.primaryGroupId.trim()
+                : '';
+            const summary = primaryGroupId
+                ? `主组 ${primaryGroupId} · 不可用时跨组降级${manualLockSuffix}`
+                : `自动分配 · 尚未指定主组${manualLockSuffix}`;
+            return `<div class="key-routing-summary is-auto">${escapeHtml(summary)}</div>`;
+        }
+
         function renderKeys(keys) {
             const container = document.getElementById('keysList');
             if (allKeys.length === 0) {
@@ -2952,6 +2991,7 @@
                     <div class="key-info">
                         <div class="key-name">${escapeHtml(key.name)} <button class="btn-copy" style="margin-left: 4px; padding: 2px 6px;" onclick="openEditName('${key.id}', '${escapeHtml(key.name).replace(/'/g, "\\'")}')" title="修改名称"><i class="fas fa-edit"></i></button></div>
                         <div class="key-id">${key.maskedKey} <button class="btn-copy" onclick="copyToClipboard('${key.id}')" title="复制完整 Key"><i class="fas fa-copy"></i></button></div>
+                        ${renderKeyRoutingSummary(key)}
                         ${providerBadges ? `<div class="key-dist-mini">${providerBadges}</div>` : ''}
                         ${dailyUsage}
                     </div>

@@ -8,7 +8,8 @@ import {
     calculateTargetGroupCount,
     generateCredentialGroupSuggestion,
     routeKeyToCredentialCandidates,
-    summarizeKeyDemand
+    summarizeKeyDemand,
+    validateCredentialGroupSuggestion
 } from '../src/services/codex-credential-group-service.js';
 
 const tempDirs = [];
@@ -96,6 +97,26 @@ describe('Codex credential group sizing and capacity', () => {
         expect(suggestion.applicable).toBe(true);
         expect(suggestion.groups.map(group => group.credentialUuids.length)).toEqual([3, 3, 2, 2]);
         expect(new Set(suggestion.groups.flatMap(group => group.credentialUuids)).size).toBe(10);
+    });
+
+    test('excludes credentials with explicitly exhausted quota and returns a non-applicable suggestion when none remain', () => {
+        const suggestion = generateCredentialGroupSuggestion({
+            credentials: [
+                { ...createCredentials(1)[0], fiveHourRemainingRatio: 0 },
+                { ...createCredentials(1)[0], uuid: 'cred-2', quotaAvailable: false },
+                { ...createCredentials(1)[0], uuid: 'cred-3', isHealthy: false }
+            ],
+            keys: [],
+            now: NOW
+        });
+
+        expect(suggestion).toMatchObject({
+            applicable: false,
+            reason: 'NO_HEALTHY_CREDENTIALS',
+            groupCount: 0,
+            groups: [],
+            keyAssignments: []
+        });
     });
 });
 
@@ -270,5 +291,170 @@ describe('Codex credential group revisions', () => {
         expect(rolledBack).toMatchObject({ revision: 3, action: 'rollback', sourceRevision: 1 });
         expect((await service.getCurrentConfig()).groups[0].id).toBe('group-1');
         expect(JSON.parse(fs.readFileSync(filePath, 'utf8')).currentRevision).toBe(3);
+    });
+
+    test('rejects stale base revisions for apply and rollback', async () => {
+        const filePath = makeTempFile();
+        const service = new CredentialGroupService({ filePath, now: () => NOW });
+        await service.apply({
+            applicable: true,
+            groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+            keyAssignments: []
+        });
+
+        await expect(service.apply({
+            applicable: true,
+            groups: [{ id: 'group-2', credentialUuids: ['cred-2'] }],
+            keyAssignments: []
+        }, { baseRevision: 0 })).rejects.toMatchObject({
+            code: 'CREDENTIAL_GROUP_REVISION_CONFLICT'
+        });
+        await expect(service.rollback({ baseRevision: 0 })).rejects.toMatchObject({
+            code: 'CREDENTIAL_GROUP_REVISION_CONFLICT'
+        });
+    });
+
+    test('lists newest revision metadata only, defaulting to 50 and capping at 100 entries', async () => {
+        const filePath = makeTempFile();
+        const revisions = Array.from({ length: 120 }, (_, index) => ({
+            revision: index + 1,
+            action: index === 119 ? 'rollback' : 'apply',
+            createdAt: new Date(NOW.getTime() + index * 1000).toISOString(),
+            previousRevision: index || null,
+            sourceRevision: index === 119 ? 80 : null,
+            config: {
+                groups: [{ id: `group-${index + 1}`, credentialUuids: [`secret-cred-${index + 1}`] }],
+                keyAssignments: [{ keyId: `secret-key-${index + 1}`, routingMode: 'auto', primaryGroupId: `group-${index + 1}` }]
+            }
+        }));
+        fs.writeFileSync(filePath, JSON.stringify({ version: 1, currentRevision: 120, revisions }));
+        const service = new CredentialGroupService({ filePath, now: () => NOW });
+
+        const defaultList = await service.listRevisions();
+        const cappedList = await service.listRevisions({ limit: 500 });
+
+        expect(defaultList).toHaveLength(50);
+        expect(cappedList).toHaveLength(100);
+        expect(defaultList[0]).toMatchObject({
+            revision: 120,
+            action: 'rollback',
+            sourceRevision: 80,
+            groupCount: 1,
+            assignmentCount: 1,
+            isCurrent: true
+        });
+        expect(defaultList.at(-1).revision).toBe(71);
+        expect(defaultList[0]).not.toHaveProperty('config');
+        expect(JSON.stringify(defaultList)).not.toContain('secret-cred');
+        expect(JSON.stringify(defaultList)).not.toContain('secret-key');
+    });
+});
+
+describe('Codex credential group suggestion validation', () => {
+    const credentials = [
+        { providerType: 'openai-codex-oauth', uuid: 'cred-1' },
+        { providerType: 'openai-codex-oauth-work', uuid: 'cred-2' }
+    ];
+    const keys = [{ id: 'key-1' }, { id: 'key-2' }];
+
+    test.each([
+        [
+            'duplicate group IDs',
+            {
+                applicable: true,
+                groups: [
+                    { id: 'group-1', credentialUuids: ['cred-1'] },
+                    { id: 'group-1', credentialUuids: ['cred-2'] }
+                ],
+                keyAssignments: []
+            },
+            'DUPLICATE_GROUP_ID'
+        ],
+        [
+            'credentials assigned to multiple groups',
+            {
+                applicable: true,
+                groups: [
+                    { id: 'group-1', credentialUuids: ['cred-1'] },
+                    { id: 'group-2', credentialUuids: ['cred-1'] }
+                ],
+                keyAssignments: []
+            },
+            'CREDENTIAL_ASSIGNED_TO_MULTIPLE_GROUPS'
+        ],
+        [
+            'unknown keys',
+            {
+                applicable: true,
+                groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+                keyAssignments: [{ keyId: 'missing-key', routingMode: 'auto', primaryGroupId: 'group-1' }]
+            },
+            'KEY_NOT_FOUND'
+        ],
+        [
+            'unknown primary groups',
+            {
+                applicable: true,
+                groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+                keyAssignments: [{ keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'missing-group' }]
+            },
+            'GROUP_NOT_FOUND'
+        ],
+        [
+            'duplicate key assignments',
+            {
+                applicable: true,
+                groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+                keyAssignments: [
+                    { keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-1' },
+                    { keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-1' }
+                ]
+            },
+            'DUPLICATE_KEY_ASSIGNMENT'
+        ]
+    ])('rejects %s', (_label, suggestion, reason) => {
+        expect(() => validateCredentialGroupSuggestion(suggestion, { credentials, keys })).toThrow(
+            expect.objectContaining({
+                code: 'INVALID_CREDENTIAL_GROUP_CONFIG',
+                details: { reason }
+            })
+        );
+    });
+
+    test('requires fixed assignments to use the exact Codex provider type of the credential', () => {
+        const suggestion = {
+            applicable: true,
+            groups: [{ id: 'group-1', credentialUuids: ['cred-2'] }],
+            keyAssignments: [{
+                keyId: 'key-1',
+                routingMode: 'fixed',
+                fixedCredential: {
+                    providerType: 'openai-codex-oauth',
+                    uuid: 'cred-2'
+                }
+            }]
+        };
+
+        expect(() => validateCredentialGroupSuggestion(suggestion, { credentials, keys })).toThrow(
+            expect.objectContaining({
+                code: 'INVALID_CREDENTIAL_GROUP_CONFIG',
+                details: { reason: 'FIXED_CREDENTIAL_PROVIDER_TYPE_INVALID' }
+            })
+        );
+    });
+
+    test('returns normalized groups and assignments for valid input', () => {
+        const validated = validateCredentialGroupSuggestion({
+            applicable: true,
+            groups: [{ id: 'group-1', credentialUuids: ['cred-1'] }],
+            keyAssignments: [{ keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-1' }]
+        }, { credentials, keys });
+
+        expect(validated.groups).toEqual([
+            expect.objectContaining({ id: 'group-1', credentialUuids: ['cred-1'], manualLock: false })
+        ]);
+        expect(validated.keyAssignments).toEqual([
+            expect.objectContaining({ keyId: 'key-1', routingMode: 'auto', primaryGroupId: 'group-1' })
+        ]);
     });
 });

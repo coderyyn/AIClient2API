@@ -73,3 +73,36 @@ DECISION: 2026-08-06 Antigravity 继续复用现有 usage cache 与用量页；`
 ## Potluck cache statistics repair - 2026-08-13T11:27:05.4931936+08:00
 DECISION: Reuse the existing multi-worker control-process single-writer architecture and usage-ledger repair-report/apply framework; add one shared usage normalizer because the prior duplicated parsers caused the Responses cached-token field to be lost at the worker bridge.
 
+
+## Codex Credential Groups - START - 2026-08-14T00:00:00+08:00
+开始执行独立凭据组路由计划；先实现纯领域服务和 focused tests，再逐层接入 Key、Provider Pool 与 UI。
+
+## Codex Credential Groups - Step 1 - START - 2026-08-13T19:46:09.1479758Z
+先建立领域层行为测试；测试覆盖组数、容量、完整自然日需求、锁定项和路由决策，随后按红绿循环实现。
+
+## Codex Credential Groups - Step 3 Audit Diagnostics - START - 2026-08-13T20:45:00+08:00
+补齐 Service Manager 路由诊断到 runtime hook 与 request-audit 的严格白名单；持久化事件仅保存选中凭据 UUID 的单向哈希，不透传 affinity key、Token 或请求正文。
+
+## Codex Credential Groups - Step 3 Audit Diagnostics - DONE - 2026-08-13T21:05:00+08:00
+产物：src/services/service-manager.js、src/providers/openai/codex-credential-group-affinity.js、src/runtime/runtime-hook-bridge.js、src/plugins/request-audit/audit-event.js 及对应 focused tests。
+关键决策：runtime hook 只传递固定路由诊断白名单；request-audit 对 selectedProviderUuid 使用单向哈希，并继续禁止 affinity key、Token、Cookie、原始 Key 与请求正文进入审计事件。
+验证：4 个路由相关 suite 共 37 个测试通过；runtime-hook-bridge 5/5、request-audit-event 12/12 通过；node --check 与 git diff --check 通过。
+
+## Codex Credential Groups - Step 2 Management API - START - 2026-08-14T08:30:00+08:00
+继续实现凭据组管理 API；先覆盖 revision 元数据、preview/apply/rollback、脱敏视图和 Key 路由同步，再接入 OAuth/Provider 与 Potluck UI。
+
+## Codex Credential Groups - Step 2 Management API - DONE - 2026-08-14T09:33:06+08:00
+产物：src/plugins/api-potluck/api-routes.js、src/services/codex-credential-group-service.js、tests/api-potluck-credential-groups.test.js、tests/codex-credential-group-service.test.js。
+关键决策：管理接口采用 preview → admin apply；以 baseRevision 做并发冲突保护，rollback 仅恢复当前 revision 的直接上一版本并生成新 revision；所有管理视图使用脱敏引用。
+验证：管理 API 与领域服务测试通过；fixed/auto 路由及锁定项约束已覆盖。
+
+## Codex Credential Groups - Step 4 OAuth/Provider UI and Potluck - DONE - 2026-08-14T09:33:06+08:00
+产物：static/app/provider-manager.js、static/app/i18n.js、static/components/section-providers.css、static/components/section-providers.html、static/potluck.html、tests/codex-credential-group-ui-source.test.js。
+关键决策：UI 展示 Key ↔ 凭据组 ↔ 脱敏凭据关系、路由模式、锁定状态、聚合用量和临时 spillover；apply/rollback 均需要管理员确认；前端 API 路径遵循 window.apiClient 的无 `/api` 约定。
+验证：UI 源码测试 6/6 通过，内嵌脚本 vm.Script 检查通过。
+
+## Codex Credential Groups - Final Verification - DONE - 2026-08-14T09:33:06+08:00
+产物：docs/plans/2026-08-14-codex-credential-groups-routing-plan.md 及本次白名单范围内的实现与测试文件。
+验证：6 个 Jest suite、65 个测试通过；4 个 JS 文件 node --check 通过；Potluck 内嵌脚本检查通过；git diff --check 通过。未执行真实浏览器截图或页面 smoke，未执行 git push。
+环境记录：一次 PowerShell 传递正则的 node -e 命令因双重转义失败，改用单引号包裹的内存 vm.Script 检查成功；此前临时文件语法检查方式受本机策略拦截，未改用写盘绕过。
+RETROSPECTIVE: No high-signal memory updates.

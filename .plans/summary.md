@@ -11,3 +11,13 @@ keep: stats 新增 `accounts` 与 `daily[date].models/accounts`；usage block �
 keep: `CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=false` 为默认；开启后仅 Codex provider 使用同 key affinity。
 [step-8 | 2026-06-16T21:45:00+08:00] ✓ 更新文档，完成集中测试和本地容器 smoke
 keep: 原始需求中的 Codex token 配额过滤、早晨预热和官方 `/usage` 字段展示留作下一批。
+
+[credential-groups | 2026-08-14T00:00:00+08:00] ⏳ 开始执行 Codex OAuth 凭据组与 Potluck Key 路由计划
+[credential-groups-step-3 | 2026-08-13T21:05:00+08:00] ✓ 完成 Service Manager 路由诊断及审计链路白名单透传
+keep: 审计只保存 selectedProviderUuidHash；routingMode、组 ID、spillover 和 assignmentMissing 可诊断，但不保存原始凭据 UUID、affinity key、Token、Cookie、原始 Key 或请求正文。
+[credential-groups-step-2 | 2026-08-14T09:33:06+08:00] ✓ 完成凭据组管理 API、preview/apply/revision/rollback 与 Key 路由同步
+keep: apply 必须基于未过期 preview 和匹配的 baseRevision；rollback 只恢复直接上一版本并生成新 revision。
+[credential-groups-step-4 | 2026-08-14T09:33:06+08:00] ✓ 完成 OAuth/Provider 管理页与 Potluck Key ↔ 凭据组关系摘要 UI
+keep: UI 和管理输出只使用脱敏凭据引用，不显示 Token、Cookie、原始 API Key 或原始凭据 UUID。
+[credential-groups-final | 2026-08-14T09:33:06+08:00] ✓ 完成最终验证：6 个 suite、65 个测试及语法/diff 检查通过
+keep: 未执行真实浏览器截图或页面 smoke；未执行 git push。
