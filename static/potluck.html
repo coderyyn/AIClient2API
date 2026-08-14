@@ -530,6 +530,10 @@
             margin-bottom: 6px;
             white-space: nowrap;
             overflow: hidden;
+        }
+        .key-name-text {
+            min-width: 0;
+            overflow: hidden;
             text-overflow: ellipsis;
         }
         .key-id {
@@ -543,19 +547,19 @@
             overflow: hidden;
         }
         .key-routing-summary {
-            margin-top: 8px;
-            padding: 5px 8px;
+            flex: 0 0 auto;
+            padding: 3px 7px;
             display: inline-flex;
             align-items: center;
+            gap: 4px;
             max-width: 100%;
             color: var(--text-secondary);
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-md);
             font-size: 11px;
-            line-height: 1.4;
-            white-space: normal;
-            overflow-wrap: anywhere;
+            line-height: 1.2;
+            white-space: nowrap;
         }
         .key-routing-summary.is-fixed {
             color: var(--warning-color);
@@ -2935,16 +2939,21 @@
             const isFixed = key?.routingMode === 'fixed';
             const manualLockSuffix = key?.manualLock === true ? ' · 手工锁定' : '';
             if (isFixed) {
-                return `<div class="key-routing-summary is-fixed">${escapeHtml(`固定凭据 · 禁止降级${manualLockSuffix}`)}</div>`;
+                const summary = `固定凭据 · 禁止降级${manualLockSuffix}`;
+                const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
+                return `<span class="key-routing-summary is-fixed" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">fixed${lockIcon}</span>`;
             }
 
             const primaryGroupId = typeof key?.primaryGroupId === 'string'
                 ? key.primaryGroupId.trim()
                 : '';
+            const compactGroup = primaryGroupId ? primaryGroupId.replace(/^group-/i, '') : '';
+            const compactLabel = compactGroup ? `${compactGroup} · auto` : 'auto';
             const summary = primaryGroupId
                 ? `主组 ${primaryGroupId} · 不可用时跨组降级${manualLockSuffix}`
                 : `自动分配 · 尚未指定主组${manualLockSuffix}`;
-            return `<div class="key-routing-summary is-auto">${escapeHtml(summary)}</div>`;
+            const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
+            return `<span class="key-routing-summary is-auto" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">${escapeHtml(compactLabel)}${lockIcon}</span>`;
         }
 
         function renderKeys(keys) {
@@ -2989,9 +2998,8 @@
 
                 return `<div class="key-card ${key.enabled ? '' : 'disabled'}">
                     <div class="key-info">
-                        <div class="key-name">${escapeHtml(key.name)} <button class="btn-copy" style="margin-left: 4px; padding: 2px 6px;" onclick="openEditName('${key.id}', '${escapeHtml(key.name).replace(/'/g, "\\'")}')" title="修改名称"><i class="fas fa-edit"></i></button></div>
+                        <div class="key-name"><span class="key-name-text">${escapeHtml(key.name)}</span><button class="btn-copy" style="padding: 2px 6px;" onclick="openEditName('${key.id}', '${escapeHtml(key.name).replace(/'/g, "\\'")}')" title="修改名称"><i class="fas fa-edit"></i></button>${renderKeyRoutingSummary(key)}</div>
                         <div class="key-id">${key.maskedKey} <button class="btn-copy" onclick="copyToClipboard('${key.id}')" title="复制完整 Key"><i class="fas fa-copy"></i></button></div>
-                        ${renderKeyRoutingSummary(key)}
                         ${providerBadges ? `<div class="key-dist-mini">${providerBadges}</div>` : ''}
                         ${dailyUsage}
                     </div>

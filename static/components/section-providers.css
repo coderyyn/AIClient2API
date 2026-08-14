@@ -1,3 +1,21 @@
+/* Provider 页面视图切换 */
+.providers-view-header {
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.providers-view-header h2 {
+    margin: 0;
+}
+
+.providers-view-toggle {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
 /* 统计卡片 */
 .providers-handoff-panel {
     background: linear-gradient(135deg, var(--primary-10) 0%, var(--bg-primary) 58%, var(--bg-secondary) 100%);
@@ -457,6 +475,18 @@
     border-bottom: 0;
 }
 
+.credential-groups-disclosure {
+    padding: 0.7rem 0.85rem;
+    display: flex;
+    justify-content: center;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.credential-groups-disclosure .btn {
+    min-height: 2.25rem;
+}
+
 .credential-groups-table-primary {
     display: grid;
     gap: 0.2rem;
@@ -509,6 +539,16 @@
 }
 
 @media (max-width: 768px) {
+    .providers-view-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .providers-view-toggle {
+        width: 100%;
+        justify-content: center;
+    }
+
     .credential-groups-panel {
         padding: 1rem;
     }

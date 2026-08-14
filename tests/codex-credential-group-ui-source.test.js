@@ -10,6 +10,16 @@ describe('Codex credential-group UI source', () => {
     const providerManager = readSource('static/app/provider-manager.js');
     const potluckHtml = readSource('static/potluck.html');
 
+    test('keeps the original Providers view as the default and exposes an accessible advanced-view toggle', () => {
+        expect(providersHtml).toContain('id="providersViewToggleBtn"');
+        expect(providersHtml).toContain('aria-expanded="false"');
+        expect(providersHtml).toContain('aria-controls="credentialGroupsPanel"');
+        expect(providersHtml).toContain('id="providersDefaultView"');
+        expect(providersHtml).toMatch(/id="credentialGroupsPanel"[^>]*hidden/);
+        expect(providerManager).toContain('setProvidersAdvancedView');
+        expect(providerManager).not.toMatch(/Promise\.all\(\[\s*loadProviders\(forceRefreshSupported\),\s*loadCredentialGroupManagement\(\)/);
+    });
+
     test('Providers page exposes the relationship-management panel and its primary containers', () => {
         [
             'credentialGroupsPanel',
@@ -65,7 +75,7 @@ describe('Codex credential-group UI source', () => {
         expect(providerManager).not.toContain('credential.uuid');
     });
 
-    test('shows a safe Potluck routing summary for fixed, auto, spillover, and manually locked keys', () => {
+    test('shows a compact safe Potluck routing badge beside the key-name editor', () => {
         const helperStart = potluckHtml.indexOf('function renderKeyRoutingSummary');
         const helperEnd = potluckHtml.indexOf('function renderKeys', helperStart);
         expect(helperStart).toBeGreaterThanOrEqual(0);
@@ -75,11 +85,21 @@ describe('Codex credential-group UI source', () => {
         expect(helper).toContain('key?.routingMode');
         expect(helper).toContain('key?.primaryGroupId');
         expect(helper).toContain('key?.manualLock');
+        expect(helper).toContain("replace(/^group-/i, '')");
+        expect(helper).toContain("compactGroup ? `${compactGroup} · auto` : 'auto'");
+        expect(helper).not.toContain("compactGroup = primaryGroupId ? primaryGroupId.replace(/^group-/i, '') : '?'");
+        expect(helper).toContain('fixed');
+        expect(helper).toContain('auto');
         expect(helper).toContain('固定凭据 · 禁止降级');
         expect(helper).toContain('不可用时跨组降级');
         expect(helper).toContain('手工锁定');
-        expect(helper).toContain('escapeHtml(summary)');
+        expect(helper).toContain('aria-label=');
+        expect(helper).toContain('title=');
         expect(helper).not.toContain('fixedCredential.uuid');
         expect(helper).not.toContain('key.id');
+
+        const keyNameLine = potluckHtml.match(/<div class="key-name">[^\n]+/u)?.[0] || '';
+        expect(keyNameLine).toContain('renderKeyRoutingSummary(key)');
+        expect(potluckHtml).not.toMatch(/<div class="key-id">[^\n]+<\/div>\s*\$\{renderKeyRoutingSummary\(key\)\}/u);
     });
 });

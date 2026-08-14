@@ -16,6 +16,10 @@ import {
     isExpectedCodexOAuthCallbackMessage,
     isExpectedOAuthPopupCompleteMessage
 } from './oauth-popup.js';
+import {
+    getFocusedCredentialGroupKeys,
+    getFocusedCredentials
+} from './credential-group-view.js';
 
 // 保存初始服务器时间和运行时间
 let initialServerTime = null;
@@ -29,6 +33,12 @@ let credentialGroupRevisions = [];
 let activeCredentialGroupPreview = null;
 let credentialGroupBusyAction = null;
 let credentialGroupEventsBound = false;
+let providersAdvancedViewActive = false;
+const credentialGroupListExpanded = {
+    credentials: false,
+    keys: false,
+    previewKeys: false
+};
 
 function getCredentialGroupResponseData(response) {
     return response?.data || response || {};
@@ -98,6 +108,25 @@ function credentialGroupBadge(text, className = 'is-neutral') {
 
 function credentialGroupEmpty(icon, messageKey) {
     return `<div class="credential-groups-empty"><i class="fas ${icon}" aria-hidden="true"></i><span>${escapeHtml(t(messageKey))}</span></div>`;
+}
+
+function renderCredentialGroupDisclosure(scope, hiddenCount, expanded) {
+    if (hiddenCount <= 0) return '';
+    const showHiddenKey = scope === 'credentials'
+        ? 'providers.credentialGroups.showHiddenCredentials'
+        : 'providers.credentialGroups.showHiddenKeys';
+    const label = expanded
+        ? t('providers.credentialGroups.collapseList')
+        : t(showHiddenKey, { count: hiddenCount });
+    const icon = expanded ? 'fa-chevron-up' : 'fa-chevron-down';
+    return `
+        <div class="credential-groups-disclosure">
+            <button type="button" class="btn btn-outline" data-credential-group-toggle="${escapeHtml(scope)}" aria-expanded="${expanded ? 'true' : 'false'}">
+                <i class="fas ${icon}" aria-hidden="true"></i>
+                <span>${escapeHtml(label)}</span>
+            </button>
+        </div>
+    `;
 }
 
 function setCredentialGroupStatus(type, message, icon = 'fa-circle-info') {
@@ -275,11 +304,14 @@ function renderCredentialGroupCredentialsTable() {
     const container = document.getElementById('credentialGroupsCredentials');
     if (!container || !credentialGroupView) return;
     const credentials = Array.isArray(credentialGroupView.credentials) ? credentialGroupView.credentials : [];
+    const focused = getFocusedCredentials(credentials);
+    const expanded = credentialGroupListExpanded.credentials === true;
+    const visibleCredentials = expanded ? focused.all : focused.visible;
     if (credentials.length === 0) {
         container.innerHTML = credentialGroupEmpty('fa-id-card-clip', 'providers.credentialGroups.empty.credentials');
         return;
     }
-    container.innerHTML = `
+    const table = visibleCredentials.length > 0 ? `
         <table class="credential-groups-table">
             <thead><tr>
                 <th>${escapeHtml(t('providers.credentialGroups.label.credential'))}</th>
@@ -289,7 +321,7 @@ function renderCredentialGroupCredentialsTable() {
                 <th>${escapeHtml(t('providers.credentialGroups.label.remainingWeekly'))}</th>
                 <th>${escapeHtml(t('providers.credentialGroups.label.status'))}</th>
             </tr></thead>
-            <tbody>${credentials.map(credential => {
+            <tbody>${visibleCredentials.map(credential => {
                 const status = getCredentialGroupCredentialStatus(credential);
                 const lockBadge = credential.manualLock === true
                     ? credentialGroupBadge(t('providers.credentialGroups.status.locked'), 'is-locked')
@@ -305,7 +337,8 @@ function renderCredentialGroupCredentialsTable() {
                 </tr>`;
             }).join('')}</tbody>
         </table>
-    `;
+    ` : credentialGroupEmpty('fa-id-card-clip', 'providers.credentialGroups.empty.focusedCredentials');
+    container.innerHTML = `${table}${renderCredentialGroupDisclosure('credentials', focused.hiddenCount, expanded)}`;
 }
 
 function formatCredentialGroupDemand(demand) {
@@ -322,11 +355,14 @@ function formatCredentialGroupDemand(demand) {
     });
 }
 
-function renderCredentialGroupKeyTable(keys, emptyKey = 'providers.credentialGroups.empty.keys') {
+function renderCredentialGroupKeyTable(keys, emptyKey = 'providers.credentialGroups.empty.keys', scope = 'keys') {
     if (!Array.isArray(keys) || keys.length === 0) {
         return credentialGroupEmpty('fa-key', emptyKey);
     }
-    return `
+    const focused = getFocusedCredentialGroupKeys(keys);
+    const expanded = credentialGroupListExpanded[scope] === true;
+    const visibleKeys = expanded ? focused.all : focused.visible;
+    const table = visibleKeys.length > 0 ? `
         <table class="credential-groups-table">
             <thead><tr>
                 <th>${escapeHtml(t('providers.credentialGroups.label.key'))}</th>
@@ -336,7 +372,7 @@ function renderCredentialGroupKeyTable(keys, emptyKey = 'providers.credentialGro
                 <th>${escapeHtml(t('providers.credentialGroups.label.demand'))}</th>
                 <th>${escapeHtml(t('providers.credentialGroups.label.status'))}</th>
             </tr></thead>
-            <tbody>${keys.map(key => {
+            <tbody>${visibleKeys.map(key => {
                 const fixed = key?.fixedCredential?.credentialRef || t('providers.credentialGroups.unknown');
                 const isFixed = key?.routingMode === 'fixed';
                 const routeBadge = credentialGroupBadge(
@@ -368,7 +404,8 @@ function renderCredentialGroupKeyTable(keys, emptyKey = 'providers.credentialGro
                 </tr>`;
             }).join('')}</tbody>
         </table>
-    `;
+    ` : credentialGroupEmpty('fa-key', 'providers.credentialGroups.empty.focusedKeys');
+    return `${table}${renderCredentialGroupDisclosure(scope, focused.hiddenCount, expanded)}`;
 }
 
 function renderCredentialGroupRevisionsTable() {
@@ -440,7 +477,11 @@ function renderCredentialGroupPreview() {
         </div>
     `).join('');
     groups.innerHTML = renderCredentialGroupCards(suggestion.groups, 'providers.credentialGroups.empty.previewGroups');
-    keys.innerHTML = renderCredentialGroupKeyTable(suggestion.keyAssignments, 'providers.credentialGroups.empty.previewKeys');
+    keys.innerHTML = renderCredentialGroupKeyTable(
+        suggestion.keyAssignments,
+        'providers.credentialGroups.empty.previewKeys',
+        'previewKeys'
+    );
 }
 
 function renderCredentialGroupManagement() {
@@ -456,7 +497,7 @@ function renderCredentialGroupManagement() {
     }
     renderCredentialGroupCredentialsTable();
     const currentKeys = document.getElementById('credentialGroupsKeys');
-    if (currentKeys) currentKeys.innerHTML = renderCredentialGroupKeyTable(credentialGroupView.keys);
+    if (currentKeys) currentKeys.innerHTML = renderCredentialGroupKeyTable(credentialGroupView.keys, 'providers.credentialGroups.empty.keys', 'keys');
     renderCredentialGroupRevisionsTable();
     updateCredentialGroupRollbackButton();
 }
@@ -467,6 +508,7 @@ function initCredentialGroupManagement() {
     const discardButton = document.getElementById('credentialGroupsDiscardPreviewBtn');
     const applyButton = document.getElementById('credentialGroupsApplyPreviewBtn');
     const rollbackButton = document.getElementById('credentialGroupsRollbackBtn');
+    const panel = document.getElementById('credentialGroupsPanel');
 
     bindOnce(refreshButton, 'click', () => loadCredentialGroupManagement({ statusKey: 'refreshing' }), 'credentialGroupsRefresh');
     bindOnce(previewButton, 'click', () => createCredentialGroupPreview(), 'credentialGroupsPreview');
@@ -481,9 +523,18 @@ function initCredentialGroupManagement() {
     }, 'credentialGroupsDiscardPreview');
     bindOnce(applyButton, 'click', () => applyCredentialGroupPreview(), 'credentialGroupsApplyPreview');
     bindOnce(rollbackButton, 'click', () => rollbackCredentialGroups(), 'credentialGroupsRollback');
+    bindOnce(panel, 'click', event => {
+        const button = event.target.closest('[data-credential-group-toggle]');
+        if (!button || !panel?.contains(button)) return;
+        const scope = button.dataset.credentialGroupToggle;
+        if (!(scope in credentialGroupListExpanded)) return;
+        credentialGroupListExpanded[scope] = !credentialGroupListExpanded[scope];
+        renderCredentialGroupManagement();
+    }, 'credentialGroupsDisclosure');
 
     if (!credentialGroupEventsBound) {
         window.addEventListener('languageChanged', () => {
+            updateProvidersViewToggle();
             if (credentialGroupView) renderCredentialGroupManagement();
             else if (activeCredentialGroupPreview) renderCredentialGroupPreview();
         });
@@ -632,12 +683,43 @@ function navigateToSection(sectionId) {
     window.location.hash = `#${sectionId}`;
 }
 
+function updateProvidersViewToggle() {
+    const button = document.getElementById('providersViewToggleBtn');
+    const label = document.getElementById('providersViewToggleLabel');
+    if (!button || !label) return;
+    const translationKey = providersAdvancedViewActive ? 'providers.view.default' : 'providers.view.advanced';
+    button.setAttribute('aria-expanded', providersAdvancedViewActive ? 'true' : 'false');
+    label.setAttribute('data-i18n', translationKey);
+    label.textContent = t(translationKey);
+    const icon = button.querySelector('i');
+    if (icon) icon.className = providersAdvancedViewActive ? 'fas fa-arrow-left' : 'fas fa-diagram-project';
+}
+
+async function setProvidersAdvancedView(active) {
+    providersAdvancedViewActive = active === true;
+    const defaultView = document.getElementById('providersDefaultView');
+    const continuation = document.getElementById('providersDefaultViewContinuation');
+    const panel = document.getElementById('credentialGroupsPanel');
+    if (defaultView) defaultView.hidden = providersAdvancedViewActive;
+    if (continuation) continuation.hidden = providersAdvancedViewActive;
+    if (panel) panel.hidden = !providersAdvancedViewActive;
+    updateProvidersViewToggle();
+
+    if (providersAdvancedViewActive && !credentialGroupView) {
+        await loadCredentialGroupManagement();
+    }
+}
+
 function initProvidersPageHelpers() {
     const openAccessBtn = document.getElementById('providersOpenQuickAccess');
     bindOnce(openAccessBtn, 'click', () => navigateToSection('access'), 'providersOpenQuickAccess');
 
     const openConfigBtn = document.getElementById('providersOpenConfig');
     bindOnce(openConfigBtn, 'click', () => navigateToSection('config'), 'providersOpenConfig');
+
+    const viewToggle = document.getElementById('providersViewToggleBtn');
+    bindOnce(viewToggle, 'click', () => setProvidersAdvancedView(!providersAdvancedViewActive), 'providersViewToggle');
+    updateProvidersViewToggle();
 }
 
 function updateProvidersHandoffSummary(providers = {}, supportedProviders = []) {
@@ -902,10 +984,7 @@ async function loadProviders(forceRefreshSupported = false) {
 }
 
 async function loadProvidersPageData(forceRefreshSupported = false) {
-    const [data] = await Promise.all([
-        loadProviders(forceRefreshSupported),
-        loadCredentialGroupManagement()
-    ]);
+    const data = await loadProviders(forceRefreshSupported);
     if (data?.providers) {
         await refreshProvidersHandoffSummary(data.providers, data.supportedProviders || cachedSupportedProviders || []);
     }

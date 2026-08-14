@@ -49,6 +49,14 @@
 - 接入 OAuth/Provider 管理页与 Potluck 摘要：展示脱敏凭据、组、Key、路由模式、锁定状态、聚合用量和 spillover；支持预览、管理员确认应用及回滚。
 - 手工锁定的组、凭据和 Key 不参与自动重排；管理输出和审计链路不透传 Token、Cookie、原始 API Key、原始凭据 UUID 或请求正文。
 
+## Provider 页面精简补充（2026-08-14）
+
+- Provider 页面默认保留原提供商池视图，只新增“高级路由管理”入口；凭据组接口改为首次进入高级视图时懒加载，刷新页面后仍回到默认视图。
+- 高级视图默认只展示健康、启用、可路由且容量大于 0 的凭据；异常凭据通过“显示全部”按需展开。
+- Potluck Key 按最近 7 个完整自然日 Token 降序展示最小的 80% 累计消耗集合；`fixed` 和手工锁定 Key 始终保留，禁用、零用量及其余低消耗 Key 默认折叠。
+- 当前关系与待应用预览共用同一展示规则；折叠只影响 UI，不改变后端分组、应用、回滚或 spillover 行为。
+- Potluck 管理页把长路由说明压缩为名称编辑按钮右侧的 `1 · auto` / `2 · auto` / `fixed` 徽标，完整路由说明保留在 `title` 与 `aria-label`。
+
 ## 实际验证（2026-08-14）
 
 - `npx.cmd jest tests/codex-credential-group-service.test.js tests/api-potluck-credential-groups.test.js tests/codex-credential-group-ui-source.test.js tests/api-potluck-admin-persistence-routes.test.js tests/api-potluck-key-routing.test.js tests/service-manager-credential-group-routing.test.js --runInBand`：6 个 suite、65 个测试全部通过。

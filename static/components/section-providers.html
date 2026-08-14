@@ -1,7 +1,15 @@
 <link rel="stylesheet" href="components/section-providers.css">
 <!-- Provider Pools Section -->
 <section id="providers" class="section" aria-labelledby="providers-title">
-    <h2 id="providers-title" data-i18n="providers.title">提供商池管理</h2>
+    <div class="providers-view-header">
+        <h2 id="providers-title" data-i18n="providers.title">提供商池管理</h2>
+        <button type="button" class="btn btn-outline providers-view-toggle" id="providersViewToggleBtn"
+            aria-expanded="false" aria-controls="credentialGroupsPanel">
+            <i class="fas fa-diagram-project" aria-hidden="true"></i>
+            <span id="providersViewToggleLabel" data-i18n="providers.view.advanced">高级路由管理</span>
+        </button>
+    </div>
+    <div id="providersDefaultView">
     <div class="pool-description">
         <div class="highlight-note">
             <i class="fas fa-info-circle"></i>
@@ -44,8 +52,9 @@
             </div>
         </div>
     </div>
+    </div>
 
-    <div class="credential-groups-panel" id="credentialGroupsPanel" aria-labelledby="credential-groups-title">
+    <div class="credential-groups-panel" id="credentialGroupsPanel" aria-labelledby="credential-groups-title" hidden>
         <div class="credential-groups-header">
             <div class="credential-groups-heading">
                 <span class="credential-groups-heading-icon" aria-hidden="true"><i class="fas fa-diagram-project"></i></span>
@@ -148,6 +157,7 @@
         </div>
     </div>
 
+    <div id="providersDefaultViewContinuation">
     <!-- Provider Pool Stats -->
     <div class="stats-grid">
         <div class="stat-card">
@@ -194,5 +204,6 @@
         <div id="providersList" class="providers-list">
             <!-- Providers will be loaded here -->
         </div>
+    </div>
     </div>
 </section>
