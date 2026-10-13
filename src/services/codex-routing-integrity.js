@@ -4,9 +4,7 @@ function createRoutingIntegrityError(reason, route = {}) {
     error.status = 500;
     error.details = {
         reason,
-        routingMode: route.routingMode || null,
-        selectedGroupId: route.selectedGroupId || null,
-        actualProviderGroupId: route.actualProviderGroupId || null
+        routingMode: route.routingMode || null
     };
     return error;
 }
@@ -31,22 +29,10 @@ export function getCodexRoutingConsistencyStatus(route = {}, actualProviderUuid 
             : 'mismatch';
     }
 
-    if (route.routingMode === 'auto' || route.routingMode === 'fixed') {
-        if (
-            !route.selectedGroupId
-            || !route.actualProviderGroupId
-            || route.selectedGroupId !== route.actualProviderGroupId
-        ) {
-            return 'mismatch';
-        }
-        if (
-            route.routingMode === 'fixed'
-            && route.fixedCredentialUuid
-            && route.fixedCredentialUuid !== actualProviderUuid
-        ) {
-            return 'mismatch';
-        }
-        return 'consistent';
+    if (route.routingMode === 'fixed') {
+        return route.fixedCredentialUuid && route.fixedCredentialUuid !== actualProviderUuid
+            ? 'mismatch'
+            : 'consistent';
     }
 
     return 'unverifiable';
@@ -54,7 +40,7 @@ export function getCodexRoutingConsistencyStatus(route = {}, actualProviderUuid 
 
 export function assertCodexRoutingIntegrity(config = {}, actualProviderUuid = null) {
     const route = config._codexRouteResult || config._codexRouting;
-    if (!route || !['pool', 'auto', 'fixed', 'restricted'].includes(route.routingMode)) return true;
+    if (!route || !['pool', 'fixed', 'restricted'].includes(route.routingMode)) return true;
 
     const consistencyStatus = getCodexRoutingConsistencyStatus(route, actualProviderUuid);
     route.consistencyStatus = consistencyStatus;

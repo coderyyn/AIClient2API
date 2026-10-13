@@ -2611,10 +2611,6 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     excludeProviderUuids: failedCredentialUuids,
                     deprioritizeProviderTypes: failedProviderTypes,
                     allowExcludedProviderFallback: isCodexTransient,
-                    ...(groupRateLimitWaitMs > 0 ? {
-                        retryReason: 'UPSTREAM_RATE_LIMIT',
-                        retryGroupId: CONFIG._codexRouting?.selectedGroupId || CONFIG._codexRouting?.requestedPrimaryGroupId || null
-                    } : {}),
                     ...(shouldForceCodexFamilyFallback(error, toProvider, model)
                         ? { forceCodexModelFallback: true, modelFallbackReason: 'UPSTREAM_429' }
                         : {}),
@@ -3134,10 +3130,6 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     excludeProviderUuids: failedCredentialUuids,
                     deprioritizeProviderTypes: failedProviderTypes,
                     allowExcludedProviderFallback: isCodexTransient,
-                    ...(groupRateLimitWaitMs > 0 ? {
-                        retryReason: 'UPSTREAM_RATE_LIMIT',
-                        retryGroupId: CONFIG._codexRouting?.selectedGroupId || CONFIG._codexRouting?.requestedPrimaryGroupId || null
-                    } : {}),
                     ...(shouldForceCodexFamilyFallback(error, toProvider, model)
                         ? { forceCodexModelFallback: true, modelFallbackReason: 'UPSTREAM_429' }
                         : {}),

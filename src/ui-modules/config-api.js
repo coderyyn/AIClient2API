@@ -24,11 +24,6 @@ function parseBooleanConfig(value) {
     return Boolean(value);
 }
 
-function parseConfigIdList(value) {
-    const items = Array.isArray(value) ? value : String(value ?? '').split(',');
-    return items.map(item => String(item).trim()).filter(Boolean);
-}
-
 function normalizeAntigravityElasticRoutingUpdate(incoming, current = {}) {
     if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return current;
     const next = { ...current };
@@ -194,8 +189,6 @@ export async function handleGetConfig(req, res, currentConfig) {
         CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED !== false,
         CODEX_CLOAKING_ENABLED_SOURCE: process.env.CODEX_CLOAKING_ENABLED !== undefined ? 'env' : 'config',
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
-        CODEX_DYNAMIC_SESSION_ROUTING_ENABLED: currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED === true,
-        CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS: parseConfigIdList(currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS),
         CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
         CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
         CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,
@@ -348,8 +341,6 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
         if (newConfig.CODEX_FINGERPRINT_ENABLED !== undefined) currentConfig.CODEX_FINGERPRINT_ENABLED = parseBooleanConfig(newConfig.CODEX_FINGERPRINT_ENABLED);
         if (newConfig.CODEX_CLOAKING_ENABLED !== undefined) currentConfig.CODEX_CLOAKING_ENABLED = parseBooleanConfig(newConfig.CODEX_CLOAKING_ENABLED);
         if (newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED !== undefined) currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = parseBooleanConfig(newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED);
-        if (newConfig.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED !== undefined) currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED = parseBooleanConfig(newConfig.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED);
-        if (newConfig.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS !== undefined) currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS = parseConfigIdList(newConfig.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS);
         if (newConfig.CODEX_PREWARM_ENABLED !== undefined) currentConfig.CODEX_PREWARM_ENABLED = parseBooleanConfig(newConfig.CODEX_PREWARM_ENABLED);
         if (newConfig.CODEX_PREWARM_TIMES !== undefined) {
             currentConfig.CODEX_PREWARM_TIMES = Array.isArray(newConfig.CODEX_PREWARM_TIMES)
@@ -569,8 +560,6 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                     CODEX_FINGERPRINT_ENABLED: currentConfig.CODEX_FINGERPRINT_ENABLED,
                     CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED,
                     CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
-                CODEX_DYNAMIC_SESSION_ROUTING_ENABLED: currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED === true,
-                CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS: parseConfigIdList(currentConfig.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS),
                 CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
                 CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
                 CODEX_PREWARM_ATTEMPTS: currentConfig.CODEX_PREWARM_ATTEMPTS,

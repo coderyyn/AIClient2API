@@ -75,7 +75,7 @@ function createRateLimitError() {
 }
 
 describe('Codex transient credential retry', () => {
-    test('waits for the primary group recovery window before selecting another credential', async () => {
+    test('waits out the upstream rate-limit window before selecting another credential', async () => {
         mockGetApiServiceWithFallback.mockReset();
         const firstService = { generateContent: jest.fn().mockRejectedValue(createRateLimitError()) };
         const secondService = { generateContent: jest.fn().mockResolvedValue({ id: 'resp_rate_limit_retry_success' }) };
@@ -106,7 +106,6 @@ describe('Codex transient credential retry', () => {
         );
 
         expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(config, 'gpt-5.5', expect.objectContaining({
-            retryReason: 'UPSTREAM_RATE_LIMIT',
             allowExcludedProviderFallback: false
         }));
         expect(config._codexRouting).toMatchObject({

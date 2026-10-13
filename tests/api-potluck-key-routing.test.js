@@ -40,31 +40,6 @@ function readStore() {
     return JSON.parse(fs.readFileSync(getStorePath(), 'utf8'));
 }
 
-function writeCredentialGroupStore(keyId, routing) {
-    fs.writeFileSync(
-        path.join(tempDir, 'configs', 'codex-credential-groups.json'),
-        JSON.stringify({
-            version: 1,
-            currentRevision: 1,
-            revisions: [{
-                revision: 1,
-                action: 'apply',
-                createdAt: '2026-08-13T03:00:00.000Z',
-                previousRevision: null,
-                sourceRevision: null,
-                config: {
-                    groups: [],
-                    keyAssignments: [{ keyId, ...routing }],
-                    generatedAt: '2026-08-13T03:00:00.000Z',
-                    timeZone: 'Asia/Shanghai',
-                    historyDays: 7
-                }
-            }]
-        }),
-        'utf8'
-    );
-}
-
 function writeAdminToken(token = 'admin-token') {
     fs.writeFileSync(path.join(tempDir, 'configs', 'token-store.json'), JSON.stringify({
         tokens: {
@@ -269,54 +244,18 @@ describe('API Potluck key credential routing', () => {
         expect(fixedRangeResponse.body.data.range).toBe('30d');
     });
 
-    test('creates new keys with the first configured credential group as auto routing default', async () => {
-        fs.writeFileSync(
-            path.join(tempDir, 'configs', 'codex-credential-groups.json'),
-            JSON.stringify({
-                version: 1,
-                currentRevision: 1,
-                revisions: [{
-                    revision: 1,
-                    action: 'apply',
-                    createdAt: '2026-08-13T03:00:00.000Z',
-                    config: {
-                        groups: [
-                            { id: 'group-7', name: 'First', credentialUuids: ['cred-1'] },
-                            { id: 'group-2', name: 'Second', credentialUuids: ['cred-2'] }
-                        ],
-                        keyAssignments: []
-                    }
-                }]
-            }),
-            'utf8'
-        );
+    test('creates new keys with whole-pool routing by default', async () => {
         const { plugin } = await loadPotluckModules();
         const created = await plugin.exports.createKey('Default Routing', 1000);
 
         expect(created).toMatchObject({
-            routingMode: 'auto',
-            primaryGroupId: 'group-7',
-            fixedCredential: null,
-            manualLock: false
-        });
-        expect(readStore().keys[created.id]).toMatchObject({
-            routingMode: 'auto',
-            primaryGroupId: 'group-7',
-            fixedCredential: null,
-            manualLock: false
-        });
-    });
-
-    test('falls back to whole-pool routing when no credential groups exist', async () => {
-        const { plugin } = await loadPotluckModules();
-        const created = await plugin.exports.createKey('No Group Routing', 1000);
-
-        expect(created).toMatchObject({
             routingMode: 'pool',
-            primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
+        expect(created).not.toHaveProperty('primaryGroupId');
+        expect(readStore().keys[created.id]).toMatchObject({ routingMode: 'pool', fixedCredential: null });
+        expect(readStore().keys[created.id]).not.toHaveProperty('primaryGroupId');
     });
 
     test('normalizes legacy keys without routing fields on load as whole-pool routing', async () => {
@@ -335,7 +274,6 @@ describe('API Potluck key credential routing', () => {
         const { keyManager } = await loadPotluckModules();
         expect(await keyManager.getKey('maki_legacy')).toMatchObject({
             routingMode: 'pool',
-            primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
@@ -343,14 +281,13 @@ describe('API Potluck key credential routing', () => {
             valid: true,
             keyData: {
                 routingMode: 'pool',
-                primaryGroupId: null,
                 fixedCredential: null,
                 manualLock: false
             }
         });
     });
 
-    test('updates fixed and auto routing while rejecting fixed mode without a credential UUID', async () => {
+    test('updates fixed and pool routing (legacy auto becomes pool) while rejecting fixed mode without a credential UUID', async () => {
         const { keyManager } = await loadPotluckModules();
         const created = await keyManager.createKey('Mutable Routing', 1000);
 
@@ -369,7 +306,6 @@ describe('API Potluck key credential routing', () => {
         });
         expect(fixed).toMatchObject({
             routingMode: 'fixed',
-            primaryGroupId: null,
             fixedCredential: {
                 providerType: 'openai-codex-oauth',
                 uuid: 'cred-fixed'
@@ -377,17 +313,13 @@ describe('API Potluck key credential routing', () => {
             manualLock: true
         });
 
-        const automatic = await keyManager.updateKeyRouting(created.id, {
+        const legacyAuto = await keyManager.updateKeyRouting(created.id, {
             routingMode: 'auto',
             primaryGroupId: 'group-2',
             manualLock: false
         });
-        expect(automatic).toMatchObject({
-            routingMode: 'auto',
-            primaryGroupId: 'group-2',
-            fixedCredential: null,
-            manualLock: false
-        });
+        expect(legacyAuto).toMatchObject({ routingMode: 'pool', fixedCredential: null, manualLock: false });
+        expect(legacyAuto).not.toHaveProperty('primaryGroupId');
 
         const pooled = await keyManager.updateKeyRouting(created.id, {
             routingMode: 'pool',
@@ -397,7 +329,6 @@ describe('API Potluck key credential routing', () => {
         });
         expect(pooled).toMatchObject({
             routingMode: 'pool',
-            primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         });
@@ -418,7 +349,6 @@ describe('API Potluck key credential routing', () => {
         const validation = await keyManager.validateKey(created.id);
         expect(validation.keyData).toMatchObject({
             routingMode: 'fixed',
-            primaryGroupId: null,
             fixedCredential: {
                 providerType: 'openai-codex-oauth',
                 uuid: 'cred-validation'
@@ -435,16 +365,16 @@ describe('API Potluck key credential routing', () => {
         const { keyManager } = await loadPotluckModules();
         const created = await keyManager.createKey('Reload Routing', 1000);
         await keyManager.updateKeyRouting(created.id, {
-            routingMode: 'auto',
-            primaryGroupId: 'group-reload',
+            routingMode: 'restricted',
+            restrictedCredentialUuids: ['cred-r1', 'cred-r2'],
             manualLock: true
         });
 
         jest.resetModules();
         const reloaded = await import('../src/plugins/api-potluck/key-manager.js');
         expect(await reloaded.getKey(created.id)).toMatchObject({
-            routingMode: 'auto',
-            primaryGroupId: 'group-reload',
+            routingMode: 'restricted',
+            restrictedCredentialUuids: ['cred-r1', 'cred-r2'],
             fixedCredential: null,
             manualLock: true
         });
@@ -476,7 +406,6 @@ describe('API Potluck key credential routing', () => {
             persistencePending: false,
             data: {
                 routingMode: 'fixed',
-                primaryGroupId: null,
                 fixedCredential: {
                     providerType: 'openai-codex-oauth',
                     credentialRef: expect.any(String)
@@ -509,7 +438,7 @@ describe('API Potluck key credential routing', () => {
             apiRoutes.handlePotluckApiRoutes,
             'PUT',
             `/api/potluck/keys/${encodeURIComponent(created.id)}/routing`,
-            { routingMode: 'pool', primaryGroupId: null, fixedCredential: null, manualLock: false },
+            { routingMode: 'pool', fixedCredential: null, manualLock: false },
             token
         );
         const concurrencyResponse = await callPotluckRoute(
@@ -632,50 +561,22 @@ describe('API Potluck key credential routing', () => {
         expect(response.statusCode).toBe(404);
     });
 
-    test('updates the authoritative credential-group assignment with Key routing', async () => {
+    test('persists Key routing without touching any credential-group store', async () => {
         const { keyManager, apiRoutes } = await loadPotluckModules();
         const token = writeAdminToken();
-        const created = await keyManager.createKey('Synchronized Routing', 1000);
-        writeCredentialGroupStore(created.id, {
-            routingMode: 'fixed',
-            primaryGroupId: null,
-            fixedCredential: {
-                providerType: 'openai-codex-oauth',
-                uuid: 'cred-fixed'
-            },
-            manualLock: false
-        });
+        const created = await keyManager.createKey('Standalone Routing', 1000);
 
         const response = await callPotluckRoute(
             apiRoutes.handlePotluckApiRoutes,
             'PUT',
             `/api/potluck/keys/${encodeURIComponent(created.id)}/routing`,
-            {
-                routingMode: 'pool',
-                primaryGroupId: null,
-                fixedCredential: null,
-                manualLock: false
-            },
+            { routingMode: 'pool', fixedCredential: null, manualLock: false },
             token
         );
 
         expect(response.statusCode).toBe(200);
-        expect(readStore().keys[created.id]).toMatchObject({
-            routingMode: 'pool',
-            primaryGroupId: null,
-            fixedCredential: null
-        });
-        const groupStore = JSON.parse(fs.readFileSync(
-            path.join(tempDir, 'configs', 'codex-credential-groups.json'),
-            'utf8'
-        ));
-        const current = groupStore.revisions.find(entry => entry.revision === groupStore.currentRevision);
-        expect(current.config.keyAssignments).toContainEqual(expect.objectContaining({
-            keyId: created.id,
-            routingMode: 'pool',
-            primaryGroupId: null,
-            fixedCredential: null
-        }));
+        expect(readStore().keys[created.id]).toMatchObject({ routingMode: 'pool', fixedCredential: null });
+        expect(fs.existsSync(path.join(tempDir, 'configs', 'codex-credential-groups.json'))).toBe(false);
     });
 
     test('returns a public fixed credential reference in the Key list for editor preselection', async () => {
@@ -711,29 +612,6 @@ describe('API Potluck key credential routing', () => {
             }
         }));
         expect(serialized).not.toContain('cred-editor-selection');
-    });
-
-    test('exposes a detached internal catalog with usage history for group planning', async () => {
-        const { keyManager } = await loadPotluckModules();
-        const created = await keyManager.createKey('Catalog Key', 1000);
-
-        const catalog = keyManager.getCredentialRoutingKeyCatalog();
-        expect(catalog).toHaveLength(1);
-        expect(catalog[0]).toMatchObject({
-            id: created.id,
-            keyId: created.id,
-            name: 'Catalog Key',
-            routingMode: 'pool',
-            primaryGroupId: null,
-            fixedCredential: null,
-            manualLock: false,
-            usageHistory: {}
-        });
-
-        catalog[0].name = 'mutated';
-        catalog[0].usageHistory['2026-08-13'] = { summary: { totalTokens: 99 } };
-        expect((await keyManager.getKey(created.id)).name).toBe('Catalog Key');
-        expect((await keyManager.getKey(created.id)).usageHistory).toEqual({});
     });
 
     test('publishes a versioned full key config snapshot after every auth configuration mutation', async () => {
@@ -778,8 +656,7 @@ describe('API Potluck key credential routing', () => {
         }));
 
         await keyManager.updateKeyRouting(created.id, {
-            routingMode: 'pool',
-            primaryGroupId: 'stale-group'
+            routingMode: 'pool'
         });
         expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
             revision: 5,
@@ -802,20 +679,9 @@ describe('API Potluck key credential routing', () => {
             records: [expect.objectContaining({ keyId: recreated.id, dailyLimit: 3000 })]
         }));
 
-        await keyManager.applyKeyRoutingAssignments([{
-            keyId: recreated.id,
-            routingMode: 'auto',
-            primaryGroupId: 'group-a'
-        }]);
-        expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
-            revision: 9,
-            reason: 'key-routing-assignments-updated',
-            records: [expect.objectContaining({ keyId: recreated.id, routingMode: 'auto', primaryGroupId: 'group-a' })]
-        }));
-
         const regenerated = await keyManager.regenerateKey(recreated.id);
         expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
-            revision: 10,
+            revision: 9,
             reason: 'key-regenerated',
             records: [expect.objectContaining({ keyId: regenerated.newKey })]
         }));
@@ -845,7 +711,6 @@ describe('API Potluck key credential routing', () => {
                 enabled: true,
                 dailyLimit: 2500,
                 routingMode: 'fixed',
-                primaryGroupId: null,
                 fixedCredential: { providerType: 'gemini-antigravity', uuid: 'credential-a' },
                 manualLock: true
             }, {
@@ -854,7 +719,6 @@ describe('API Potluck key credential routing', () => {
                 enabled: true,
                 dailyLimit: 0,
                 routingMode: 'pool',
-                primaryGroupId: null,
                 fixedCredential: null,
                 manualLock: false
             }]
@@ -887,7 +751,6 @@ describe('API Potluck key credential routing', () => {
             enabled: true,
             dailyLimit: 1000,
             routingMode: 'pool',
-            primaryGroupId: null,
             fixedCredential: null,
             manualLock: false
         };
@@ -1006,128 +869,6 @@ describe('API Potluck key credential routing', () => {
         ]);
     });
 
-    test('limits the credential routing catalog to the rolling seven-day summary window', async () => {
-        const usageHistory = {};
-        for (let day = 1; day <= 13; day += 1) {
-            const date = `2026-08-${String(day).padStart(2, '0')}`;
-            usageHistory[date] = {
-                summary: {
-                    requestCount: day,
-                    totalTokens: day * 100,
-                    cost: { actualUsd: day, estimatedUsd: 0, missingPriceTokens: 0 }
-                },
-                accounts: { [`account-${day}`]: { summary: { totalTokens: day * 100 } } }
-            };
-        }
-        writeStore({
-            keys: {
-                maki_catalog: {
-                    id: 'maki_catalog',
-                    name: 'Catalog',
-                    enabled: true,
-                    lastResetDate: '2026-08-13',
-                    usageHistory
-                }
-            }
-        });
-        const { keyManager } = await loadPotluckModules();
-
-        const [catalog] = keyManager.getCredentialRoutingKeyCatalog();
-
-        expect(Object.keys(catalog.usageHistory)).toEqual([
-            '2026-08-07', '2026-08-08', '2026-08-09', '2026-08-10',
-            '2026-08-11', '2026-08-12', '2026-08-13'
-        ]);
-        expect(catalog.usageHistory['2026-08-13']).toEqual({
-            summary: expect.objectContaining({
-                requestCount: 13,
-                totalTokens: 1300,
-                cost: expect.objectContaining({ actualUsd: 13 })
-            })
-        });
-        expect(catalog.usageHistory['2026-08-13']).not.toHaveProperty('accounts');
-    });
-
-    test('applies routing assignments atomically, skips locked keys, and persists once', async () => {
-        const { keyManager } = await loadPotluckModules();
-        const first = await keyManager.createKey('Batch One', 1000);
-        const locked = await keyManager.createKey('Batch Locked', 1000);
-        const unchanged = await keyManager.createKey('Batch Unchanged', 1000);
-        await keyManager.updateKeyRouting(locked.id, {
-            routingMode: 'auto',
-            primaryGroupId: 'group-locked',
-            manualLock: true
-        });
-        mockAtomicWriteFile.mockClear();
-
-        const result = await keyManager.applyKeyRoutingAssignments([
-            {
-                keyId: first.id,
-                routingMode: 'auto',
-                primaryGroupId: 'group-first',
-                manualLock: false
-            },
-            {
-                keyId: locked.id,
-                routingMode: 'auto',
-                primaryGroupId: 'group-generated',
-                manualLock: false
-            },
-            {
-                keyId: unchanged.id,
-                routingMode: 'auto',
-                primaryGroupId: null,
-                manualLock: false
-            }
-        ]);
-
-        expect(result).toMatchObject({
-            total: 3,
-            updated: 1,
-            unchanged: 1,
-            skippedLocked: 1,
-            persistencePending: false
-        });
-        expect(mockAtomicWriteFile).toHaveBeenCalledTimes(1);
-        expect(await keyManager.getKey(first.id)).toMatchObject({
-            primaryGroupId: 'group-first',
-            manualLock: false
-        });
-        expect(await keyManager.getKey(locked.id)).toMatchObject({
-            primaryGroupId: 'group-locked',
-            manualLock: true
-        });
-    });
-
-    test('validates the complete batch before changing any Key', async () => {
-        const { keyManager } = await loadPotluckModules();
-        const created = await keyManager.createKey('Atomic Validation', 1000);
-        mockAtomicWriteFile.mockClear();
-
-        await expect(keyManager.applyKeyRoutingAssignments([
-            {
-                keyId: created.id,
-                routingMode: 'auto',
-                primaryGroupId: 'group-valid'
-            },
-            {
-                keyId: 'maki_missing',
-                routingMode: 'auto',
-                primaryGroupId: 'group-invalid'
-            }
-        ])).rejects.toMatchObject({
-            code: 'INVALID_KEY_ROUTING_ASSIGNMENTS',
-            details: { reason: 'KEY_NOT_FOUND' }
-        });
-
-        expect(await keyManager.getKey(created.id)).toMatchObject({
-            routingMode: 'pool',
-            primaryGroupId: null,
-            manualLock: false
-        });
-        expect(mockAtomicWriteFile).not.toHaveBeenCalled();
-    });
-
     test('saves a restricted credential set through public refs and converts back to legacy fixed', async () => {
         const { keyManager, apiRoutes } = await loadPotluckModules();
         const token = writeAdminToken();
@@ -1178,14 +919,9 @@ describe('API Potluck key credential routing', () => {
         expect(detail.body.data.credentialRefs).toEqual([ref('codex-a'), ref('codex-c')]);
         expect(JSON.stringify(detail.body)).not.toContain('codex-a');
         expect(JSON.stringify(detail.body)).not.toContain(created.id);
-        const groupView = await callPotluckRoute(apiRoutes.handlePotluckApiRoutes, 'GET',
+        const removedGroupView = await callPotluckRoute(apiRoutes.handlePotluckApiRoutes, 'GET',
             '/api/potluck/credential-groups', undefined, token);
-        const assignment = groupView.body.data.keys.find(key => key.keyRef === keyRef);
-        expect(assignment).toMatchObject({
-            routingMode: 'restricted', credentialRefs: [ref('codex-a'), ref('codex-c')],
-            spilloverPolicy: 'disabled'
-        });
-        expect(JSON.stringify(groupView.body)).not.toContain(created.id);
+        expect(removedGroupView.statusCode).toBe(404);
 
         const single = await callPotluckRoute(apiRoutes.handlePotluckApiRoutes, 'PUT', routePath, {
             routingMode: 'fixed', fixedCredential: { credentialRef: ref('codex-a') }
@@ -1197,37 +933,7 @@ describe('API Potluck key credential routing', () => {
         });
     });
 
-    test('restores the previous Key routing if the credential-group revision update fails', async () => {
-        const { keyManager, apiRoutes } = await loadPotluckModules();
-        const { CredentialGroupService } = await import('../src/services/codex-credential-group-service.js');
-        const token = writeAdminToken();
-        fs.writeFileSync(path.join(tempDir, 'configs', 'provider_pools.json'), JSON.stringify({
-            'openai-codex-oauth': ['codex-a', 'codex-b'].map(uuid => ({ uuid, isHealthy: true }))
-        }));
-        const ref = uuid => `sha256:${crypto.createHash('sha256').update(`openai-codex-oauth:${uuid}`).digest('hex').slice(0, 16)}`;
-        const created = await keyManager.createKey('Rollback Contract', 1000);
-        const keyRef = `sha256:${crypto.createHash('sha256').update(created.id).digest('hex').slice(0, 16)}`;
-        const original = await keyManager.getKey(created.id);
-        const failure = jest.spyOn(CredentialGroupService.prototype, 'updateKeyAssignment')
-            .mockRejectedValueOnce(new Error('revision write failed'));
-        try {
-            const response = await callPotluckRoute(apiRoutes.handlePotluckApiRoutes, 'PUT',
-                `/api/potluck/keys/${encodeURIComponent(keyRef)}/routing`, {
-                    routingMode: 'restricted', credentialRefs: [ref('codex-a'), ref('codex-b')]
-                }, token);
-            expect(response.statusCode).toBeGreaterThanOrEqual(400);
-            expect(await keyManager.getKey(created.id)).toMatchObject({
-                routingMode: original.routingMode,
-                primaryGroupId: original.primaryGroupId,
-                fixedCredential: original.fixedCredential,
-                restrictedCredentialUuids: []
-            });
-        } finally {
-            failure.mockRestore();
-        }
-    });
-
-    test('does not advance the group revision while restricted Key persistence is pending', async () => {
+    test('keeps routing unchanged while restricted Key persistence is pending', async () => {
         const { keyManager, apiRoutes } = await loadPotluckModules();
         const token = writeAdminToken();
         fs.writeFileSync(path.join(tempDir, 'configs', 'provider_pools.json'), JSON.stringify({

@@ -585,10 +585,6 @@
             color: var(--warning-color);
             border-color: color-mix(in srgb, var(--warning-color) 35%, var(--border-color));
         }
-        .key-routing-summary.is-auto {
-            color: var(--primary-color);
-            border-color: color-mix(in srgb, var(--primary-color) 35%, var(--border-color));
-        }
         .key-routing-summary.is-pool {
             color: var(--info-color);
             background: rgba(14, 165, 233, 0.10);
@@ -1702,14 +1698,9 @@
                 <div class="form-group">
                     <label for="routingMode">路由模式</label>
                     <select id="routingMode" class="sort-select" style="width:100%" onchange="updateRoutingFields()">
-                        <option value="pool">全池加权</option>
-                        <option value="auto">主组优先</option>
+                        <option value="pool">全池（会话粘性）</option>
                         <option value="fixed">固定凭据</option>
                     </select>
-                </div>
-                <div class="form-group" id="routingGroupField" hidden>
-                    <label for="routingPrimaryGroup">主凭据组</label>
-                    <select id="routingPrimaryGroup" class="sort-select" style="width:100%"></select>
                 </div>
                 <div class="form-group" id="routingCredentialField" hidden>
                     <label for="routingFixedCredential">固定凭据（可选 1–5 份）</label>
@@ -3503,27 +3494,14 @@
                 const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
                 return `<span class="key-routing-summary is-fixed" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">fixed × ${count}${lockIcon}</span>`;
             }
-            if (routingMode === 'pool') {
-                const summary = `全池加权 · 按权重、额度与负载选择${manualLockSuffix}`;
+            if (routingMode === 'pool' || routingMode === 'auto') {
+                const summary = `全池 · 会话粘性，按权重、额度与负载选择${manualLockSuffix}`;
                 const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
                 return `<span class="key-routing-summary is-pool" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">pool${lockIcon}</span>`;
             }
 
-            if (routingMode !== 'auto' || !String(key?.primaryGroupId || '').trim()) {
-                const summary = `路由状态异常 · 缺少有效路由配置${manualLockSuffix}`;
-                return `<span class="key-routing-summary is-invalid" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">异常</span>`;
-            }
-
-            const primaryGroupId = typeof key?.primaryGroupId === 'string'
-                ? key.primaryGroupId.trim()
-                : '';
-            const compactGroup = primaryGroupId ? primaryGroupId.replace(/^group-/i, '') : '';
-            const compactLabel = compactGroup ? `${compactGroup} · auto` : 'auto';
-            const summary = primaryGroupId
-                ? `主组 ${primaryGroupId} · 不可用时跨组降级${manualLockSuffix}`
-                : `自动分配 · 尚未指定主组${manualLockSuffix}`;
-            const lockIcon = key?.manualLock === true ? '<i class="fas fa-lock" aria-hidden="true"></i>' : '';
-            return `<span class="key-routing-summary is-auto" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">${escapeHtml(compactLabel)}${lockIcon}</span>`;
+            const summary = `路由状态异常 · 缺少有效路由配置${manualLockSuffix}`;
+            return `<span class="key-routing-summary is-invalid" title="${escapeHtml(summary)}" aria-label="${escapeHtml(summary)}">异常</span>`;
         }
 
         function renderEdgeAdmissionSummary(key) {
@@ -4082,7 +4060,6 @@
 
         function updateRoutingFields() {
             const mode = document.getElementById('routingMode').value;
-            document.getElementById('routingGroupField').hidden = mode !== 'auto';
             document.getElementById('routingCredentialField').hidden = mode !== 'fixed';
             const edgeSection = document.getElementById('edgeAdmissionSection');
             if (edgeSection) edgeSection.hidden = false;
@@ -4139,14 +4116,13 @@
         async function openEditRouting(keyId) {
             const currentKey = allKeys.find(key => key.id === keyId);
             const currentMode = currentKey?.routingMode || 'pool';
-            const currentGroupId = currentKey?.primaryGroupId || '';
             const currentFixedCredentialRef = currentKey?.fixedCredential?.credentialRef || '';
             const currentCredentialRefs = currentMode === 'restricted'
                 ? (Array.isArray(currentKey?.credentialRefs) ? currentKey.credentialRefs : [])
                 : (currentFixedCredentialRef ? [currentFixedCredentialRef] : []);
             document.getElementById('editRoutingKeyId').value = keyId;
             document.getElementById('routingMode').value = ['fixed', 'restricted'].includes(currentMode)
-                ? 'fixed' : currentMode === 'auto' ? 'auto' : 'pool';
+                ? 'fixed' : 'pool';
             document.getElementById('edgeAdmissionMode').value = currentKey?.edgeAdmissionMode === 'enforce' ? 'enforce' : 'disabled';
             document.getElementById('edgeAdmissionConcurrencyLimit').value = Number(currentKey?.edgeAdmissionConcurrencyLimit || 0);
             document.getElementById('edgeAdmissionQueueLimit').value = Number(currentKey?.edgeAdmissionQueueLimit || 0);
@@ -4159,9 +4135,6 @@
                     return;
                 }
                 const view = result.data || {};
-                const groupSelect = document.getElementById('routingPrimaryGroup');
-                groupSelect.innerHTML = (view.groups || []).map(group => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name || group.id)}</option>`).join('');
-                if (currentGroupId) groupSelect.value = currentGroupId;
                 const credentialSelect = document.getElementById('routingFixedCredential');
                 const credentialHelp = document.getElementById('routingFixedCredentialHelp');
                 const credentials = Array.isArray(view.credentials) ? view.credentials : [];
@@ -4220,11 +4193,8 @@
             if (routingSaveInFlight) return;
             const keyId = document.getElementById('editRoutingKeyId').value;
             const routingMode = document.getElementById('routingMode').value;
-            const body = { routingMode, primaryGroupId: null, fixedCredential: null, manualLock: false };
-            if (routingMode === 'auto') {
-                body.primaryGroupId = document.getElementById('routingPrimaryGroup').value || null;
-                if (!body.primaryGroupId) { showToast('请选择主凭据组', 'error'); return; }
-            } else if (routingMode === 'fixed') {
+            const body = { routingMode, fixedCredential: null, manualLock: false };
+            if (routingMode === 'fixed') {
                 const credentialRefs = [...document.getElementById('routingFixedCredential').selectedOptions]
                     .map(option => option.value).filter(Boolean);
                 if (credentialRefs.length < 1 || credentialRefs.length > 5) {

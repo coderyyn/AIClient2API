@@ -204,7 +204,6 @@ function keyConfigSnapshot(keyData) {
         ...edgeAdmission,
         edgeAuthRpmLimit: normalizeEdgeAuthRpmLimit(keyData.edgeAuthRpmLimit),
         routingMode: keyData.routingMode || 'pool',
-        primaryGroupId: keyData.routingMode === 'auto' ? (keyData.primaryGroupId || null) : null,
         fixedCredential: keyData.routingMode === 'fixed' && keyData.fixedCredential ? { ...keyData.fixedCredential } : null,
         restrictedCredentialUuids: keyData.routingMode === 'restricted'
             ? [...(keyData.restrictedCredentialUuids || [])] : [],
@@ -324,7 +323,6 @@ export function applyKeyStoreSyncEvent(event = {}) {
                 concurrencyMode: record.concurrencyMode,
                 edgeAuthRpmLimit: record.edgeAuthRpmLimit,
                 routingMode: record.routingMode,
-                primaryGroupId: record.primaryGroupId,
                 fixedCredential: record.fixedCredential,
                 restrictedCredentialUuids: record.restrictedCredentialUuids,
                 manualLock: record.manualLock
@@ -349,7 +347,6 @@ export function applyKeyStoreSyncEvent(event = {}) {
                 lastUsedAt: null,
                 enabled: record.enabled,
                 routingMode: record.routingMode,
-                primaryGroupId: record.primaryGroupId,
                 fixedCredential: record.fixedCredential,
                 restrictedCredentialUuids: record.restrictedCredentialUuids,
                 manualLock: record.manualLock,
@@ -537,19 +534,18 @@ function createInvalidKeyRoutingError(message) {
 }
 
 function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
-    const hasPrimaryGroup = typeof routing.primaryGroupId === 'string' && routing.primaryGroupId.trim();
+    // auto（主组优先）随凭据组一起移除，历史值与缺省值统一视为全池 pool。
     const routingMode = routing.routingMode === 'fixed'
         ? 'fixed'
         : routing.routingMode === 'restricted'
             ? 'restricted'
-        : routing.routingMode === 'pool'
-            ? 'pool'
-            : (routing.routingMode === 'auto' || routing.routingMode === undefined || routing.routingMode === null)
-                ? (hasPrimaryGroup ? 'auto' : 'pool')
+            : (routing.routingMode === 'pool' || routing.routingMode === 'auto'
+                || routing.routingMode === undefined || routing.routingMode === null)
+                ? 'pool'
                 : null;
 
     if (!routingMode) {
-        throw createInvalidKeyRoutingError('routingMode 必须是 pool、auto、fixed 或 restricted');
+        throw createInvalidKeyRoutingError('routingMode 必须是 pool、fixed 或 restricted');
     }
 
     const manualLock = routing.manualLock === true;
@@ -562,7 +558,6 @@ function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
         }
         return {
             routingMode,
-            primaryGroupId: null,
             fixedCredential: uuid
                 ? {
                     providerType: typeof routing.fixedCredential?.providerType === 'string'
@@ -587,66 +582,18 @@ function normalizeKeyRouting(routing = {}, { strict = false } = {}) {
         }
         return {
             routingMode,
-            primaryGroupId: null,
             fixedCredential: null,
             restrictedCredentialUuids: uuids,
             manualLock: true
         };
     }
 
-    const primaryGroupId = routingMode === 'auto' && hasPrimaryGroup
-        ? routing.primaryGroupId.trim()
-        : null;
     return {
         routingMode,
-        primaryGroupId,
         fixedCredential: null,
         restrictedCredentialUuids: [],
         manualLock
     };
-}
-
-function resolveDefaultKeyRouting() {
-    try {
-        const filePath = process.env.CODEX_CREDENTIAL_GROUPS_FILE_PATH
-            || path.join(process.cwd(), 'configs', 'codex-credential-groups.json');
-        const store = JSON.parse(readFileSync(filePath, 'utf8'));
-        const revisions = Array.isArray(store.revisions) ? store.revisions : [];
-        const current = revisions.find(item => Number(item?.revision) === Number(store.currentRevision));
-        const firstGroup = (current?.config?.groups || []).find(group => (
-            typeof group?.id === 'string' && group.id.trim()
-        ));
-        if (firstGroup) return { routingMode: 'auto', primaryGroupId: firstGroup.id.trim() };
-    } catch (error) {
-        if (error?.code !== 'ENOENT') {
-            logger.warn(`[API Potluck] Failed to resolve default credential group: ${error.message}`);
-        }
-    }
-    return { routingMode: 'pool', primaryGroupId: null };
-}
-
-function createInvalidKeyRoutingAssignmentsError(message, details = null) {
-    const error = new Error(message);
-    error.code = 'INVALID_KEY_ROUTING_ASSIGNMENTS';
-    if (details) error.details = details;
-    return error;
-}
-
-function isSameKeyRouting(keyData, routing) {
-    if (keyData.routingMode !== routing.routingMode) return false;
-    if ((keyData.primaryGroupId || null) !== (routing.primaryGroupId || null)) return false;
-    if ((keyData.manualLock === true) !== (routing.manualLock === true)) return false;
-    if (keyData.routingMode === 'restricted') {
-        const current = keyData.restrictedCredentialUuids || [];
-        const next = routing.restrictedCredentialUuids || [];
-        return current.length === next.length && current.every((uuid, index) => uuid === next[index]);
-    }
-
-    const currentFixed = keyData.fixedCredential || null;
-    const nextFixed = routing.fixedCredential || null;
-    if (!currentFixed || !nextFixed) return currentFixed === nextFixed;
-    return currentFixed.providerType === nextFixed.providerType
-        && currentFixed.uuid === nextFixed.uuid;
 }
 
 function normalizeKeyData(keyData = {}) {
@@ -677,6 +624,8 @@ function normalizeKeyData(keyData = {}) {
         )],
         usageHistory: {}
     };
+    // 凭据组已移除：清理历史数据里遗留的 primaryGroupId
+    delete normalized.primaryGroupId;
 
     for (const [date, day] of Object.entries(keyData.usageHistory || {})) {
         normalized.usageHistory[date] = normalizeUsageHistoryDay(day);
@@ -1535,47 +1484,6 @@ function cloneUsageHistorySummaryOnly(usageHistory = {}, conversionModel = DEFAU
     return compact;
 }
 
-function buildCompactGptDemand(day = {}, conversionModel = DEFAULT_CONVERSION_MODEL) {
-    const demand = createUsageBucket();
-    const gptModels = {};
-    for (const [modelName, usage] of Object.entries(day?.models || {})) {
-        if (!String(modelName || '').toLowerCase().startsWith('gpt-')) continue;
-        gptModels[modelName] = usage;
-        addUsage(demand, usage);
-    }
-    if (Object.keys(gptModels).length === 0) return null;
-    const cost = buildCost(demand, gptModels, conversionModel);
-    return {
-        requestCount: toNumber(demand.requestCount),
-        totalTokens: toNumber(demand.totalTokens),
-        actualUsd: toNumber(cost.actualUsd),
-        estimatedUsd: toNumber(cost.estimatedUsd),
-        missingPriceTokens: toNumber(cost.missingPriceTokens),
-        estimatedPriceTokens: toNumber(cost.estimatedPriceTokens),
-        usd: toNumber(cost.usd)
-    };
-}
-
-function cloneCredentialRoutingUsageHistory(usageHistory = {}) {
-    const recentEntries = Object.entries(usageHistory || {})
-        .sort(([left], [right]) => left.localeCompare(right))
-        .slice(-7);
-    const recentHistory = Object.fromEntries(recentEntries);
-    const compact = cloneUsageHistorySummaryOnly(
-        recentHistory,
-        DEFAULT_CONVERSION_MODEL,
-        { compactCosts: true }
-    );
-    for (const [date, day] of recentEntries) {
-        if (day?.summary?.cost) {
-            compact[date].summary.cost = cloneCompactCostBucket(day.summary.cost);
-        }
-        const demand = day?.demand || buildCompactGptDemand(day, DEFAULT_CONVERSION_MODEL);
-        if (demand) compact[date].demand = demand;
-    }
-    return compact;
-}
-
 function cloneUsageMapForCompactHistory(usageMap = {}, costByName = {}) {
     const compact = {};
     for (const [name, usage] of Object.entries(usageMap || {})) {
@@ -2052,7 +1960,7 @@ export async function createKey(name = '', dailyLimit = null, options = {}) {
     const now = new Date().toISOString();
     const today = getTodayDateString();
 
-    const defaultRouting = normalizeKeyRouting(options.defaultRouting || resolveDefaultKeyRouting());
+    const defaultRouting = normalizeKeyRouting(options.defaultRouting || { routingMode: 'pool' });
     const keyData = {
         id: apiKey,
         name: name || `Key-${Object.keys(keyStore.keys).length + 1}`,
@@ -2083,7 +1991,6 @@ export async function createKey(name = '', dailyLimit = null, options = {}) {
         queueTimeoutMs: 300000,
         concurrencyMode: 'shadow',
         routingMode: defaultRouting.routingMode,
-        primaryGroupId: defaultRouting.primaryGroupId,
         fixedCredential: defaultRouting.fixedCredential,
         restrictedCredentialUuids: defaultRouting.restrictedCredentialUuids || [],
         manualLock: defaultRouting.manualLock,
@@ -2144,26 +2051,6 @@ export async function getKey(keyId, options = {}) {
         maxRpm: Math.max(updated.maxRpm || 0, rates.peakRpm ?? rates.maxRpm ?? 0),
         rateSnapshot: rates
     };
-}
-
-/**
- * 获取凭据组管理服务使用的完整 Key 目录。
- * 该接口只供服务端内部使用；返回管理响应前必须脱敏 ID。
- */
-export function getCredentialRoutingKeyCatalog() {
-    ensureLoaded();
-    return Object.entries(keyStore.keys).map(([keyId, keyData]) => ({
-        id: keyId,
-        keyId,
-        name: keyData.name || '',
-        enabled: keyData.enabled !== false,
-        routingMode: keyData.routingMode,
-        primaryGroupId: keyData.primaryGroupId || null,
-        fixedCredential: keyData.fixedCredential ? { ...keyData.fixedCredential } : null,
-        restrictedCredentialUuids: [...(keyData.restrictedCredentialUuids || [])],
-        manualLock: keyData.manualLock === true,
-        usageHistory: cloneCredentialRoutingUsageHistory(keyData.usageHistory || {})
-    }));
 }
 
 /**
@@ -2330,82 +2217,6 @@ export async function updateKeyRouting(keyId, routing = {}) {
     const targetVersion = markDirty();
     const result = await buildManagementMutationResult(targetVersion, keyData);
     publishPersistedKeyConfig(result, 'key-routing-updated', targetVersion);
-    return result;
-}
-
-/**
- * 事务式批量应用凭据路由。所有 assignment 会在任何写入发生前完成校验，
- * 然后整批只触发一次持久化 mutation。
- */
-export async function applyKeyRoutingAssignments(assignments) {
-    ensureLoaded();
-    if (!Array.isArray(assignments)) {
-        throw createInvalidKeyRoutingAssignmentsError('assignments 必须是数组');
-    }
-
-    const normalizedAssignments = [];
-    const seenKeyIds = new Set();
-    for (const assignment of assignments) {
-        const keyId = typeof assignment?.keyId === 'string'
-            ? assignment.keyId.trim()
-            : typeof assignment?.id === 'string'
-                ? assignment.id.trim()
-                : '';
-        if (!keyId || !keyStore.keys[keyId]) {
-            throw createInvalidKeyRoutingAssignmentsError('路由分配引用了不存在的 Key', {
-                reason: keyId ? 'KEY_NOT_FOUND' : 'KEY_ID_REQUIRED'
-            });
-        }
-        if (seenKeyIds.has(keyId)) {
-            throw createInvalidKeyRoutingAssignmentsError('同一个 Key 不能重复分配路由', {
-                reason: 'DUPLICATE_KEY_ASSIGNMENT'
-            });
-        }
-        seenKeyIds.add(keyId);
-
-        let routing;
-        try {
-            routing = normalizeKeyRouting(assignment?.routing || assignment, { strict: true });
-        } catch (error) {
-            if (error?.code === 'INVALID_KEY_ROUTING') {
-                throw createInvalidKeyRoutingAssignmentsError(error.message, {
-                    reason: 'INVALID_ROUTING',
-                    keyId
-                });
-            }
-            throw error;
-        }
-        normalizedAssignments.push({ keyId, routing });
-    }
-
-    let updated = 0;
-    let unchanged = 0;
-    let skippedLocked = 0;
-    for (const { keyId, routing } of normalizedAssignments) {
-        const keyData = keyStore.keys[keyId];
-        if (keyData.manualLock === true) {
-            skippedLocked += 1;
-            continue;
-        }
-        if (isSameKeyRouting(keyData, routing)) {
-            unchanged += 1;
-            continue;
-        }
-        Object.assign(keyData, routing);
-        updated += 1;
-    }
-
-    const summary = {
-        total: normalizedAssignments.length,
-        updated,
-        unchanged,
-        skippedLocked
-    };
-    if (updated === 0) return attachPersistenceStatus(summary, false);
-
-    const targetVersion = markDirty();
-    const result = await buildManagementMutationResult(targetVersion, summary);
-    publishPersistedKeyConfig(result, 'key-routing-assignments-updated', targetVersion);
     return result;
 }
 
@@ -2868,7 +2679,6 @@ export async function getStats(options = {}) {
                 maxTps: Math.max(toNumber(key.maxTps), rates.maxTps),
                 maxRpm: Math.max(toNumber(key.maxRpm), rates.maxRpm),
                 routingMode: key.routingMode || 'pool',
-                primaryGroupId: key.routingMode === 'auto' ? (key.primaryGroupId || null) : null,
                 manualLock: key.manualLock === true,
                 edgeAdmissionMode: edgeAdmission.edgeAdmissionMode,
                 edgeAdmissionConcurrencyLimit: toNumber(edgeAdmission.edgeAdmissionConcurrencyLimit),
@@ -3131,7 +2941,6 @@ export async function validateKey(apiKey) {
         queueLimit: updated.queueLimit || 0,
         queueTimeoutMs: updated.queueTimeoutMs || 300000,
         concurrencyMode: updated.concurrencyMode === 'enforce' ? 'enforce' : 'shadow',
-        primaryGroupId: updated.primaryGroupId,
         fixedCredential: updated.fixedCredential ? { ...updated.fixedCredential } : null,
         restrictedCredentialUuids: [...(updated.restrictedCredentialUuids || [])],
         manualLock: updated.manualLock === true,

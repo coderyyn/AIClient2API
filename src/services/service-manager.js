@@ -22,10 +22,9 @@ import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 import { getProviderModels } from '../providers/provider-models.js';
 import { codexOverloadFailoverStore } from '../providers/openai/codex-overload-failover.js';
-import { codexCredentialGroupAffinityStore } from '../providers/openai/codex-credential-group-affinity.js';
 import { readGeminiCredentialEmail } from '../utils/gemini-account.js';
 import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
-import { CredentialGroupService, resolveKeyRoutingAssignment, routeKeyToCredentialCandidates } from './codex-credential-group-service.js';
+import { resolveKeyRoutingAssignment, routeKeyToCredentialCandidates } from './codex-key-routing.js';
 import { getCodexRoutingConsistencyStatus } from './codex-routing-integrity.js';
 import { resolveCodexEntryModel } from '../providers/openai/codex-model-routing.js';
 import { performance } from 'node:perf_hooks';
@@ -211,46 +210,6 @@ function updateCodexRoutingDiagnostics(config, patch = {}) {
     return config._codexRouting;
 }
 
-function parseConfigIdList(value) {
-    const items = Array.isArray(value) ? value : String(value ?? '').split(',');
-    return items.map(item => String(item).trim()).filter(Boolean);
-}
-
-// Gray switch: auto keys skip credential groups and are scheduled over the whole
-// authorized pool with a per-session sticky binding. An empty allow-list means every key.
-function isCodexDynamicSessionRoutingActive(config, keyRouting) {
-    if (!isTruthyConfigFlag(config?.CODEX_DYNAMIC_SESSION_ROUTING_ENABLED)) return false;
-    if (keyRouting?.routingMode !== 'auto' && keyRouting?.routingMode !== 'pool') return false;
-    const allowedKeyIds = parseConfigIdList(config.CODEX_DYNAMIC_SESSION_ROUTING_KEY_IDS);
-    return allowedKeyIds.length === 0 || allowedKeyIds.includes(String(config.potluckKeyData?.id ?? ''));
-}
-
-function resolveCodexCredentialGroupAffinity(config, providerType) {
-    if (!isCodexProviderType(providerType) || !config?.potluckKeyData?.id) return null;
-
-    const scope = config._codexCacheAffinityScope || {};
-    const candidates = [
-        ['prompt_cache_key', scope.promptCacheKey],
-        ['thread_id', scope.threadId],
-        ['session_id', scope.sessionId],
-        ['installation_id', scope.installationId]
-    ];
-    const selected = candidates.find(([, value]) => value !== undefined && value !== null && value !== '');
-    if (!selected) return null;
-
-    const [source, value] = selected;
-    return {
-        key: [
-            'credential-group',
-            hashAffinityScope(providerType),
-            hashAffinityScope(config.potluckKeyData.id),
-            source,
-            hashAffinityScope(value)
-        ].join(':'),
-        source
-    };
-}
-
 function initializeSelectionDiagnostics(selectionDiagnostics = {}) {
     Object.assign(selectionDiagnostics, {
         totalCandidateCount: 0,
@@ -273,56 +232,11 @@ function initializeSelectionDiagnostics(selectionDiagnostics = {}) {
     return selectionDiagnostics;
 }
 
-function isUpstreamCodexRateLimit(error) {
-    if (!error || error.origin !== 'upstream_codex') return false;
-    if (Number(error.response?.status || error.status || error.statusCode) !== 429) return false;
-    if (error.isCodexUsageLimit === true || error.quotaScope || error.filterReasons?.general_quota_exceeded) return false;
-    return error.details?.reason === 'UPSTREAM_RATE_LIMIT'
-        || error.isCodexRateLimit === true
-        || !error.filterReasons;
-}
-
-function getCodexGroupRateLimitWaitMs(config, error) {
-    const configured = Number(config?.CODEX_GROUP_RATE_LIMIT_WAIT_MS ?? 30_000);
-    const maxWaitMs = Number.isFinite(configured) ? Math.min(300_000, Math.max(0, configured)) : 30_000;
-    if (maxWaitMs <= 0) return 0;
-    const recoveryMs = Date.parse(error?.nextRecoveryTime || error?.details?.nextRecoveryAt || '');
-    if (Number.isFinite(recoveryMs)) return Math.min(maxWaitMs, Math.max(0, recoveryMs - Date.now()));
-    const retryAfterMs = Number(error?.retryAfterMs || error?.retryAfter);
-    if (Number.isFinite(retryAfterMs) && retryAfterMs >= 0) return Math.min(maxWaitMs, retryAfterMs);
-    return maxWaitMs;
-}
-
-function normalizeCredentialGroups(groups = []) {
-    return (Array.isArray(groups) ? groups : [])
-        .filter(group => group && group.id)
-        .map(group => ({
-            ...group,
-            id: String(group.id),
-            credentialUuids: [...new Set(
-                (Array.isArray(group.credentialUuids) ? group.credentialUuids : [])
-                    .filter(Boolean)
-                    .map(String)
-            )]
-        }));
-}
-
-async function resolveCodexCredentialGroupContext(config, providerType) {
+function resolveCodexKeyRoutingContext(config, providerType) {
     if (!isCodexProviderType(providerType) || !config?.potluckKeyData) {
         return { handled: false };
     }
-
-    const service = new CredentialGroupService({
-        filePath: config.CODEX_CREDENTIAL_GROUPS_FILE_PATH
-    });
-    const currentConfig = await service.getCurrentConfig();
-    const keyRouting = resolveKeyRoutingAssignment(config.potluckKeyData, currentConfig);
-    return {
-        handled: true,
-        keyRouting,
-        groups: normalizeCredentialGroups(currentConfig.groups),
-        configRevision: Number(currentConfig.revision || 0)
-    };
+    return { handled: true, keyRouting: resolveKeyRoutingAssignment(config.potluckKeyData) };
 }
 
 function getProviderCredentialCatalog(providerType) {
@@ -389,7 +303,6 @@ function createFixedCredentialUnavailableError(cause = null, route = {}, configR
     error.statusCode = error.status;
     error.details = {
         routingMode: 'fixed',
-        selectedGroupId: route.selectedGroupId || null,
         ...(Number.isFinite(Number(configRevision)) ? { configRevision: Number(configRevision) } : {}),
         ...(cause?.code ? { causeCode: cause.code } : {}),
         ...(cause?.retryAfter || cause?.details?.nextRecoveryAt
@@ -409,7 +322,6 @@ function createFixedRouteMismatchError(route = {}, configRevision = null) {
     error.details = {
         reason: route.routeReason || route.errorCode || 'ROUTE_MISMATCH',
         routingMode: 'fixed',
-        selectedGroupId: route.selectedGroupId || null,
         ...(Number.isFinite(Number(configRevision)) ? { configRevision: Number(configRevision) } : {}),
         retryable: false
     };
@@ -424,7 +336,6 @@ function createFixedModelNotSupportedError(model, route = {}, configRevision = n
     error.details = {
         reason: 'FIXED_CREDENTIAL_MODEL_UNSUPPORTED',
         routingMode: 'fixed',
-        selectedGroupId: route.selectedGroupId || null,
         ...(Number.isFinite(Number(configRevision)) ? { configRevision: Number(configRevision) } : {}),
         retryable: false
     };
@@ -440,32 +351,11 @@ function createProviderCooldownError(recoveryTime, route = {}, configRevision = 
     error.details = {
         reason: 'FIXED_CREDENTIAL_COOLDOWN',
         routingMode: 'fixed',
-        selectedGroupId: route.selectedGroupId || null,
         nextRecoveryAt: recoveryTime || null,
         ...(Number.isFinite(Number(configRevision)) ? { configRevision: Number(configRevision) } : {}),
         retryable: true
     };
     return error;
-}
-
-function isCredentialAvailabilityError(error) {
-    return error?.status === 429
-        || error?.code === 429
-        || /^Queue timeout\b/.test(String(error?.message || ''));
-}
-
-function getOrderedCredentialGroups(groups, requestedPrimaryGroupId, pinnedGroupId = null) {
-    const groupById = new Map(groups.map(group => [group.id, group]));
-    const ordered = [];
-    const addGroup = groupId => {
-        const group = groupId ? groupById.get(String(groupId)) : null;
-        if (group && !ordered.some(candidate => candidate.id === group.id)) ordered.push(group);
-    };
-
-    addGroup(pinnedGroupId);
-    addGroup(requestedPrimaryGroupId);
-    for (const group of groups) addGroup(group.id);
-    return ordered;
 }
 
 // Key concurrency used to apply only to routingMode=pool, so the vast majority
@@ -477,7 +367,7 @@ async function acquireCodexKeyConcurrencyLease(config, keyRouting, selectionDiag
     if (!useAcquire || !keyId) return false;
     if (requestContext.get('potluckKeyConcurrencyLease') || requestContext.get('edgeAdmissionLease')) return false;
     const keyData = config.potluckKeyData || {};
-    const routingMode = keyRouting?.routingMode || 'auto';
+    const routingMode = keyRouting?.routingMode || 'pool';
     if (routingMode !== 'pool' && !(Number(keyData.concurrencyLimit) > 0)) return false;
 
     const keyQueueStartedAt = Date.now();
@@ -512,11 +402,11 @@ async function acquireCodexKeyConcurrencyLease(config, keyRouting, selectionDiag
     }
 }
 
-async function selectCodexCredentialGroupProvider(config, providerType, requestedModel, options = {}, selectionDiagnostics = {}) {
-    const context = await resolveCodexCredentialGroupContext(config, providerType);
+async function selectCodexKeyRoutedProvider(config, providerType, requestedModel, options = {}, selectionDiagnostics = {}) {
+    const context = resolveCodexKeyRoutingContext(config, providerType);
     if (!context.handled) return context;
 
-    const { keyRouting, groups } = context;
+    const { keyRouting } = context;
     const useAcquire = options.acquireSlot === true;
     const selectFromPool = selectionOptions => useAcquire
         ? providerPoolManager.acquireSlotWithFallback(providerType, requestedModel, selectionOptions)
@@ -541,36 +431,35 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
         if (fixedUuid) providerPoolManager.reconcileProviderForRouting?.(providerType, fixedUuid);
         const route = routeKeyToCredentialCandidates({
             keyRouting,
-            groups,
             credentials: getProviderCredentialCatalog(providerType)
         });
         updateCodexRoutingDiagnostics(config, {
             routingMode: 'fixed',
             requestedPrimaryGroupId: null,
-            selectedGroupId: route.selectedGroupId || null,
+            selectedGroupId: null,
             selectedProviderUuid: null,
             spillover: false,
             spilloverReason: null,
             assignmentMissing: false
         });
         if (route.errorCode === 'ROUTE_MISMATCH') {
-            throw createFixedRouteMismatchError(route, context.configRevision);
+            throw createFixedRouteMismatchError(route);
         }
         if (route.errorCode === 'FIXED_CREDENTIAL_UNAVAILABLE' && route.nextRecoveryTime) {
             const recoveryMs = Date.parse(route.nextRecoveryTime);
             if (Number.isFinite(recoveryMs) && recoveryMs > Date.now()) {
-                throw createProviderCooldownError(route.nextRecoveryTime, route, context.configRevision);
+                throw createProviderCooldownError(route.nextRecoveryTime, route);
             }
         }
         if (route.errorCode || route.candidateProviderUuids.length !== 1) {
-            throw createFixedCredentialUnavailableError(route.errorCode ? { code: route.errorCode } : null, route, context.configRevision);
+            throw createFixedCredentialUnavailableError(route.errorCode ? { code: route.errorCode } : null, route);
         }
         if (!isFixedCredentialModelSupported(
             providerType,
             route.candidateProviderUuids[0],
             requestedModel
         )) {
-            throw createFixedModelNotSupportedError(requestedModel, route, context.configRevision);
+            throw createFixedModelNotSupportedError(requestedModel, route);
         }
 
         const fixedOptions = withStickyProviderAffinity(config, providerType, {
@@ -583,7 +472,7 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
         });
         try {
             const selectedResult = await selectFromPool(fixedOptions);
-            if (!selectedResult) throw createFixedCredentialUnavailableError(null, route, context.configRevision);
+            if (!selectedResult) throw createFixedCredentialUnavailableError(null, route);
             updateCodexRoutingDiagnostics(config, {
                 selectedProviderUuid: selectedResult.config?.uuid || null,
                 hotShardApplied: selectionDiagnostics.hotShardApplied === true
@@ -592,9 +481,9 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
         } catch (error) {
             if (error?.code === 'FIXED_CREDENTIAL_UNAVAILABLE') throw error;
             if (error?.code === 'MODEL_RATE_LIMITED' || error?.code === 'PROVIDER_TEMPORARILY_UNAVAILABLE') {
-                throw createProviderCooldownError(error.nextRecoveryTime || error.retryAfter || null, route, context.configRevision);
+                throw createProviderCooldownError(error.nextRecoveryTime || error.retryAfter || null, route);
             }
-            throw createFixedCredentialUnavailableError(error, route, context.configRevision);
+            throw createFixedCredentialUnavailableError(error, route);
         }
     }
 
@@ -603,7 +492,6 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
     if (keyRouting.routingMode === 'restricted') {
         const route = routeKeyToCredentialCandidates({
             keyRouting,
-            groups,
             credentials: getProviderCredentialCatalog(providerType)
         });
         updateCodexRoutingDiagnostics(config, {
@@ -653,212 +541,32 @@ async function selectCodexCredentialGroupProvider(config, providerType, requeste
         return { handled: true, selectedResult, availabilityError: null };
     }
 
-    const dynamicSessionRouting = isCodexDynamicSessionRoutingActive(config, keyRouting);
-    if (keyRouting.routingMode === 'pool' || dynamicSessionRouting) {
-        const keyHash = config.potluckKeyData?.id
-            ? `sha256:${crypto.createHash('sha256').update(String(config.potluckKeyData.id)).digest('hex').slice(0, 16)}`
-            : 'none';
-        logger.info(`[Codex Routing] pool selection key=${keyHash} mode=pool revision=${keyRouting.routingConfigRevision || 0}`);
-        const poolKeyId = config.potluckKeyData?.id || null;
-        const basePoolOptions = {
-            ...options,
-            selectionDiagnostics,
-            requestedModel,
-            preferredProviderUuid: null,
-            routingMode: 'pool',
-            poolKeyId
-        };
-        // The pool selector's round-robin branch outranks the sticky branch, so dynamic
-        // session routing must not declare routingMode/poolKeyId or sessions would not stay bound.
-        const { routingMode: _poolMode, poolKeyId: _poolKeyId, ...stickyBaseOptions } = basePoolOptions;
-        const poolOptions = dynamicSessionRouting
-            ? withStickyProviderAffinity(config, providerType, stickyBaseOptions, { forceSticky: true })
-            : basePoolOptions;
-        let selectedResult;
-        try {
-            selectedResult = await selectFromPool(poolOptions);
-        } catch (error) {
-            await releasePotluckKeyConcurrencyLease();
-            throw error;
-        }
-        if (!selectedResult) await releasePotluckKeyConcurrencyLease();
-        const selectedUuid = selectedResult?.config?.uuid || null;
-        updateCodexRoutingDiagnostics(config, {
-            routingMode: 'pool',
-            requestedPrimaryGroupId: null,
-            selectedGroupId: null,
-            selectedProviderUuid: selectedUuid,
-            spillover: false,
-            spilloverReason: null,
-            assignmentMissing: false,
-            hotShardApplied: selectionDiagnostics.hotShardApplied === true
-        });
-        return { handled: true, selectedResult: selectedResult || null, availabilityError: null };
-    }
-
-    const requestedPrimaryGroupId = keyRouting.primaryGroupId || groups[0]?.id || null;
-    const groupAffinity = resolveCodexCredentialGroupAffinity(config, providerType);
-    const pinnedGroupId = groupAffinity
-        ? codexCredentialGroupAffinityStore.getPinnedGroup(groupAffinity.key)
-        : null;
-    const orderedGroups = getOrderedCredentialGroups(groups, requestedPrimaryGroupId, pinnedGroupId);
-    const failoverKey = config._codexOverloadFailoverKey || null;
-    const pendingExcludedUuid = failoverKey
-        ? codexOverloadFailoverStore.getPendingExclusion(failoverKey)
-        : null;
-    const pinnedProviderUuid = failoverKey
-        ? codexOverloadFailoverStore.getPinnedProvider(failoverKey)
-        : null;
-    const originalExcludedUuids = Array.isArray(options.excludeProviderUuids)
-        ? options.excludeProviderUuids
-        : [];
-    let availabilityError = null;
-
-    updateCodexRoutingDiagnostics(config, {
-        routingMode: 'auto',
-        requestedPrimaryGroupId,
-        selectedGroupId: null,
-        selectedProviderUuid: null,
-        spillover: false,
-        spilloverReason: null,
-        affinitySource: groupAffinity?.source || config._codexRouting?.affinitySource || null,
-        assignmentMissing: false
-    });
-
-    const attemptGroups = async ({ excludeProviderUuids, preferredProviderUuid, primaryOnly = false, onlyGroupId = null }) => {
-        for (const group of orderedGroups) {
-            if (primaryOnly && group.id !== requestedPrimaryGroupId) continue;
-            if (onlyGroupId && group.id !== onlyGroupId) continue;
-            if (group.credentialUuids.length === 0) continue;
-            selectionDiagnostics.candidateGroupId = group.id;
-            selectionDiagnostics.candidateProviderCount = group.credentialUuids.length;
-            const groupOptions = () => withStickyProviderAffinity(config, providerType, {
-                ...options,
-                selectionDiagnostics,
-                requestedModel,
-                allowedProviderUuids: group.credentialUuids,
-                disableProviderFallback: true,
-                preferredProviderUuid,
-                excludeProviderUuids,
-                candidateGroupId: group.id
-            });
-            try {
-                const selectedResult = await selectFromPool(groupOptions());
-                if (selectedResult) return { selectedResult, group };
-            } catch (error) {
-                if (!isCredentialAvailabilityError(error)) {
-                    await releasePotluckKeyConcurrencyLease();
-                    throw error;
-                }
-                const isPrimaryGroup = group.id === requestedPrimaryGroupId;
-                if (isPrimaryGroup && isUpstreamCodexRateLimit(error) && !options.retryReason && !options._codexGroupRateLimitRetried) {
-                    const waitMs = getCodexGroupRateLimitWaitMs(config, error);
-                    selectionDiagnostics.groupRetryCount = Number(selectionDiagnostics.groupRetryCount || 0) + 1;
-                    selectionDiagnostics.groupWaitMs = Number(selectionDiagnostics.groupWaitMs || 0) + waitMs;
-                    selectionDiagnostics.availabilityReason = 'UPSTREAM_RATE_LIMIT';
-                    updateCodexRoutingDiagnostics(config, {
-                        candidateGroupId: group.id,
-                        candidateProviderCount: group.credentialUuids.length,
-                        groupRetryCount: selectionDiagnostics.groupRetryCount,
-                        groupWaitMs: selectionDiagnostics.groupWaitMs,
-                        availabilityReason: 'UPSTREAM_RATE_LIMIT'
-                    });
-                    if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
-                    try {
-                        const retriedResult = await selectFromPool(groupOptions());
-                        if (retriedResult) return { selectedResult: retriedResult, group };
-                    } catch (retryError) {
-                        if (!isCredentialAvailabilityError(retryError)) {
-                            await releasePotluckKeyConcurrencyLease();
-                            throw retryError;
-                        }
-                        availabilityError = retryError;
-                        selectionDiagnostics.availabilityReason = 'RATE_LIMIT_WAIT_EXPIRED';
-                        continue;
-                    }
-                } else if (isPrimaryGroup && error?.filterReasons?.general_quota_exceeded) {
-                    selectionDiagnostics.availabilityReason = 'QUOTA_EXHAUSTED';
-                } else if (isPrimaryGroup && (error?.code === 'PROVIDER_CONCURRENCY_EXHAUSTED' || error?.details?.reason === 'PROVIDER_QUEUE_EXHAUSTED')) {
-                    selectionDiagnostics.availabilityReason = 'QUEUE_EXHAUSTED';
-                } else if (isPrimaryGroup && error?.details?.reason === 'key_capacity_exhausted') {
-                    selectionDiagnostics.availabilityReason = 'KEY_QUEUE_EXHAUSTED';
-                }
-                if (!availabilityError) availabilityError = error;
-            }
-            selectionDiagnostics.fallbackAttemptCount = Number(selectionDiagnostics.fallbackAttemptCount || 0) + 1;
-        }
-        return null;
-    };
-
-    const retryGroupId = options.retryReason === 'UPSTREAM_RATE_LIMIT'
-        ? (options.retryGroupId || config._codexRouting?.selectedGroupId || requestedPrimaryGroupId)
-        : null;
-    let selected = retryGroupId
-        ? await attemptGroups({
-            onlyGroupId: retryGroupId,
-            preferredProviderUuid: null,
-            excludeProviderUuids: originalExcludedUuids
-        })
-        : null;
-
-    if (!selected && retryGroupId && options.retryReason === 'UPSTREAM_RATE_LIMIT') {
-        selected = await attemptGroups({
-            onlyGroupId: retryGroupId,
-            preferredProviderUuid: null,
-            excludeProviderUuids: []
-        });
-        if (!selected) selectionDiagnostics.availabilityReason = 'RATE_LIMIT_WAIT_EXPIRED';
-    }
-
-    if (!selected) selected = await attemptGroups({
-        preferredProviderUuid: pinnedProviderUuid === pendingExcludedUuid ? null : pinnedProviderUuid,
-        excludeProviderUuids: [...new Set([
-            ...originalExcludedUuids,
-            ...(pendingExcludedUuid ? [pendingExcludedUuid] : [])
-        ])]
-    });
-
-    if (!selected && pendingExcludedUuid) {
-        selected = await attemptGroups({
-            preferredProviderUuid: null,
-            excludeProviderUuids: originalExcludedUuids
-        });
-    }
-
-    if (!selected && options.allowExcludedProviderFallback === true && originalExcludedUuids.length > 0) {
-        selected = await attemptGroups({
-            preferredProviderUuid: null,
-            excludeProviderUuids: []
-        });
-    }
-
-    if (!selected) {
+    logger.info(`[Codex Routing] pool selection key=${config.potluckKeyData?.id
+        ? `sha256:${crypto.createHash('sha256').update(String(config.potluckKeyData.id)).digest('hex').slice(0, 16)}`
+        : 'none'} mode=pool`);
+    // 全部可用凭据 + 会话粘性：同一会话固定到同一凭据，新会话在授权池内动态分配。
+    const poolOptions = withStickyProviderAffinity(config, providerType, {
+        ...options,
+        selectionDiagnostics,
+        requestedModel,
+        preferredProviderUuid: null
+    }, { forceSticky: true });
+    let selectedResult;
+    try {
+        selectedResult = await selectFromPool(poolOptions);
+    } catch (error) {
         await releasePotluckKeyConcurrencyLease();
-        return { handled: true, selectedResult: null, availabilityError };
+        throw error;
     }
-
-    const selectedUuid = selected.selectedResult.config?.uuid || null;
-    if (failoverKey && pendingExcludedUuid) {
-        if (selectedUuid && selectedUuid !== pendingExcludedUuid) {
-            codexOverloadFailoverStore.pinAlternative(failoverKey, selectedUuid);
-        } else {
-            codexOverloadFailoverStore.consumePendingExclusion(failoverKey);
-        }
-    }
-    if (groupAffinity) {
-        codexCredentialGroupAffinityStore.pinGroup(groupAffinity.key, selected.group.id);
-    }
-
-    const spillover = Boolean(requestedPrimaryGroupId && selected.group.id !== requestedPrimaryGroupId);
+    if (!selectedResult) await releasePotluckKeyConcurrencyLease();
     updateCodexRoutingDiagnostics(config, {
-        selectedGroupId: selected.group.id,
-        selectedProviderUuid: selectedUuid,
-        spillover,
-        spilloverReason: spillover ? 'PRIMARY_GROUP_UNAVAILABLE' : null,
-        spilloverCause: spillover ? (selectionDiagnostics.availabilityReason || 'PRIMARY_GROUP_UNAVAILABLE') : null,
+        routingMode: 'pool',
+        selectedGroupId: null,
+        selectedProviderUuid: selectedResult?.config?.uuid || null,
+        assignmentMissing: false,
         hotShardApplied: selectionDiagnostics.hotShardApplied === true
     });
-    return { handled: true, selectedResult: selected.selectedResult, availabilityError: null };
+    return { handled: true, selectedResult: selectedResult || null, availabilityError: null };
 }
 
 async function releasePotluckKeyConcurrencyLease() {
@@ -1716,7 +1424,7 @@ async function getApiServiceInternal(config, requestedModel = null, options = {}
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
         const selectionDiagnostics = initializeSelectionDiagnostics(options.selectionDiagnostics || {});
         selectionDiagnostics.selectionStartedAt = providerFilterStartedAt;
-        const groupSelection = await selectCodexCredentialGroupProvider(
+        const groupSelection = await selectCodexKeyRoutedProvider(
             config,
             config.MODEL_PROVIDER,
             actualModelName,
@@ -1857,7 +1565,7 @@ async function getApiServiceWithFallbackInternal(config, requestedModel = null, 
             selectionDiagnostics
         );
         try {
-            groupSelection = await selectCodexCredentialGroupProvider(
+            groupSelection = await selectCodexKeyRoutedProvider(
                 config,
                 config.MODEL_PROVIDER,
                 actualModelName,
