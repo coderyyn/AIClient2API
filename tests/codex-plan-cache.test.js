@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, test } from '@jest/globals';
-import { readFreshUsageCacheSync } from '../src/utils/codex-plan.js';
+import { isCodexPlanAllowed, normalizeCodexPlan, readFreshUsageCacheSync } from '../src/utils/codex-plan.js';
 
 const originalCwd = process.cwd();
 const tempDirs = [];
@@ -22,6 +22,17 @@ afterEach(() => {
     while (tempDirs.length > 0) {
         fs.rmSync(tempDirs.pop(), { recursive: true, force: true });
     }
+});
+
+describe('Codex plan normalization', () => {
+    test.each(['prolite', 'ProLite', 'pro_lite', 'pro-lite', 'pro lite'])('treats %s as an eligible pro plan', plan => {
+        expect(normalizeCodexPlan(plan)).toBe('pro');
+        expect(isCodexPlanAllowed(plan)).toBe(true);
+    });
+
+    test.each(['free', 'unknown', 'proxy', 'professional'])('keeps %s ineligible', plan => {
+        expect(isCodexPlanAllowed(plan)).toBe(false);
+    });
 });
 
 describe('Codex usage cache reader', () => {

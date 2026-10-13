@@ -60,7 +60,7 @@ export function normalizeCodexPlan(plan) {
     if (!value) return 'unknown';
     if (/\bfree\b/.test(value)) return 'free';
     if (/\bplus\b/.test(value) || value === '+') return 'plus';
-    if (/\bpro\b/.test(value) || value.includes('pro+')) return 'pro';
+    if (/\bpro\b/.test(value) || value.includes('pro+') || /^pro[\s_-]?lite$/.test(value)) return 'pro';
     return 'unknown';
 }
 
