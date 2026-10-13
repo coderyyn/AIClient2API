@@ -33,7 +33,6 @@ function createService(overrides = {}) {
         uuid: 'account-a',
         codexAccountKey: 'stable-account-a',
         codexFingerprintMode: 'session',
-        CODEX_FINGERPRINT_ENABLED: true,
         CODEX_OVERLOAD_RETRY_DELAY_MS: 0,
         ...overrides
     });
@@ -181,6 +180,9 @@ describe('Codex OAuth fingerprint request integration', () => {
             expect(request.headers['x-codex-installation-id']).toBeUndefined();
             expect(request.data.client_metadata['x-codex-installation-id']).toBeTruthy();
             expect(request.headers['session-id']).toBe(request.data.client_metadata.session_id);
+            expect(request.data.prompt_cache_key).toBe(request.headers['session-id']);
+            expect(request.headers['x-client-request-id']).toBe(request.headers['thread-id']);
+            expect(request.data.client_metadata.root_turn_id).toBe(request.data.client_metadata.turn_id);
             expect(request.headers['Session-Id']).toBeUndefined();
             expect(request.headers.session_id).toBeUndefined();
             expect(request.headers['thread-id']).toBe(request.data.client_metadata.thread_id);
@@ -212,9 +214,9 @@ describe('Codex OAuth fingerprint request integration', () => {
         }
     });
 
-    test('global emergency off preserves inbound identity fields', async () => {
+    test('off mode preserves inbound identity fields', async () => {
         axios.request.mockResolvedValueOnce(completedResponse());
-        const service = createService({ CODEX_FINGERPRINT_ENABLED: false });
+        const service = createService({ codexFingerprintMode: 'off' });
         const body = requestBody('original-session');
 
         try {
@@ -230,9 +232,9 @@ describe('Codex OAuth fingerprint request integration', () => {
         }
     });
 
-    test('global emergency off preserves the underscore session header over the prompt cache header', async () => {
+    test('off mode preserves the underscore session header over the prompt cache header', async () => {
         axios.request.mockResolvedValueOnce(completedResponse());
-        const service = createService({ CODEX_FINGERPRINT_ENABLED: false });
+        const service = createService({ codexFingerprintMode: 'off' });
         const body = requestBody('original-session');
         body[CODEX_FINGERPRINT_CONTEXT_KEY].inboundCodexHeaders = {
             session_id: 'underscore-session'

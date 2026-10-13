@@ -45,6 +45,7 @@
 | 删除字段 | `truncation`、`user`、`max_output_tokens`、`max_completion_tokens`、`prompt_cache_breakpoint`、`generate`（另加原有的 `metadata`、`previous_response_id`、`prompt_cache_retention`、`safety_identifier`、`stream_options`） | CPA。`temperature`/`top_p` 按模型有条件保留；`prompt_cache_options` 由质量门禁要求原样透传 |
 | 输入 ID | 超过 64 字符的 `id`/`call_id` 做确定性缩短（调用与返回仍配对）；reasoning `id` 删除 | CPA `SanitizeCodexInputItemIDs` |
 | Chat 注入 | 删除 `"EXECUTE ACCORDING TO THE FOLLOWING INSTRUCTIONS!!!"` | 原生与 CPA 都不发 |
+| 设备指纹（按凭据，默认 off） | 开启后 installation_id 按账号固定（v4）；session/thread/turn 为 v7，`session_id == thread_id == x-client-request-id`，`prompt_cache_key == session-id`，`client_metadata` 补 `root_turn_id`，window 保留客户端编号 | 原生 0.162.1 源码（`ThreadId/SessionId::new` 为 `now_v7`，根会话 `session_id` 取 thread id，`responses_session_id` 取 `prompt_cache_key`）+ 本机 `~/.codex` ID 版本核对；CPA 无设备指纹，会话 ID 透传 |
 | 403 分类 | Cloudflare/HTML 页面和裸 `forbidden` 不判凭据失效；`account_deactivated`/`deactivated_workspace` 判失效 | 部分对齐 CPA（未实现 30 分钟冷却） |
 | OAuth 刷新 | 带 `scope=openid profile email`；`invalid_grant`/`refresh_token_reused`/`refresh_token_expired`/`refresh_token_invalidated` 不重试 | CPA |
 

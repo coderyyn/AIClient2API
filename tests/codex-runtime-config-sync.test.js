@@ -10,16 +10,16 @@ describe('Codex runtime config sync', () => {
     beforeEach(() => resetCodexRuntimeConfigSyncForTests());
 
     test('builds events with strictly increasing revisions and only sync-able keys', () => {
-        const first = buildCodexRuntimeConfigEvent({ CODEX_FINGERPRINT_ENABLED: true, PROXY_URL: 'http://secret' });
-        const second = buildCodexRuntimeConfigEvent({ CODEX_FINGERPRINT_ENABLED: false });
+        const first = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: true, CODEX_FINGERPRINT_ENABLED: true, PROXY_URL: 'http://secret' });
+        const second = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: false });
 
         expect(first.type).toBe(CODEX_RUNTIME_CONFIG_SYNC_TYPE);
-        expect(first.config).toEqual({ CODEX_FINGERPRINT_ENABLED: true });
+        expect(first.config).toEqual({ CODEX_CLOAKING_ENABLED: true });
         expect(second.revision).toBeGreaterThan(first.revision);
     });
 
     test('applies a newer event, updates config and invalidates only Codex adapters', () => {
-        const config = { CODEX_FINGERPRINT_ENABLED: false };
+        const config = { CODEX_CLOAKING_ENABLED: false };
         const instances = {
             'openai-codex-oauthuuid-1': {},
             'openai-codex-oauthuuid-2': {},
@@ -27,34 +27,34 @@ describe('Codex runtime config sync', () => {
         };
 
         const result = applyCodexRuntimeConfigEvent(
-            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 10, config: { CODEX_FINGERPRINT_ENABLED: true } },
+            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 10, config: { CODEX_CLOAKING_ENABLED: true } },
             config,
             instances
         );
 
         expect(result).toEqual({ applied: true, revision: 10, invalidated: 2 });
-        expect(config.CODEX_FINGERPRINT_ENABLED).toBe(true);
+        expect(config.CODEX_CLOAKING_ENABLED).toBe(true);
         expect(Object.keys(instances)).toEqual(['openai-custom']);
     });
 
     test('rejects stale or duplicate revisions without touching config', () => {
-        const config = { CODEX_FINGERPRINT_ENABLED: true };
-        applyCodexRuntimeConfigEvent({ type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 20, config: { CODEX_FINGERPRINT_ENABLED: true } }, config, {});
+        const config = { CODEX_CLOAKING_ENABLED: true };
+        applyCodexRuntimeConfigEvent({ type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 20, config: { CODEX_CLOAKING_ENABLED: true } }, config, {});
 
         const stale = applyCodexRuntimeConfigEvent(
-            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 20, config: { CODEX_FINGERPRINT_ENABLED: false } },
+            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 20, config: { CODEX_CLOAKING_ENABLED: false } },
             config,
             { 'openai-codex-oauthx': {} }
         );
 
         expect(stale.applied).toBe(false);
-        expect(config.CODEX_FINGERPRINT_ENABLED).toBe(true);
+        expect(config.CODEX_CLOAKING_ENABLED).toBe(true);
     });
 
     test('ignores events of another type', () => {
-        const config = { CODEX_FINGERPRINT_ENABLED: true };
-        expect(applyCodexRuntimeConfigEvent({ type: 'other', revision: 99, config: { CODEX_FINGERPRINT_ENABLED: false } }, config, {}).applied).toBe(false);
-        expect(config.CODEX_FINGERPRINT_ENABLED).toBe(true);
+        const config = { CODEX_CLOAKING_ENABLED: true };
+        expect(applyCodexRuntimeConfigEvent({ type: 'other', revision: 99, config: { CODEX_CLOAKING_ENABLED: false } }, config, {}).applied).toBe(false);
+        expect(config.CODEX_CLOAKING_ENABLED).toBe(true);
     });
 });
 

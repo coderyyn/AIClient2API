@@ -73,18 +73,16 @@ describe('Codex image size normalization configuration', () => {
 });
 
 describe('Codex OAuth fingerprint configuration', () => {
-    test('defaults to enabled and round-trips through the admin config API and UI', () => {
+    test('has no global switch; the mode is chosen per credential', () => {
         const source = readFileSync('src/core/config-manager.js', 'utf8');
         const configApi = readFileSync('src/ui-modules/config-api.js', 'utf8');
         const html = readFileSync('static/components/section-config.html', 'utf8');
         const manager = readFileSync('static/app/config-manager.js', 'utf8');
 
-        expect(source).toContain('CODEX_FINGERPRINT_ENABLED: true');
-        expect(configApi).toContain('currentConfig.CODEX_FINGERPRINT_ENABLED === true');
-        expect(source).toContain('--codex-fingerprint-enabled');
-        expect(configApi).toContain('CODEX_FINGERPRINT_ENABLED');
-        expect(manager).toContain('CODEX_FINGERPRINT_ENABLED');
-        expect(html).toContain('codexFingerprintEnabled');
+        for (const text of [source, configApi, manager]) {
+            expect(text).not.toContain('CODEX_FINGERPRINT_ENABLED');
+        }
+        expect(html).not.toContain('codexFingerprintEnabled');
     });
 });
 

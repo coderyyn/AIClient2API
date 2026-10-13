@@ -6,7 +6,6 @@
 
 export const CODEX_RUNTIME_CONFIG_SYNC_TYPE = 'codex_runtime_config_sync';
 export const CODEX_RUNTIME_CONFIG_KEYS = Object.freeze([
-    'CODEX_FINGERPRINT_ENABLED',
     'CODEX_CLOAKING_ENABLED',
 ]);
 

@@ -45,6 +45,15 @@ export function resolveOriginalCodexTurnId(headers = {}, requestBody = {}) {
     );
 }
 
+export function resolveOriginalCodexRootTurnId(headers = {}, requestBody = {}) {
+    const headerEntry = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-codex-turn-metadata');
+    const turnMetadata = parseTurnMetadata(headerEntry?.[1]);
+    return firstString(
+        requestBody?.client_metadata?.root_turn_id,
+        turnMetadata.root_turn_id
+    );
+}
+
 export function resolveInboundCodexTurnState(headers = {}) {
     const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === CODEX_TURN_STATE_HEADER);
     return normalizeCodexTurnState(entry?.[1]);

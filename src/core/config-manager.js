@@ -77,8 +77,7 @@ function normalizeCodexBooleanSwitch(config, key) {
     }
 }
 
-function normalizeCodexFingerprintEnabled(config) {
-    normalizeCodexBooleanSwitch(config, 'CODEX_FINGERPRINT_ENABLED');
+function normalizeCodexCloakingEnabled(config) {
     normalizeCodexBooleanSwitch(config, 'CODEX_CLOAKING_ENABLED');
 }
 
@@ -204,7 +203,6 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         IMAGE_SIZE_NORMALIZATION_ENABLED: true, // Codex Images 接口是否将返回图片缩放到请求尺寸
         IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true, // Codex 生图提示词是否追加最小画幅比例约束
         IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10, // 原图与目标长宽比偏差超过此值时拒绝拉伸
-        CODEX_FINGERPRINT_ENABLED: true, // Codex OAuth 出站设备指纹收敛总开关，默认开启；关闭后所有账号等价于 off
         CODEX_CLOAKING_ENABLED: true, // Codex 出站客户端身份统一（UA/originator/version），默认开启；关闭后可识别的 Codex 客户端身份整组透传
         IMAGE_SIZE_MAX_PIXELS: 8388608, // 后处理允许的最大目标总像素（约 4K UHD）
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
@@ -322,7 +320,6 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         { flag: '--image-prompt-aspect-constraint-enabled', configKey: 'IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED', type: 'bool' },
         { flag: '--image-aspect-mismatch-threshold', configKey: 'IMAGE_ASPECT_MISMATCH_THRESHOLD', type: 'float' },
         { flag: '--image-size-max-pixels', configKey: 'IMAGE_SIZE_MAX_PIXELS', type: 'int' },
-        { flag: '--codex-fingerprint-enabled', configKey: 'CODEX_FINGERPRINT_ENABLED', type: 'bool' },
         { flag: '--codex-cloaking-enabled', configKey: 'CODEX_CLOAKING_ENABLED', type: 'bool' },
         { flag: '--codex-potluck-sticky-provider-enabled', configKey: 'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED', type: 'bool' },
         { flag: '--codex-sticky-hot-shard-enabled', configKey: 'CODEX_STICKY_HOT_SHARD_ENABLED', type: 'bool' },
@@ -407,7 +404,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
 
     normalizeRequestBodyMaxBytes(currentConfig);
     normalizeLogRetentionDays(currentConfig);
-    normalizeCodexFingerprintEnabled(currentConfig);
+    normalizeCodexCloakingEnabled(currentConfig);
     normalizeAntigravityElasticRouting(currentConfig);
     normalizeConfiguredProviders(currentConfig);
     currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD = normalizeAspectMismatchThreshold(

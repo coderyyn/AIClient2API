@@ -60,7 +60,6 @@ function createService(overrides = {}) {
         MODEL_PROVIDER: 'openai-codex-oauth',
         uuid: 'provider-secret-uuid',
         codexAccountKey: 'stable-account-key',
-        CODEX_FINGERPRINT_ENABLED: false,
         ...overrides
     });
     service.isInitialized = true;

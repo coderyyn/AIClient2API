@@ -18,9 +18,10 @@ import {
 import { codexTransientRetryObservability } from '../providers/openai/codex-transient-observability.js';
 import {
     CODEX_FINGERPRINT_CONTEXT_KEY,
-    extractOriginalCodexSessionId
+    extractOriginalCodexSessionId,
+    extractOriginalCodexWindowNumber
 } from '../providers/openai/codex-fingerprint.js';
-import { resolveOriginalCodexTurnId } from '../providers/openai/codex-turn-state.js';
+import { resolveOriginalCodexRootTurnId, resolveOriginalCodexTurnId } from '../providers/openai/codex-turn-state.js';
 import { beginRequestAttempt, finishRequestAttempt, getSuccessfulOutboundModel } from './request-attempts.js';
 import { matchesModelFamily } from '../providers/openai/codex-model-routing.js';
 import requestContext from './context.js';
@@ -193,7 +194,9 @@ export function extractInboundCodexFingerprintContext(req, requestBody = {}) {
     return {
         inboundCodexHeaders,
         originalClientSessionId: extractOriginalCodexSessionId(inboundCodexHeaders, requestBody),
-        originalTurnId: resolveOriginalCodexTurnId(inboundCodexHeaders, requestBody)
+        originalTurnId: resolveOriginalCodexTurnId(inboundCodexHeaders, requestBody),
+        originalRootTurnId: resolveOriginalCodexRootTurnId(inboundCodexHeaders, requestBody),
+        windowNumber: extractOriginalCodexWindowNumber(inboundCodexHeaders, requestBody)
     };
 }
 

@@ -60,7 +60,7 @@ describe('provider modal source regressions', () => {
         expect(source).toContain("currentProviderType === 'openai-codex-oauth'");
         expect(source).toContain('data-codex-fingerprint-status="true"');
         expect(source).toContain('provider.codexFingerprintAudit');
-        expect(source).toContain('window.currentSafeConfig?.CODEX_FINGERPRINT_ENABLED');
+        expect(source).not.toContain('CODEX_FINGERPRINT_ENABLED');
         expect(source).not.toContain('installationId');
         expect(source).not.toContain('sessionId');
     });

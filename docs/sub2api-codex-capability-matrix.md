@@ -15,10 +15,10 @@
 | reasoning item ID 清洗 | 原链路未覆盖所有 Codex 回放场景 | 去掉 reasoning `id`，缺失 `summary` 补空数组 | 增强 |
 | 非法工具参数安全解析、长工具名稳定哈希 | 已有测试和实现 | 不重复实现 | 已有 |
 | Responses 工具 schema 兼容 | 已有 Codex/OpenAI Responses 转换 | 不改变 hosted image/function 冲突防护 | 已有 |
-| Codex OAuth 设备指纹收敛 | 缺失 | 新增 `off/device/session/full`，默认 `session` | 移植/重写 |
-| 全局紧急关闭 | 缺失 | `CODEX_FINGERPRINT_ENABLED` 默认 true，false 等价 off | 新增 |
+| Codex OAuth 设备指纹收敛 | 缺失 | 新增 `off/device/session/full`；2026-10-13 起默认 `off`（对齐 sub2api #5668），ID 形态对齐原生 Codex 0.162.1 | 移植/重写 |
+| 全局紧急关闭 | 缺失 | `CODEX_FINGERPRINT_ENABLED` 已于 2026-10-13 删除；只按凭据选择模式，残留配置键被忽略 | 移除 |
 | 存量账号迁移与备份 | 缺失 | 文件锁、原子写入、迁移前 `.bak`、执行 worker 不持久化 | 新增 |
-| 管理端模式选择与全局状态 | 缺失 | Codex Provider 选择器、全局开关、脱敏审计摘要 | 新增 |
+| 管理端模式选择与状态 | 缺失 | Codex Provider 选择器（默认 off）、脱敏审计摘要 | 新增 |
 | 多 worker 全局开关与审计同步 | 开关只更新 control worker，执行 worker 需重启 | `codex_runtime_config_sync` 下发并清理 Codex adapter；审计摘要经 `codex_fingerprint_audit` 回传 control（2026-10-12） | 修复 |
 | WebSocket 专属 ingress 恢复流程 | 当前项目无同等 WS Codex forward 链 | 不移植 | 不适用 |
 
@@ -26,7 +26,9 @@
 
 - 仅对 `openai-codex-oauth` 生效。
 - 账号种子优先 `codexAccountKey`，回退 `codexAccountId`、`uuid`。
-- `session` 固定 installation/session，thread 由账号种子和原始客户端 session 派生。
+- `installation_id` 按账号固定，UUIDv4（原生 `~/.codex/installation_id` 形态）。
+- `session`：session/thread 由账号种子和会话键派生，`session_id == thread_id`（原生根会话不变量）；会话键取客户端 session，没有时取最终 `prompt_cache_key`。`full`：整个账号一个会话。
+- session/thread/turn 为 UUIDv7；来源 ID 是 v7 时继承其时间戳。`x-client-request-id == thread_id`，`x-codex-window-id == <thread_id>:<客户端 window_number>`，`prompt_cache_key == session-id`，`root_turn_id` 根轮次等于 `turn_id`。
 - 同一请求的 header/body/内嵌 metadata 共用一组预计算 ID；同账号重试复用 turn ID。
 - Provider failover 重新按新账号生成账号级 ID，但保留原始客户端 session 作为 thread 输入。
 - malformed metadata JSON fail-open；日志和 API 只返回模式、版本、时间和短哈希。

@@ -28,7 +28,9 @@ import {
     CODEX_FINGERPRINT_CONTEXT_KEY,
     applyCodexFingerprintClientMetadata,
     applyCodexFingerprintHeaders,
+    bindCodexFingerprintConversation,
     extractOriginalCodexSessionId,
+    extractOriginalCodexWindowNumber,
     resolveCodexFingerprintIds
 } from './codex-fingerprint.js';
 import { recordCodexFingerprintAudit } from './codex-fingerprint-audit.js';
@@ -405,9 +407,10 @@ export class CodexApiService {
             context: context || {},
             ids: resolveCodexFingerprintIds({
                 providerConfig: this.config,
-                globalConfig: this.config,
                 originalClientSessionId,
-                originalTurnId: context?.originalTurnId || ''
+                originalTurnId: context?.originalTurnId || '',
+                originalRootTurnId: context?.originalRootTurnId || '',
+                windowNumber: context?.windowNumber ?? extractOriginalCodexWindowNumber(inboundHeaders, requestBody)
             })
         };
         recordCodexFingerprintAudit(this.config, state.ids, state.ids?.mode || 'off');
@@ -1101,9 +1104,6 @@ export class CodexApiService {
         // 凭据级改写到 5.6 系列时，5.6 无 max 档位，降为 xhigh
         const remapApplied = !isImageModel && resolveCodexModelRemap(upstreamModel, this.config) !== null;
         const cleanedBody = sanitizeCodexModelParameters(effectiveUpstreamModel, {...requestBody});
-        if (fingerprintIds) {
-            applyCodexFingerprintClientMetadata(cleanedBody, fingerprintIds);
-        }
         delete cleanedBody[CODEX_FINGERPRINT_CONTEXT_KEY];
         delete cleanedBody.metadata;
         delete cleanedBody.previous_response_id;
@@ -1228,6 +1228,13 @@ export class CodexApiService {
             stream,
             prompt_cache_key: cache.id
         };
+        // 指纹在缓存键确定后再落到 body，避免改写后的 client_metadata 影响模板缓存指纹；
+        // 非 device 模式下 prompt_cache_key 与 session-id 取同一 ID（原生根会话不变量）。
+        if (fingerprintIds) {
+            bindCodexFingerprintConversation(fingerprintIds, this.config, cache.id);
+            if (fingerprintIds.sessionId) result.prompt_cache_key = fingerprintIds.sessionId;
+            applyCodexFingerprintClientMetadata(result, fingerprintIds);
+        }
 
         if (!result.instructions) {
             result.instructions = '';
