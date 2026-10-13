@@ -83,6 +83,37 @@ describe('GPT diagnostics safety and fingerprint inputs', () => {
     } finally { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   });
 
+  test('runs requests concurrently within global and per-credential limits and keeps result order', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-diag-conc-'));
+    const perCredential = new Map();
+    let inFlight = 0, peak = 0;
+    const peakByCredential = new Map();
+    const runner = await new GptDiagnosticsRunner({ dir,
+      providerManager: { globalConfig: {}, findProviderByUuid: uuid => ({ MODEL_PROVIDER: 'openai-codex-oauth', customName: uuid, uuid }) },
+      adapterFactory: config => ({ generateContent: async () => {
+        inFlight += 1; peak = Math.max(peak, inFlight);
+        const current = (perCredential.get(config.uuid) || 0) + 1;
+        perCredential.set(config.uuid, current);
+        peakByCredential.set(config.uuid, Math.max(peakByCredential.get(config.uuid) || 0, current));
+        await new Promise(resolve => setTimeout(resolve, 20));
+        inFlight -= 1; perCredential.set(config.uuid, perCredential.get(config.uuid) - 1);
+        return { output_text: '{}' };
+      } })
+    }).init();
+    try {
+      const uuids = ['a', 'b', 'c', 'd'];
+      const created = await runner.create({ targets: uuids.map(providerUuid => ({ providerUuid })) });
+      const run = await waitForRun(runner, created.runId);
+      expect(run.status).toBe('completed');
+      expect(peak).toBeGreaterThan(3);
+      expect(peak).toBeLessThanOrEqual(8);
+      for (const uuid of uuids) expect(peakByCredential.get(uuid)).toBeLessThanOrEqual(3);
+      expect(run.results.map(r => `${r.providerUuid}:${r.model}`))
+        .toEqual(uuids.flatMap(uuid => FIXED_MODELS.map(model => `${uuid}:${model}`)));
+      expect(JSON.parse(await readFile(path.join(dir, `run-${run.runId}.json`), 'utf8')).results).toHaveLength(12);
+    } finally { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+  });
+
   test('reads completed legacy records without rewriting or dropping historical fields', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-diag-legacy-'));
     const file = path.join(dir, 'run-legacy.json');
@@ -106,8 +137,9 @@ describe('GPT diagnostics safety and fingerprint inputs', () => {
 
   test('cancel allows an in-flight request to finish and starts no subsequent request', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-diag-cancel-'));
+    const releases = [];
     let release;
-    const generateContent = jest.fn(() => new Promise(resolve => { release = resolve; }));
+    const generateContent = jest.fn(() => new Promise(resolve => { release = resolve; releases.push(resolve); }));
     const runner = await new GptDiagnosticsRunner({ dir,
       providerManager: { findProviderByUuid: () => ({ MODEL_PROVIDER: 'openai-custom' }) },
       adapterFactory: () => ({ generateContent })
@@ -117,12 +149,13 @@ describe('GPT diagnostics safety and fingerprint inputs', () => {
       for (let i = 0; i < 100 && !release; i++) await new Promise(resolve => setTimeout(resolve, 5));
       expect(release).toBeDefined();
       await runner.cancel(created.runId);
-      release({ choices: [{ message: { content: '{}' } }] });
+      for (const resolve of releases) resolve({ choices: [{ message: { content: '{}' } }] });
       const run = await waitForRun(runner, created.runId);
       expect(run.status).toBe('cancelled');
-      expect(generateContent).toHaveBeenCalledTimes(1);
+      // 同凭据最多 3 路并发：取消时在途的最多 3 个请求，其余排队请求不再发起。
+      expect(generateContent.mock.calls.length).toBeLessThanOrEqual(3);
       expect(generateContent.mock.calls[0][1].max_tokens).toBe(8192);
-    } finally { release?.({}); await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    } finally { for (const resolve of releases) resolve({}); await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   });
 
   test('failure records retain credential name and channel without fallback', async () => {
@@ -139,7 +172,8 @@ describe('GPT diagnostics safety and fingerprint inputs', () => {
       for (const result of run.results) {
         expect(result).toMatchObject({ status: 'failed', providerName: 'Failing account', providerType: 'openai-custom', error: 'upstream unavailable' });
       }
-      expect(generateContent).toHaveBeenCalledTimes(FIXED_MODELS.length);
+      // 每个目标的 3 个挑战并发发起，均失败。
+      expect(generateContent).toHaveBeenCalledTimes(FIXED_MODELS.length * 3);
     } finally { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   });
 

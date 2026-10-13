@@ -12,6 +12,23 @@ const TESTS = Object.freeze({
     modeltrace: Object.freeze({ label: 'ModelTrace', requestCount: modelTraceChallenges().length, maxOutputTokensPerRequest: 8192 })
 });
 const DEFAULT_TESTS = Object.keys(TESTS);
+// 并发上限：全局与单凭据，避免单个凭据被瞬间打满触发上游限流。
+export const GLOBAL_CONCURRENCY = 8;
+export const PER_CREDENTIAL_CONCURRENCY = 3;
+
+function createLimiter(limit) {
+    let running = 0;
+    const waiting = [];
+    return async task => {
+        if (running >= limit) await new Promise(resolve => waiting.push(resolve));
+        else running += 1;
+        try { return await task(); } finally {
+            // 有等待者时直接移交名额，避免唤醒间隙被新调用抢占而超限。
+            const next = waiting.shift();
+            if (next) next(); else running -= 1;
+        }
+    };
+}
 
 function validateTests(tests = DEFAULT_TESTS) {
     if (!Array.isArray(tests) || !tests.length) {
@@ -109,7 +126,7 @@ class DiagnosticStore {
     async save(run) {
         this.runs.set(run.runId, run);
         const target = path.join(this.dir, `run-${safeId(run.runId)}.json`);
-        const temp = `${target}.${process.pid}.tmp`;
+        const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
         await fs.writeFile(temp, JSON.stringify(run, null, 2), { encoding: 'utf8', mode: 0o600 });
         await fs.rename(temp, target);
     }
@@ -211,17 +228,26 @@ export class GptDiagnosticsRunner {
                 run.bankError = error.message;
             }
         }
-        for (const target of run.targets) {
-            if (this.cancelled.has(run.runId)) break;
-            const result = await this.executeTarget(run, target, bank).catch(error => ({ ...target, status: 'failed', error: error.message }));
-            run.results.push(result); await this.store.save(run);
-        }
+        const limits = { global: createLimiter(GLOBAL_CONCURRENCY), credentials: new Map() };
+        let saveChain = Promise.resolve();
+        await Promise.all(run.targets.map(async target => {
+            if (this.cancelled.has(run.runId)) return;
+            const result = await this.executeTarget(run, target, bank, limits).catch(error => ({ ...target, status: 'failed', error: error.message }));
+            run.results.push(result);
+            saveChain = saveChain.then(() => this.store.save(run));
+            await saveChain;
+        }));
+        const order = new Map(run.targets.map((target, index) => [`${target.providerUuid}
+${target.model}`, index]));
+        run.results.sort((a, b) => (order.get(`${a.providerUuid}
+${a.model}`) ?? 0) - (order.get(`${b.providerUuid}
+${b.model}`) ?? 0));
         run.status = this.cancelled.has(run.runId)
             ? 'cancelled'
             : (run.results.some(item => ['failed', 'partial'].includes(item.status)) ? 'partial' : 'completed');
         run.completedAt = new Date().toISOString(); await this.store.save(run);
     }
-    async executeTarget(run, target, bank) {
+    async executeTarget(run, target, bank, limits = { global: createLimiter(GLOBAL_CONCURRENCY), credentials: new Map() }) {
         const manager = this.providerManager || (await import('../../services/service-manager.js')).getProviderPoolManager();
         const providerConfig = manager?.findProviderByUuid?.(target.providerUuid);
         if (!providerConfig) throw new Error('Credential not found');
@@ -233,8 +259,13 @@ export class GptDiagnosticsRunner {
         const adapterFactory = this.adapterFactory || (await import('../../providers/adapter.js')).getServiceAdapter;
         const adapter = adapterFactory({ ...manager.globalConfig, ...providerConfig, MODEL_PROVIDER: providerType });
         const probes = [];
+        if (!limits.credentials.has(target.providerUuid)) limits.credentials.set(target.providerUuid, createLimiter(PER_CREDENTIAL_CONCURRENCY));
+        const credentialLimit = limits.credentials.get(target.providerUuid);
         const call = async (test, prompt) => {
             const maxTokens = TESTS[test].maxOutputTokensPerRequest;
+            return credentialLimit(() => limits.global(() => callOnce(test, prompt, maxTokens)));
+        };
+        const callOnce = async (test, prompt, maxTokens) => {
             if (this.cancelled.has(run.runId)) throw new Error('cancelled');
             const startedAt = new Date().toISOString();
             const requestId = `diag_${crypto.randomUUID()}`;
@@ -295,11 +326,10 @@ export class GptDiagnosticsRunner {
         };
         const output = { ...target, providerType, status: 'completed', probes, passiveSignals: [] };
         if (run.tests.includes('modeltrace') && bank) {
-            const values = [];
-            for (const challenge of modelTraceChallenges()) {
+            const values = await Promise.all(modelTraceChallenges().map(async challenge => {
                 const value = await call('modeltrace', challenge.prompt);
-                values.push({ text: value.text, expectedCount: challenge.expectedCount });
-            }
+                return { text: value.text, expectedCount: challenge.expectedCount };
+            }));
             output.modelTrace = analyzeModelTraceOutputs(values, bank);
         } else if (run.tests.includes('modeltrace')) {
             output.modelTrace = { valid: false, reason: 'candidate_bank_unavailable', bankVersion: MODELTRACE_BANK_VERSION };

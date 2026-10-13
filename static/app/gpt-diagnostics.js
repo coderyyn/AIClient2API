@@ -156,10 +156,35 @@ function resultHtml(group, key) {
             probes: (row.probes || []).map(({ text, ...metadata }) => metadata)
         })), null, 2))}</pre></details></article>`;
 }
+function runSummary(run) {
+    const rows = run.results || [];
+    if (!rows.length) return '';
+    const failed = rows.filter(r => r.status === 'failed').length;
+    const mismatched = rows.filter(r => r.modelTrace?.valid && r.modelTrace.prediction && baseModel(r.modelTrace.prediction) !== r.model).length;
+    const matched = rows.filter(r => r.modelTrace?.valid).length - mismatched;
+    return `<p class="run-summary"><span class="good-text">${matched} 个一致</span> · <span class="${mismatched ? 'warn-text' : ''}">${mismatched} 个不一致</span> · <span class="${failed ? 'bad-text' : ''}">${failed} 个失败</span></p>`;
+}
+function pendingGroups(run) {
+    const done = new Set((run.results || []).map(r => `${r.providerUuid}
+${r.model}`));
+    return (run.targets || []).filter(t => !done.has(`${t.providerUuid}
+${t.model}`));
+}
+function pendingHtml(run) {
+    const pending = pendingGroups(run);
+    if (!pending.length) return '';
+    return `<div class="pending-list" aria-label="检测中的目标">${pending.map(t => {
+        const credential = state.credentials.find(c => c.uuid === t.providerUuid);
+        const name = t.providerName || (credential && identity(credential)) || shortId(t.providerUuid);
+        return `<span class="pending-item"><span class="badge active">${run.status === 'queued' ? '排队中' : '检测中…'}</span> ${esc(name)} · <span class="mono">${esc(t.model)}</span></span>`;
+    }).join('')}</div>`;
+}
 function runResults(run) {
     return `${run.error ? `<p class="notice error">${esc(run.error)}</p>` : ''}
         ${run.bankError ? '<p class="notice error">ModelTrace 候选库不可用，本次可能无法完成指纹检测。</p>' : ''}
-        ${groupResults(run).map((group, index) => resultHtml(group, `${run.runId}-${index}`)).join('') || '<p class="empty">暂无目标结果</p>'}`;
+        ${runSummary(run)}
+        ${groupResults(run).map((group, index) => resultHtml(group, `${run.runId}-${index}`)).join('') || (active(run) ? '' : '<p class="empty">暂无目标结果</p>')}
+        ${active(run) ? pendingHtml(run) : ''}`;
 }
 function runMeta(run) {
     return `<p class="run-meta">${esc(run.testVersion || '版本未知')} · 预算上限 ${fmt(run.estimate?.requestCount)} 次请求 / ${fmt(run.estimate?.maxOutputTokens)} 输出 tokens</p>`;
@@ -230,6 +255,7 @@ async function startRun() {
         state.runSignature = null;
         renderRuns();
         await loadRuns();
+        $('current-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) { notify('submit-status', `创建失败：${error.message}`, true); }
     finally { state.submitting = false; updateBudget(); }
 }

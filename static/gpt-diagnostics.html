@@ -22,7 +22,7 @@
     <div class="config-grid">
       <div class="field picker">
         <label id="credential-label" for="credential-toggle">检测凭据</label>
-        <button id="credential-toggle" class="select-button" aria-expanded="false" aria-controls="credential-menu" disabled><span id="credential-summary">正在加载凭据…</span><span aria-hidden="true">⌄</span></button>
+        <button id="credential-toggle" class="select-button" aria-expanded="false" aria-controls="credential-menu" disabled><span id="credential-summary">正在加载凭据…</span><span class="chevron" aria-hidden="true"></span></button>
         <div id="credential-menu" class="picker-menu" hidden>
           <label class="sr-only" for="credential-search">搜索凭据名称、渠道或 UUID</label>
           <input id="credential-search" type="search" placeholder="搜索名称、渠道或 UUID" autocomplete="off">
@@ -41,7 +41,7 @@
     <div id="target-list" class="target-list"></div>
     <div class="tests-line"><span class="muted">检测内容</span><span class="test-tag">ModelTrace 指纹（闭集归因）</span></div>
     <div class="action-bar">
-      <div><strong id="budget">正在加载检测预算…</strong><p class="field-help">输出预算为上限，非实际消耗；真实请求按目标串行执行。</p></div>
+      <div><strong id="budget">正在加载检测预算…</strong><p class="field-help">输出预算为上限，非实际消耗；真实请求并发执行（同凭据最多 3 路、全局最多 8 路）。</p></div>
       <button id="start" class="primary" disabled>开始检测</button>
     </div>
     <p id="submit-status" class="status-message" role="status" aria-live="polite"></p>
