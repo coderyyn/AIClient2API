@@ -110,15 +110,22 @@ function compactMetadata(context = {}) {
         'selectionPlanFilterMs', 'selectionRankMs', 'selectionHydrateMs',
         'identityReadMs', 'identityPersistLockWaitMs',
         'identityPersistIoMs', 'requestConvertMs', 'systemPromptPersistMs',
-        'upstreamFirstByteMs', 'clientFirstOutputMs', 'upstreamCompleteMs', 'responseFinalizeMs', 'complete'
+        'upstreamFirstByteMs', 'clientFirstOutputMs', 'upstreamCompleteMs', 'responseFinalizeMs', 'complete',
+        'bodyParsed', 'bodyAbortedMs'
     ]);
+    const bodyMetadata = context.runtime?.metadata && typeof context.runtime.metadata === 'object'
+        ? Object.fromEntries(['requestBodyContentLength', 'requestBodyReceivedBytes', 'requestBodyComplete']
+            .filter(name => context.runtime.metadata[name] !== undefined && context.runtime.metadata[name] !== null)
+            .map(name => [name, context.runtime.metadata[name]]))
+        : undefined;
     const runtime = context.runtime && typeof context.runtime === 'object' ? {
         workerId: typeof context.runtime.workerId === 'string' ? context.runtime.workerId : undefined,
         kind: context.runtime.kind === 'image' || context.runtime.kind === 'model' ? context.runtime.kind : undefined,
         durationMs: Number.isFinite(Number(context.runtime.durationMs)) && Number(context.runtime.durationMs) >= 0 ? Number(context.runtime.durationMs) : undefined,
         outputBytes: Number.isFinite(Number(context.runtime.outputBytes)) && Number(context.runtime.outputBytes) >= 0 ? Number(context.runtime.outputBytes) : undefined,
         backpressureMs: Number.isFinite(Number(context.runtime.backpressureMs)) && Number(context.runtime.backpressureMs) >= 0 ? Number(context.runtime.backpressureMs) : undefined,
-        stages: context.runtime.stages && typeof context.runtime.stages === 'object' ? Object.fromEntries(Object.entries(context.runtime.stages).filter(([name, value]) => allowedStages.has(name) && Number.isFinite(Number(value)) && Number(value) >= 0).map(([name, value]) => [name, Number(value)])) : undefined
+        stages: context.runtime.stages && typeof context.runtime.stages === 'object' ? Object.fromEntries(Object.entries(context.runtime.stages).filter(([name, value]) => allowedStages.has(name) && Number.isFinite(Number(value)) && Number(value) >= 0).map(([name, value]) => [name, Number(value)])) : undefined,
+        metadata: bodyMetadata && Object.keys(bodyMetadata).length ? bodyMetadata : undefined
     } : undefined;
     const metadata = {
         requestId: context.requestId || context._monitorRequestId || null,

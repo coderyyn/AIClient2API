@@ -661,4 +661,25 @@ describe('RuntimeHookBridge', () => {
             selectionComputeMs: 520
         });
     });
+
+    test('keeps request body read state in compact runtime metadata', async () => {
+        const published = [];
+        const bridge = new RuntimeHookBridge({
+            send: jest.fn(),
+            durableTransport: { publish: event => published.push(event), snapshot: () => ({}) }
+        });
+
+        await bridge.handle('onRequestCompleted', {
+            requestId: 'body-read-state',
+            runtime: {
+                durationMs: 104000,
+                stages: { bodyAbortedMs: 104000, complete: 104000 },
+                metadata: { requestBodyContentLength: 900000, requestBodyReceivedBytes: 4096, requestBodyComplete: false, secret: 'x' }
+            }
+        });
+
+        const runtime = published[0].args[0].runtime;
+        expect(runtime.stages.bodyAbortedMs).toBe(104000);
+        expect(runtime.metadata).toEqual({ requestBodyContentLength: 900000, requestBodyReceivedBytes: 4096, requestBodyComplete: false });
+    });
 });
