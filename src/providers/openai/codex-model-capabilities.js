@@ -1,3 +1,5 @@
+import { getProviderModels } from '../provider-models.js';
+
 export const GPT6_ASTRA_MODEL = 'gpt-6-astra';
 export const GPT61_SOL_MODEL = 'gpt-6.1-sol';
 export const CODEX_GPT6_OVERRIDE_MODELS = Object.freeze(['gpt-6-astra', 'gpt-6-sol', GPT61_SOL_MODEL, 'gpt-6-luna']);
@@ -19,8 +21,24 @@ export function isGpt6AstraModel(model) {
         normalized === `${GPT6_ASTRA_MODEL}-ultrafast`;
 }
 
+// 凭据级一对一改写（临时方案）：config.codexModelRemap = { "gpt-6-astra": "gpt-5.6-sol", ... }
+export function resolveCodexModelRemap(model, config = {}) {
+    const remap = config.codexModelRemap;
+    if (!remap || typeof remap !== 'object' || Array.isArray(remap)) return null;
+    const normalized = String(model || '').trim().toLowerCase();
+    const entry = Object.entries(remap).find(([source]) => String(source).trim().toLowerCase() === normalized);
+    if (!entry) return null;
+    const target = String(entry[1] || '').trim().toLowerCase();
+    if (!getProviderModels('openai-codex-oauth').includes(target)) {
+        throw new Error(`[Codex] 无效的凭据级模型改写目标: ${target}`);
+    }
+    return target;
+}
+
 export function resolveCodexOutboundModel(model, config = {}) {
     const normalized = String(model || '').trim();
+    const remapped = resolveCodexModelRemap(normalized, config);
+    if (remapped) return remapped;
     if (!isCodexGpt6OverrideApplied(normalized, config)) return normalized;
     const target = String(config.codexGpt6OverrideModel || 'gpt-6-luna').trim().toLowerCase();
     if (!CODEX_GPT6_OVERRIDE_MODELS.includes(target)) {
@@ -30,6 +48,7 @@ export function resolveCodexOutboundModel(model, config = {}) {
 }
 
 export function isCodexGpt6OverrideApplied(model, config = {}) {
+    if (resolveCodexModelRemap(model, config)) return true;
     return (config.codexGpt6OverrideEnabled === true || config.codexGpt6OverrideEnabled === 'true')
         && /^gpt-(?!image-)/i.test(String(model || '').trim());
 }

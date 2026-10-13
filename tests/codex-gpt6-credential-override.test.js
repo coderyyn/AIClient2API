@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import { CodexApiService } from '../src/providers/openai/codex-core.js';
 import { getProviderModels } from '../src/providers/provider-models.js';
-import { getCodexModelIds, normalizeCodexReasoningEffort, resolveCodexOutboundModel } from '../src/providers/openai/codex-model-capabilities.js';
+import { getCodexModelIds, isCodexGpt6OverrideApplied, normalizeCodexReasoningEffort, resolveCodexOutboundModel } from '../src/providers/openai/codex-model-capabilities.js';
 import { getModelPricing } from '../src/plugins/api-potluck/cost-estimator.js';
 import { beginRequestAttempt, finishRequestAttempt, getSuccessfulOutboundModel } from '../src/utils/request-attempts.js';
 
@@ -54,6 +54,35 @@ describe('Codex GPT-6 catalog and credential override', () => {
             codexGpt6OverrideEnabled: true,
             codexGpt6OverrideModel: 'gpt-6'
         })).toThrow('无效的 GPT-6 上游目标模型');
+    });
+
+    test('credential model remap maps GPT-6 to GPT-5.6 one-to-one and keeps speed tiers', async () => {
+        const config = {
+            codexModelRemap: {
+                'gpt-6-astra': 'gpt-5.6-sol',
+                'gpt-6.1-sol': 'gpt-5.6-terra',
+                'gpt-6-luna': 'gpt-5.6-luna',
+                'gpt-6-sol': 'gpt-5.6-terra'
+            }
+        };
+        expect((await prepare('gpt-6-astra', config, { reasoning: { effort: 'max' } })).reasoning.effort).toBe('xhigh');
+        expect((await prepare('gpt-6-astra', config, { reasoning: { effort: 'high' } })).reasoning.effort).toBe('high');
+        expect((await prepare('gpt-6-sol', config)).model).toBe('gpt-5.6-terra');
+        expect((await prepare('gpt-6-astra', {}, { reasoning: { effort: 'max' } })).reasoning.effort).toBe('max');
+        expect((await prepare('gpt-6-astra', config, { temperature: 0.2 })).model).toBe('gpt-5.6-sol');
+        expect((await prepare('gpt-6-astra', config)).temperature).toBeUndefined();
+        const fast = await prepare('gpt-6-astra-ultrafast', config);
+        expect(fast.model).toBe('gpt-5.6-sol');
+        expect(fast.service_tier).toBe('ultrafast');
+        expect((await prepare('gpt-6.1-sol', config)).model).toBe('gpt-5.6-terra');
+        expect((await prepare('gpt-6-luna', config)).model).toBe('gpt-5.6-luna');
+        expect((await prepare('gpt-5.6-sol', config)).model).toBe('gpt-5.6-sol');
+        expect((await prepare('gpt-6-astra')).model).toBe('gpt-6-astra');
+        expect((await prepare('gpt-image-2', config)).model).toBe('gpt-6-luna');
+        expect(() => resolveCodexOutboundModel('gpt-6-astra', { codexModelRemap: { 'gpt-6-astra': 'gpt-9' } }))
+            .toThrow('无效的凭据级模型改写目标');
+        expect(isCodexGpt6OverrideApplied('gpt-6-astra', config)).toBe(true);
+        expect(isCodexGpt6OverrideApplied('gpt-5.6-sol', config)).toBe(false);
     });
 
     test('rejects retired GPT-5.5 before any upstream request', async () => {

@@ -38,7 +38,7 @@ import requestContext from '../../utils/context.js';
 import { performance } from 'node:perf_hooks';
 import { getCodexOverloadRetryDelayMs, getCodexOverloadRetryMaxAttempts, getCodexRetryDelayMs, shouldRetryCodex429 } from './codex-retry-policy.js';
 import { extractPersistedCodexSubscriptionWindow, mergeCodexSubscriptionWindow } from '../../utils/codex-utils.js';
-import { getCodexModelIds, sanitizeCodexModelParameters, normalizeCodexReasoningEffort, resolveCodexOutboundModel, isCodexGpt6OverrideApplied, isGpt61SolModel } from './codex-model-capabilities.js';
+import { getCodexModelIds, sanitizeCodexModelParameters, normalizeCodexReasoningEffort, resolveCodexOutboundModel, resolveCodexModelRemap, isCodexGpt6OverrideApplied, isGpt61SolModel } from './codex-model-capabilities.js';
 import {
     CODEX_TURN_STATE_HEADER,
     REUSABLE_CODEX_TURN_STATE_BYTES,
@@ -1098,6 +1098,8 @@ export class CodexApiService {
             ? 'gpt-6-luna'
             : resolveCodexOutboundModel(upstreamModel, this.config);
 
+        // 凭据级改写到 5.6 系列时，5.6 无 max 档位，降为 xhigh
+        const remapApplied = !isImageModel && resolveCodexModelRemap(upstreamModel, this.config) !== null;
         const cleanedBody = sanitizeCodexModelParameters(effectiveUpstreamModel, {...requestBody});
         if (fingerprintIds) {
             applyCodexFingerprintClientMetadata(cleanedBody, fingerprintIds);
@@ -1216,10 +1218,11 @@ export class CodexApiService {
                 : (cleanedBody.service_tier || defaultServiceTier),
             reasoning: {
                 ...cleanedBody.reasoning,
-                effort: normalizeCodexReasoningEffort(effectiveUpstreamModel,
-                    isGpt61SolModel(effectiveUpstreamModel)
-                        ? (cleanedBody.reasoning?.effort ?? cleanedBody.reasoning_effort)
-                        : cleanedBody.reasoning?.effort, isSpeedModel) || defaultReasoningEffort,
+                effort: ((effort) => (remapApplied && effort === 'max' ? 'xhigh' : effort))(
+                    normalizeCodexReasoningEffort(effectiveUpstreamModel,
+                        isGpt61SolModel(effectiveUpstreamModel)
+                            ? (cleanedBody.reasoning?.effort ?? cleanedBody.reasoning_effort)
+                            : cleanedBody.reasoning?.effort, isSpeedModel) || defaultReasoningEffort),
                 summary: cleanedBody.reasoning?.summary || 'auto'
             },
             stream,
