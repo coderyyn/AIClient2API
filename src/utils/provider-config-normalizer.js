@@ -22,6 +22,11 @@ const LEGACY_CODEX_QUOTA_FIELDS = [
     'codex53MaxWeeklyPercent'
 ];
 
+// 对象型凭据配置不能经表单提交（表单会把对象变成 "[object Object]"）；非对象值一律丢弃，保留已有值。
+const PROVIDER_OBJECT_CONFIG_FIELDS = [
+    'codexModelRemap'
+];
+
 const PROVIDER_POSITIVE_NUMBER_CONFIG_FIELDS = [
     'providerWeight'
 ];
@@ -137,6 +142,14 @@ export function normalizeProviderConfigFields(data) {
     for (const key of PROVIDER_STRING_ARRAY_CONFIG_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(result, key)) {
             result[key] = normalizeStringArrayConfigValue(result[key]);
+        }
+    }
+
+    for (const key of PROVIDER_OBJECT_CONFIG_FIELDS) {
+        const value = result[key];
+        if (Object.prototype.hasOwnProperty.call(result, key) &&
+            (!value || typeof value !== 'object' || Array.isArray(value))) {
+            delete result[key];
         }
     }
 

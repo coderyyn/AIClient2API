@@ -50,6 +50,17 @@ describe('provider config normalizer', () => {
         expect(normalized.codexGeneralMax5hPercent).toBe(85);
     });
 
+    test('drops non-object codexModelRemap so a form save cannot overwrite the stored map', () => {
+        const stored = { codexModelRemap: { 'gpt-6-astra': 'gpt-5.6-sol' }, customName: 'a' };
+        for (const submitted of ['[object Object]', '', null, ['x'], 5]) {
+            const merged = { ...stored, ...normalizeProviderConfigFields({ customName: 'b', codexModelRemap: submitted }) };
+            expect(merged.codexModelRemap).toEqual({ 'gpt-6-astra': 'gpt-5.6-sol' });
+            expect(merged.customName).toBe('b');
+        }
+        const valid = { 'gpt-6-luna': 'gpt-5.6-luna' };
+        expect(normalizeProviderConfigFields({ codexModelRemap: valid }).codexModelRemap).toEqual(valid);
+    });
+
     test('removes legacy provider node proxy fields from saved config', () => {
         const normalized = normalizeProviderConfigFields({
             PROXY_URL: 'socks5h://127.0.0.1:11001',

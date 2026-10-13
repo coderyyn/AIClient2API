@@ -1831,6 +1831,7 @@ function getFieldOrder(provider) {
         'codexFingerprintVersion',
         'codexFingerprintMigrated',
         'codexFingerprintAudit',
+        'codexModelRemap',
         'accountIdentity',
         'providerUuids',
         'weight'
