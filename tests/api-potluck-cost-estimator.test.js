@@ -243,9 +243,9 @@ describe('api potluck cost estimator', () => {
         const base = estimateUsageCost(baseUsage, 'gpt-5.6-sol');
         const long = estimateUsageCost(longUsage, 'gpt-5.6-sol');
 
-        expect(base.usd).toBeCloseTo(((265000 * 5) + (10000 * 0.5) + (1000 * 30)) / 1000000, 8);
-        expect(long.usd).toBeCloseTo(((490000 * 5) + (10000 * 0.5) + (1000 * 30)) / 1000000, 8);
-        expect(long.usd).not.toBeCloseTo(((490000 * 5) + (10000 * 0.5) + (1000 * 30)) / 1000000 * 2, 8);
+        expect(base.usd).toBeCloseTo(((265000 * 4) + (10000 * 0.4) + (1000 * 20)) / 1000000, 8);
+        expect(long.usd).toBeCloseTo(((490000 * 4) + (10000 * 0.4) + (1000 * 20)) / 1000000, 8);
+        expect(long.usd).not.toBeCloseTo(((490000 * 4) + (10000 * 0.4) + (1000 * 20)) / 1000000 * 2, 8);
     });
 
 
