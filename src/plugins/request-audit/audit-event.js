@@ -159,8 +159,16 @@ function normalizeRuntime(runtime = {}) {
     const requestKind = runtime.kind === 'image' || runtime.kind === 'model' ? runtime.kind : null;
     const outputBytes = Number.isFinite(Number(runtime.outputBytes)) && Number(runtime.outputBytes) >= 0 ? Number(runtime.outputBytes) : null;
     const backpressureMs = Number.isFinite(Number(runtime.backpressureMs)) && Number(runtime.backpressureMs) >= 0 ? Number(runtime.backpressureMs) : null;
-    if (!workerId && !requestKind && outputBytes === null && backpressureMs === null && !Object.keys(stages).length) return undefined;
-    return { workerId, requestKind, outputBytes, backpressureMs, stages };
+    const metadata = runtime.metadata && typeof runtime.metadata === 'object' ? runtime.metadata : {};
+    const readBytes = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
+    const requestBody = {
+        contentLength: readBytes(metadata.requestBodyContentLength),
+        receivedBytes: readBytes(metadata.requestBodyReceivedBytes),
+        complete: typeof metadata.requestBodyComplete === 'boolean' ? metadata.requestBodyComplete : null
+    };
+    const hasRequestBody = requestBody.contentLength !== null || requestBody.receivedBytes !== null || requestBody.complete !== null;
+    if (!workerId && !requestKind && outputBytes === null && backpressureMs === null && !Object.keys(stages).length && !hasRequestBody) return undefined;
+    return { workerId, requestKind, outputBytes, backpressureMs, stages, ...(hasRequestBody ? { requestBody } : {}) };
 }
 
 function normalizeAttempts(context = {}) {

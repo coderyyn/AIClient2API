@@ -1897,6 +1897,8 @@ export function getRequestBody(req, options = {}) {
         let body = '';
         let receivedBytes = 0;
         let settled = false;
+        let bodyIncompleteRecorded = false;
+        const runtimeRequest = requestContext.get('runtimeRequest');
         const maxBytes = Number(options.maxBytes) > 0 ? Number(options.maxBytes) : DEFAULT_REQUEST_BODY_MAX_BYTES;
 
         // 1. Quick check Content-Length header
@@ -1940,25 +1942,38 @@ export function getRequestBody(req, options = {}) {
             }
             body += chunk.toString();
         });
+        // Event callbacks run outside the request's async context, so the runtime handle
+        // has to be captured here or the body stages are never recorded.
+        runtimeRequest?.setMetadata?.({ requestBodyContentLength: isNaN(contentLength) ? 0 : contentLength });
+        const recordBodyIncomplete = () => {
+            if (settled || bodyIncompleteRecorded) return;
+            bodyIncompleteRecorded = true;
+            runtimeRequest?.mark?.('bodyAbortedMs');
+            runtimeRequest?.setMetadata?.({ requestBodyReceivedBytes: receivedBytes, requestBodyComplete: false });
+        };
+        req.on('aborted', recordBodyIncomplete);
+        req.on('close', recordBodyIncomplete);
         req.on('end', () => {
             if (settled) return;
             settled = true;
+            runtimeRequest?.setMetadata?.({ requestBodyReceivedBytes: receivedBytes, requestBodyComplete: true });
             if (!body) {
-                requestContext.get('runtimeRequest')?.mark?.('bodyParsed');
+                runtimeRequest?.mark?.('bodyParsed');
                 return resolve({});
             }
             try {
-                requestContext.get('runtimeRequest')?.setMetadata?.({
+                runtimeRequest?.setMetadata?.({
                     requestBodyBytes: Buffer.byteLength(body)
                 });
                 const parsed = JSON.parse(body);
-                requestContext.get('runtimeRequest')?.mark?.('bodyParsed');
+                runtimeRequest?.mark?.('bodyParsed');
                 resolve(parsed);
             } catch (error) {
                 reject(new Error("Invalid JSON in request body."));
             }
         });
         req.on('error', err => {
+            recordBodyIncomplete();
             fail(err);
         });
     });

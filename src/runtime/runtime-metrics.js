@@ -13,7 +13,7 @@ function readSampleRate(value, fallback = 0) {
 function safeMetadata(metadata = {}) {
     const allowed = [
         'requestId', 'method', 'path', 'model', 'providerType', 'stream',
-        'requestBodyBytes', 'responseStatus',
+        'requestBodyBytes', 'requestBodyContentLength', 'requestBodyReceivedBytes', 'requestBodyComplete', 'responseStatus',
         'geminiSelection', 'geminiRetryCount', 'geminiFallbackCount', 'geminiFinalProviderUuidHash', 'clientAborted',
         // [turn-state-disabled 2026-09-23] 'codexTurnStateEnabled', 'codexTurnStateSource', 'codexTurnStateLength', 'codexTurnStateSkipReason',
         // 'codexTurnStateCaptured', 'codexTurnStateResponseLength',
