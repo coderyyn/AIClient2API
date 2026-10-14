@@ -881,7 +881,7 @@ function enrichProviderDataWithProviderConfig(providerType, providerData, curren
             codexAccountId: instance.codexAccountId || provider.codexAccountId || null,
             codexEmail: instance.codexEmail || getProviderCodexEmail(provider),
             codexQuotaHealth: instance.codexQuotaHealth || provider.codexQuotaHealth || null,
-            antigravityQuotaHealth: instance.antigravityQuotaHealth || provider.antigravityQuotaHealth || null,
+            antigravityQuotaHealth: normalizeAntigravityQuotaHealth(provider.antigravityQuotaHealth || instance.antigravityQuotaHealth || null),
             configFilePath: instance.configFilePath || getProviderConfigFilePath(provider, providerType),
             ...getProviderSubscriptionWindow(provider, providerType, instance),
             isHealthy: provider.isHealthy !== false,
@@ -1387,6 +1387,9 @@ export async function handleGetProviderUsage(req, res, currentConfig, providerPo
             }
         }
         
+        // A probe can complete while a usage refresh is in flight.
+        enrichProviderDataWithProviderConfig(providerType, usageResults, currentConfig, providerPoolManager);
+
         // Always include current server time
         const finalResults = {
             ...usageResults,

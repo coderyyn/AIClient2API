@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, jest, test } from '@jest/globals';
 
+// Never supplement synthetic test pools with the developer's local accounts.
+jest.mock('fs', () => ({
+    ...jest.requireActual('fs'),
+    existsSync: jest.fn(file => /(?:^|[\\/])provider_pools\.json$/.test(String(file))
+        ? false : jest.requireActual('fs').existsSync(file))
+}));
+
 jest.mock('../src/providers/adapter.js', () => ({
     serviceInstances: {},
     getServiceAdapter: jest.fn()

@@ -13,6 +13,7 @@ import { HEALTH_CHECK } from '../utils/constants.js';
 import { startCodexPrewarmService } from './codex-prewarm-service.js';
 import { startUsageCacheAutoRefreshService } from './usage-cache-auto-refresh-service.js';
 import { startProviderRefreshRecoveryService } from './provider-refresh-recovery-service.js';
+import { AntigravityCooldownProbeService } from './antigravity-cooldown-probe-service.js';
 import { createAsyncActivityTracker, createStartupShutdownGate } from './async-activity-tracker.js';
 import { createShutdownCoordinator } from './shutdown-coordinator.js';
 import { registerWorkerShutdownHandlers } from './worker-shutdown-handlers.js';
@@ -159,6 +160,7 @@ let serverInstance = null;
 let codexPrewarmService = null;
 let usageCacheAutoRefreshService = null;
 let providerRefreshRecoveryService = null;
+let antigravityCooldownProbeService = null;
 let heartbeatTimerId = null;
 let runtimeMetricsTimerId = null;
 let runtimeHookRetryTimerId = null;
@@ -427,6 +429,12 @@ async function stopBackgroundServices() {
     await stopOne('usage cache auto refresh', async () => {
         const service = usageCacheAutoRefreshService;
         usageCacheAutoRefreshService = null;
+        await service?.stop();
+    });
+
+    await stopOne('Antigravity cooldown probes', async () => {
+        const service = antigravityCooldownProbeService;
+        antigravityCooldownProbeService = null;
         await service?.stop();
     });
 
@@ -833,6 +841,7 @@ async function startServer() {
         const poolManager = getProviderPoolManager();
         if (!IS_EXECUTION_WORKER && poolManager) {
             providerRefreshRecoveryService = startProviderRefreshRecoveryService(poolManager);
+            antigravityCooldownProbeService = new AntigravityCooldownProbeService(CONFIG, poolManager).start();
         }
         if (!IS_EXECUTION_WORKER && poolManager) {
             logger.info('[Initialization] Performing initial health checks for provider pools...');

@@ -1,3 +1,5 @@
+import { cooldownVersion } from '../providers/antigravity-cooldown-state.js';
+
 const MUTABLE_STATE_FIELDS = [
     'isHealthy', 'needsRefresh', 'errorCount', 'usageCount',
     'lastUsed', 'lastSuccessTime', 'lastRefreshTime', 'lastRefreshAttemptTime', 'lastHealthStateTime', 'lastErrorTime', 'lastErrorMessage', 'lastHealthCheckTime',
@@ -47,7 +49,7 @@ function quotaStateTimestamp(state) {
         ?? -Infinity;
 }
 
-function mergeQuotaState(currentValue, incomingValue) {
+export function mergeQuotaState(currentValue, incomingValue) {
     if (!currentValue || typeof currentValue !== 'object') return structuredClone(incomingValue);
     if (!incomingValue || typeof incomingValue !== 'object') return structuredClone(currentValue);
 
@@ -75,6 +77,18 @@ function mergeQuotaState(currentValue, incomingValue) {
                 }
                 const incomingAt = quotaStateTimestamp(incomingEntry);
                 const currentAt = quotaStateTimestamp(currentEntry);
+                // A recovery applies only to the exact cooldown it probed. A stale
+                // worker snapshot of that old cooldown must not resurrect it.
+                if (currentEntry.recoversVersion === cooldownVersion(incomingEntry)) continue;
+                if (currentEntry.supersedesVersion === cooldownVersion(incomingEntry)) continue;
+                const supersedes = incomingEntry.supersedesVersion || incomingEntry.recoversVersion;
+                if (supersedes === cooldownVersion(currentEntry)) {
+                    merged[childKey][name] = structuredClone(incomingEntry);
+                    continue;
+                }
+                // Coalesced state events can skip intermediate versions. Accept a
+                // newer recovery, but prefer a different 429 when timestamps tie.
+                if (supersedes && currentEntry.isHealthy === false && incomingAt <= currentAt) continue;
                 if (incomingAt >= currentAt || (incomingAt === -Infinity && currentAt === -Infinity)) {
                     merged[childKey][name] = structuredClone(incomingEntry);
                 }

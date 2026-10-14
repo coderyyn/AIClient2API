@@ -1083,7 +1083,7 @@ function getRetryDelayFromBody(errorBody) {
             if (!message && typeof value?.message === 'string') message = value.message;
         });
         if (message) {
-            const match = message.match(/after\s+([\dhms.]+)\.?/i);
+            const match = message.match(/after\s+((?:\d+(?:\.\d+)?[dhms])+)(?:[.\s]|$)/i);
             if (match) {
                 return parseDurationMs(match[1]);
             }
@@ -1091,6 +1091,20 @@ function getRetryDelayFromBody(errorBody) {
     } catch {}
 
     return null;
+}
+
+// Unlike normal request handling, a maintenance probe must not invent a new
+// cooldown deadline when upstream omitted it.
+export function getAntigravityExplicitRecoveryTime(error, now = Date.now(), config = {}) {
+    let absolute = null;
+    walkErrorPayload(parseErrorBody(error?.response?.data), value => {
+        const time = Date.parse(value?.quotaResetTimeStamp || '');
+        if (absolute === null && Number.isFinite(time) && time > now) absolute = time;
+    });
+    const delay = absolute === null ? getRetryAfterMs(error, now) : absolute - now;
+    if (!Number.isFinite(delay) || delay < 0) return null;
+    const max = getPositiveInteger(config.ANTIGRAVITY_MODEL_COOLDOWN_MAX_MS, 7 * 24 * 60 * 60 * 1000);
+    return new Date(now + Math.min(delay, max)).toISOString();
 }
 
 export function getRetryAfterMs(error, now = Date.now()) {

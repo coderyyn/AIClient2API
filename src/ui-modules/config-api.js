@@ -227,6 +227,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
         LOG_RETENTION_DAYS: currentConfig.LOG_RETENTION_DAYS,
         SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+        ANTIGRAVITY_COOLDOWN_PROBE_ENABLED: currentConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED ?? true,
         USAGE_CACHE_AUTO_REFRESH: currentConfig.USAGE_CACHE_AUTO_REFRESH,
         // 脱敏：只返回是否设置了 API Key，不返回原文
         REQUIRED_API_KEY: currentConfig.REQUIRED_API_KEY ? '******' : '',
@@ -437,6 +438,12 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
         }
 
         // Scheduled Health Check settings
+        if (newConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED !== undefined) {
+            if (typeof newConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED !== 'boolean') {
+                throw new Error('ANTIGRAVITY_COOLDOWN_PROBE_ENABLED must be a boolean');
+            }
+            currentConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED = newConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED;
+        }
         if (newConfig.SCHEDULED_HEALTH_CHECK !== undefined) {
             const incoming = newConfig.SCHEDULED_HEALTH_CHECK;
 
@@ -595,6 +602,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                 TLS_SIDECAR_PORT: currentConfig.TLS_SIDECAR_PORT,
                 TLS_SIDECAR_PROXY_URL: currentConfig.TLS_SIDECAR_PROXY_URL,
                 SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+                ANTIGRAVITY_COOLDOWN_PROBE_ENABLED: currentConfig.ANTIGRAVITY_COOLDOWN_PROBE_ENABLED ?? true,
                 USAGE_CACHE_AUTO_REFRESH: currentConfig.USAGE_CACHE_AUTO_REFRESH
             };
 

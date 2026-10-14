@@ -485,7 +485,31 @@ return resolved
 
 const SET_PROVIDER_MODEL_COOLDOWN_SCRIPT = `
 local key = KEYS[1] .. ':model-cooldown:' .. ARGV[1]
+local revision_key = key .. ':revision'
+local previous = redis.call('GET', revision_key)
+if previous then
+  local prior = cjson.decode(previous)
+  local incoming = cjson.decode(ARGV[4])
+  if prior.supersedesVersion and prior.supersedesVersion == incoming.version then return 0 end
+  if tonumber(prior.at) > tonumber(incoming.at) then return 0 end
+end
 redis.call('SET', key, ARGV[2], 'PX', tonumber(ARGV[3]))
+redis.call('SET', revision_key, ARGV[4], 'PX', math.max(86400000, tonumber(ARGV[3])))
+return 1
+`;
+
+const GET_PROVIDER_MODEL_COOLDOWN_SCRIPT = `
+local key = KEYS[1] .. ':model-cooldown:' .. ARGV[1]
+return cjson.encode({value=redis.call('GET', key) or '', revision=redis.call('GET', key .. ':revision') or ''})
+`;
+
+const COMPARE_PROVIDER_MODEL_COOLDOWN_SCRIPT = `
+local key = KEYS[1] .. ':model-cooldown:' .. ARGV[1]
+if (redis.call('GET', key) or '') ~= ARGV[2] then return 0 end
+if (redis.call('GET', key .. ':revision') or '') ~= ARGV[3] then return 0 end
+if ARGV[4] == '' then redis.call('DEL', key)
+else redis.call('SET', key, ARGV[4], 'PX', tonumber(ARGV[5])) end
+redis.call('SET', key .. ':revision', ARGV[6], 'PX', math.max(86400000, tonumber(ARGV[5])))
 return 1
 `;
 
@@ -1026,16 +1050,35 @@ export class RedisLeaseCoordinator {
         return String(result);
     }
 
-    async setProviderModelCooldown(providerType, uuid, model, { retryAfterMs = 30_000, reason = 'upstream_429' } = {}) {
+    async setProviderModelCooldown(providerType, uuid, model, { retryAfterMs = 30_000, reason = 'upstream_429', version = randomUUID(), updatedAt = new Date().toISOString() } = {}) {
         const scopeHash = hashAffinityKey(`${providerType}:${uuid}:${model}`);
         const ttlMs = Math.max(1000, Number(retryAfterMs) || 30_000);
         const updated = Number(await this._eval('set-provider-model-cooldown', SET_PROVIDER_MODEL_COOLDOWN_SCRIPT, [
             scopeHash,
             String(reason || 'upstream_429'),
-            String(ttlMs)
+            String(ttlMs),
+            JSON.stringify({ version, at: Date.parse(updatedAt) || Date.now() })
         ])) === 1;
         if (updated) this.modelSchedulingMetrics.cooldownWrites += 1;
         return updated;
+    }
+
+    async getProviderModelCooldown(providerType, uuid, model) {
+        const result = await this._eval('get-provider-model-cooldown', GET_PROVIDER_MODEL_COOLDOWN_SCRIPT, [
+            hashAffinityKey(`${providerType}:${uuid}:${model}`)
+        ]);
+        if (!result) throw new CoordinationUnavailableError('Missing cooldown snapshot');
+        return typeof result === 'string' ? JSON.parse(result) : result;
+    }
+
+    async compareProviderModelCooldown(providerType, uuid, model, expected, state) {
+        const remaining = Date.parse(state.scheduledRecoveryTime) - Date.now();
+        const ttlMs = state.isHealthy ? 1000 : Math.max(1000, Number.isFinite(remaining) ? remaining : 30_000);
+        return Number(await this._eval('compare-provider-model-cooldown', COMPARE_PROVIDER_MODEL_COOLDOWN_SCRIPT, [
+            hashAffinityKey(`${providerType}:${uuid}:${model}`), expected.value, expected.revision,
+            state.isHealthy ? '' : String(state.lastErrorMessage || 'upstream_429'), String(ttlMs),
+            JSON.stringify({ version: state.version, at: Date.parse(state.updatedAt), supersedesVersion: state.supersedesVersion })
+        ])) === 1;
     }
 
     async acquireProviderModelProbe(providerType, uuid, model, { ttlMs = 30_000 } = {}) {

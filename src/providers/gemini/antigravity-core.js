@@ -2345,6 +2345,61 @@ export class AntigravityApiService {
         return { payload, selectedModel, actualModelName };
     }
 
+    // A fresh service instance is used for maintenance probes. No model discovery,
+    // OAuth replay, generation retry, fallback or account-health mutation is allowed.
+    async probeCooldownModel(model, requestBody, { signal, timeoutMs }) {
+        await this.loadCredentials();
+        signal.throwIfAborted();
+        const token = this.authClient.credentials.access_token;
+        if (!token) throw Object.assign(new Error('Probe requires loaded credentials'), { status: 401 });
+        this.availableModels = [resolveAntigravityUpstreamModel(model)];
+        const { payload, actualModelName } = this.buildAntigravityPayload(model, requestBody);
+        if (requestBody.generationConfig?.maxOutputTokens) {
+            payload.request.generationConfig.maxOutputTokens = requestBody.generationConfig.maxOutputTokens;
+        }
+        const streaming = antigravityModelRequiresStreamForNonStream(actualModelName);
+        const options = {
+            url: `${this.baseURLs[0]}/${ANTIGRAVITY_API_VERSION}:${streaming ? 'streamGenerateContent' : 'generateContent'}`,
+            method: 'POST', headers: { 'Content-Type': 'application/json',
+                'User-Agent': this.userAgent, Authorization: `Bearer ${token}` },
+            body: JSON.stringify(payload), responseType: streaming ? 'stream' : 'json',
+            timeout: timeoutMs, signal, retry: false, validateStatus: () => true
+        };
+        if (streaming) options.params = { alt: 'sse' };
+        this._applySidecar(options);
+        const res = await this.authClient.transporter.request(options);
+        const abortStream = () => res.data?.destroy?.(Object.assign(new Error('Probe cancelled'), { code: 'ABORT_ERR' }));
+        signal.addEventListener('abort', abortStream, { once: true });
+        try {
+            if (signal.aborted) { abortStream(); signal.throwIfAborted(); }
+            if (res.status !== 200) {
+                const data = streaming ? await this.readErrorResponseBody(res.data) : res.data;
+                throw Object.assign(new Error(`Cooldown probe HTTP ${res.status}`), {
+                    response: { status: res.status, data, headers: res.headers }
+                });
+            }
+            if (!streaming) return { http: res.status, outboundModel: actualModelName, response: res.data?.response || res.data };
+            const chunks = [];
+            let bytes = 0;
+            for await (const chunk of this.parseSSEStream(res.data)) {
+                signal.throwIfAborted();
+                const reportedModel = chunk?.response?.modelVersion || chunk?.response?.model;
+                if (reportedModel && resolveAntigravityUpstreamModel(reportedModel) !== actualModelName) {
+                    throw new Error('Probe response model mismatch');
+                }
+                const encoded = JSON.stringify(chunk);
+                bytes += Buffer.byteLength(encoded);
+                if (bytes > 24 * 1024 * 1024) throw new Error('Probe response exceeds memory limit');
+                chunks.push(encoded);
+            }
+            signal.throwIfAborted();
+            return { http: res.status, outboundModel: actualModelName, response: convertStreamToNonStream(chunks.join('\n')).response };
+        } finally {
+            signal.removeEventListener('abort', abortStream);
+            if (streaming) res.data?.destroy?.();
+        }
+    }
+
     async generateContent(model, requestBody) {
         if (!this.isInitialized) await this.initialize();
         if (!this.availableModels.length) await this.fetchAvailableModels();

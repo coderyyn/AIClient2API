@@ -26,10 +26,11 @@ import requestContext, { accumulateRoutingWait } from '../utils/context.js';
 import { getProviderLeaseScope, registerProviderLease, releaseProviderLease } from '../runtime/provider-lease-scope.js';
 import { SmoothWeightedRoundRobin } from './smooth-weighted-round-robin.js';
 import { performance } from 'node:perf_hooks';
-import { createProviderStateEvent, applyProviderStateEvent } from '../runtime/provider-state-event.js';
+import { createProviderStateEvent, applyProviderStateEvent, mergeQuotaState } from '../runtime/provider-state-event.js';
 import { matchesModelFamily } from './openai/codex-model-routing.js';
 import { ANTIGRAVITY_ELASTIC_MODEL_ORDER, ANTIGRAVITY_ELASTIC_SOURCE_MODEL } from './antigravity-model-order.js';
 import { isTransientProviderJitterError } from '../utils/provider-error-classification.js';
+import { cooldownVersion, versionCooldown, cooldownProbeEligible, normalizeProbeModel } from './antigravity-cooldown-state.js';
 
 const ANTIGRAVITY_ELASTIC_MODEL_FALLBACKS = Object.freeze(
     Object.fromEntries(ANTIGRAVITY_ELASTIC_MODEL_ORDER.map((model, index) => [
@@ -3802,7 +3803,7 @@ export class ProviderPoolManager {
                     if (Number.isFinite(recoveryMs) && recoveryMs > now) recoveryTimes.push(recoveryMs);
                     continue;
                 }
-                if (quotaHealth.models[canonicalModel]) {
+                if (quotaHealth.models[canonicalModel] && !quotaHealth.models[canonicalModel].recoversVersion) {
                     delete quotaHealth.models[canonicalModel];
                     updated = true;
                 }
@@ -5278,13 +5279,13 @@ export class ProviderPoolManager {
         provider.config.antigravityQuotaHealth = provider.config.antigravityQuotaHealth || {};
         provider.config.antigravityQuotaHealth.families = provider.config.antigravityQuotaHealth.families || {};
         provider.config.antigravityQuotaHealth.models = provider.config.antigravityQuotaHealth.models || {};
-        provider.config.antigravityQuotaHealth.models[canonicalModel] = {
+        provider.config.antigravityQuotaHealth.models[canonicalModel] = versionCooldown({
             isHealthy: false,
             lastErrorTime: new Date().toISOString(),
             lastErrorMessage: errorMessage || null,
             scheduledRecoveryTime: recoveryTime ? new Date(recoveryTime).toISOString() : null,
             source: 'upstream_429'
-        };
+        });
         this.recordGeminiSchedulingEvent('rateLimited');
         provider.config.lastUsed = new Date().toISOString();
         this._log('warn', `Marked Antigravity model ${canonicalModel} as cooling down for ${this._getDisplayName(provider.config)} until ${provider.config.antigravityQuotaHealth.models[canonicalModel].scheduledRecoveryTime || 'manual recovery'}`);
@@ -5295,7 +5296,9 @@ export class ProviderPoolManager {
                 : 30_000;
             this.coordination.setProviderModelCooldown(providerType, provider.config.uuid, canonicalModel, {
                 retryAfterMs,
-                reason: errorMessage || 'upstream_429'
+                reason: errorMessage || 'upstream_429',
+                version: provider.config.antigravityQuotaHealth.models[canonicalModel].version,
+                updatedAt: provider.config.antigravityQuotaHealth.models[canonicalModel].updatedAt
             }).catch(error => this._log('warn', `Failed to publish Antigravity cooldown: ${error.message}`));
         }
         this._debouncedSave(providerType);
@@ -5339,17 +5342,121 @@ export class ProviderPoolManager {
             && existing.source === nextState.source) {
             return;
         }
-        provider.config.antigravityQuotaHealth.models[canonicalModel] = nextState;
+        provider.config.antigravityQuotaHealth.models[canonicalModel] = versionCooldown(nextState);
         provider.config.lastUsed = now;
         this._log('warn', `Marked Antigravity model ${canonicalModel} as capacity cooling down for ${this._getDisplayName(provider.config)} until ${nextState.scheduledRecoveryTime || 'manual recovery'}`);
         if (this.coordination?.setProviderModelCooldown) {
             const retryAfterMs = Number.isFinite(recoveryMs) ? Math.max(1000, recoveryMs - Date.now()) : 15_000;
             this.coordination.setProviderModelCooldown(providerType, provider.config.uuid, canonicalModel, {
                 retryAfterMs,
-                reason: errorMessage
+                reason: errorMessage,
+                version: provider.config.antigravityQuotaHealth.models[canonicalModel].version,
+                updatedAt: provider.config.antigravityQuotaHealth.models[canonicalModel].updatedAt
             }).catch(error => this._log('warn', `Failed to publish Antigravity capacity cooldown: ${error.message}`));
         }
         this._debouncedSave(providerType);
+    }
+
+    listAntigravityCooldownProbes() {
+        const tasks = [];
+        for (const provider of this.providerStatus[MODEL_PROVIDER.ANTIGRAVITY] || []) {
+            for (const [model, state] of Object.entries(provider.config.antigravityQuotaHealth?.models || {})) {
+                const canonical = normalizeProbeModel(model);
+                if (!canonical.startsWith('gemini-') || canonical.startsWith('gemini-claude-')) continue;
+                if (!cooldownProbeEligible(provider.config, state)) continue;
+                tasks.push({ uuid: provider.config.uuid, model, canonical,
+                    version: cooldownVersion(state), configRevision: this.providerConfigRevision });
+            }
+        }
+        return tasks;
+    }
+
+    getAntigravityCooldownProbeTarget(task) {
+        if (task.configRevision !== this.providerConfigRevision) return null;
+        const provider = this._findProvider(MODEL_PROVIDER.ANTIGRAVITY, task.uuid);
+        const state = provider?.config.antigravityQuotaHealth?.models?.[task.model];
+        if (!cooldownProbeEligible(provider?.config, state) || cooldownVersion(state) !== task.version) return null;
+        return provider;
+    }
+
+    async acquireAntigravityCooldownProbeSlot(task) {
+        const provider = this.getAntigravityCooldownProbeTarget(task);
+        if (!provider) return null;
+        if (this.coordination) {
+            // Deliberately omit requestedModel: only this maintenance lease bypasses
+            // the model cooldown; the ordinary shared credential capacity still applies.
+            const lease = await this.coordination.acquire([{
+                providerType: MODEL_PROVIDER.ANTIGRAVITY, uuid: task.uuid,
+                concurrencyLimit: parseInt(provider.config.concurrencyLimit || 0)
+            }]);
+            return lease ? () => this.coordination.release(lease.leaseId) : null;
+        }
+        const limit = parseInt(provider.config.concurrencyLimit || 0);
+        if (limit > 0 && provider.state.activeCount >= limit) return null;
+        provider.state.activeCount++;
+        return () => this.releaseSlot(MODEL_PROVIDER.ANTIGRAVITY, task.uuid);
+    }
+
+    async applyAntigravityCooldownProbeResult(task, result, redisSnapshot, startedAt) {
+        let provider = this.getAntigravityCooldownProbeTarget(task);
+        if (!provider || (!result.success && !result.recoveryTime)) return false;
+        const state = provider.config.antigravityQuotaHealth.models[task.model];
+        const next = versionCooldown(result.success ? {
+            isHealthy: true, lastErrorTime: null, lastErrorMessage: null,
+            scheduledRecoveryTime: null, source: 'cooldown_probe', recoversVersion: task.version
+        } : {
+            ...state, isHealthy: false, lastErrorTime: new Date(startedAt).toISOString(),
+            lastErrorMessage: '429 Too Many Requests - model cooldown',
+            scheduledRecoveryTime: result.recoveryTime, source: 'upstream_429'
+        }, startedAt);
+        next.supersedesVersion = task.version;
+        if (this.coordination) {
+            if (!redisSnapshot || !await this.coordination.compareProviderModelCooldown(
+                MODEL_PROVIDER.ANTIGRAVITY, task.uuid, task.canonical, redisSnapshot, next)) return false;
+            provider = this.getAntigravityCooldownProbeTarget(task);
+            if (!provider) {
+                // Configuration/state may change while Redis CAS is in flight.
+                // Restore the current cooldown only if our CAS still owns Redis.
+                const currentState = this._findProvider(MODEL_PROVIDER.ANTIGRAVITY, task.uuid)
+                    ?.config.antigravityQuotaHealth?.models?.[task.model];
+                if (currentState?.isHealthy === false) {
+                    const current = await this.coordination.getProviderModelCooldown(MODEL_PROVIDER.ANTIGRAVITY, task.uuid, task.canonical);
+                    if (current.revision && JSON.parse(current.revision).version === next.version) {
+                        await this.coordination.compareProviderModelCooldown(MODEL_PROVIDER.ANTIGRAVITY, task.uuid, task.canonical, current, {
+                            ...currentState, version: cooldownVersion(currentState),
+                            updatedAt: currentState.updatedAt || currentState.lastErrorTime || new Date(startedAt).toISOString()
+                        });
+                    }
+                }
+                return false;
+            }
+        }
+        provider.config.antigravityQuotaHealth.models[task.model] = next;
+        this.invalidateAntigravityAvailability(task.canonical);
+        this._notifyGeminiElasticWaiters(MODEL_PROVIDER.ANTIGRAVITY);
+        this._debouncedSave(MODEL_PROVIDER.ANTIGRAVITY);
+        if (this.persistenceEnabled) {
+            try {
+                await this._flushPendingSaves({ throwOnError: true });
+            } catch (error) {
+                // Keep the pair retryable after a failed durable update. Never
+                // roll back over a newer business request's state.
+                if (provider.config.antigravityQuotaHealth.models[task.model]?.version === next.version) {
+                    const rollback = versionCooldown({ ...state, source: 'cooldown_probe_rollback', supersedesVersion: next.version }, startedAt);
+                    provider.config.antigravityQuotaHealth.models[task.model] = rollback;
+                    this.invalidateAntigravityAvailability(task.canonical);
+                    this._debouncedSave(MODEL_PROVIDER.ANTIGRAVITY);
+                    if (this.coordination) {
+                        const current = await this.coordination.getProviderModelCooldown(MODEL_PROVIDER.ANTIGRAVITY, task.uuid, task.canonical);
+                        if (current.revision && JSON.parse(current.revision).version === next.version) {
+                            await this.coordination.compareProviderModelCooldown(MODEL_PROVIDER.ANTIGRAVITY, task.uuid, task.canonical, current, rollback);
+                        }
+                    }
+                }
+                throw error;
+            }
+        }
+        return provider.config.antigravityQuotaHealth.models[task.model]?.version === next.version;
     }
 
     markCodexQuotaBucketUnhealthy(providerType, providerConfig, bucket, errorMessage = null, recoveryTime = null) {
@@ -5497,6 +5604,11 @@ export class ProviderPoolManager {
             families: { ...(quotaHealth.families || {}) },
             models: { ...(quotaHealth.models || {}) }
         };
+        // Usage refreshes can finish with snapshots captured before a probe or a
+        // new 429. Preserve versioned model state using the worker merge rules.
+        const versionedModels = Object.fromEntries(Object.entries(provider.config.antigravityQuotaHealth?.models || {})
+            .filter(([, state]) => state?.version));
+        nextQuotaHealth.models = mergeQuotaState({ models: versionedModels }, { models: nextQuotaHealth.models }).models;
         if (JSON.stringify(provider.config.antigravityQuotaHealth || null) === JSON.stringify(nextQuotaHealth)) {
             return provider.config.antigravityQuotaHealth;
         }
@@ -6390,7 +6502,7 @@ export class ProviderPoolManager {
      * 批量保存所有待保存的 providerType（优化为单次文件写入）
      * @private
      */
-    async _flushPendingSaves() {
+    async _flushPendingSaves({ throwOnError = false } = {}) {
         // 立即置空定时器，防止重叠调用
         if (this.saveTimer) {
             clearTimeout(this.saveTimer);
@@ -6460,12 +6572,18 @@ export class ProviderPoolManager {
                 this._log('info', `configs/provider_pools.json updated successfully for types: ${typesToSave.join(', ')}`);
             } catch (error) {
                 this._log('error', `Failed to write provider_pools.json: ${error.message}`);
+                for (const type of typesToSave) this.pendingSaves.add(type);
+                if (throwOnError) {
+                    throw error;
+                }
             }
         });
     }
 
     applyRemoteProviderState(event) {
         const stateKey = `${event?.providerType}/${event?.uuid}`;
+        const beforeQuota = isAntigravityProviderType(event?.providerType)
+            ? JSON.stringify(this._findProvider(event.providerType, event.uuid)?.config.antigravityQuotaHealth) : null;
         const applied = applyProviderStateEvent(this.providerPools, event, {
             revision: this.providerConfigRevision,
             stateEventAt: this.providerStateEventTimes.get(stateKey) || null
@@ -6479,6 +6597,10 @@ export class ProviderPoolManager {
         const provider = this._findProvider(event?.providerType, event?.uuid);
         if (provider) {
             applyProviderStateEvent({ [event.providerType]: [provider.config] }, event, { revision: this.providerConfigRevision });
+            if (beforeQuota !== null && beforeQuota !== JSON.stringify(provider.config.antigravityQuotaHealth)) {
+                this.invalidateAntigravityAvailability();
+                this._notifyGeminiElasticWaiters(event.providerType);
+            }
             if (isAntigravityProviderType(event.providerType) && event.state?.needsRefresh === false) {
                 invalidateServiceAdapter(event.providerType, event.uuid);
             }
