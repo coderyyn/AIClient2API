@@ -78,6 +78,7 @@ describe('Antigravity response model metadata', () => {
     test('preserves Google modelVersion when normalizing the Antigravity response', async () => {
         const service = Object.create(AntigravityApiService.prototype);
         service.isInitialized = true;
+        service.availableModels = ['gemini-2.5-flash'];
         service.authClient = { credentials: { expiry_date: Date.now() + 60_000 } };
         service.prepareRequestMetadata = jest.fn();
         service.buildAntigravityPayload = jest.fn((_model, requestBody) => {

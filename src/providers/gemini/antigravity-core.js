@@ -2347,6 +2347,7 @@ export class AntigravityApiService {
 
     async generateContent(model, requestBody) {
         if (!this.isInitialized) await this.initialize();
+        if (!this.availableModels.length) await this.fetchAvailableModels();
         logger.info(`[Antigravity Auth Token] Time until expiry: ${formatExpiryTime(this.authClient.credentials.expiry_date)}`);
 
         this.prepareRequestMetadata(requestBody);
@@ -2390,6 +2391,7 @@ export class AntigravityApiService {
 
     async * generateContentStream(model, requestBody) {
         if (!this.isInitialized) await this.initialize();
+        if (!this.availableModels.length) await this.fetchAvailableModels();
         logger.info(`[Antigravity Auth Token] Time until expiry: ${formatExpiryTime(this.authClient.credentials.expiry_date)}`);
 
         this.prepareRequestMetadata(requestBody);

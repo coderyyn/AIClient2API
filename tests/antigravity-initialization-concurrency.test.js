@@ -25,7 +25,97 @@ const createService = () => {
     return service;
 };
 
+const createGenerationService = () => {
+    const service = createService();
+    service.config = { MODEL_LIST_CACHE_TTL_MS: 60000 };
+    service.baseURLs = ['https://example.test'];
+    service.availableModels = [];
+    service._lastModelProbeSucceeded = false;
+    service.authClient = {
+        credentials: { access_token: 'synthetic-token', expiry_date: Date.now() + 3600000 },
+        request: jest.fn()
+    };
+    service.loadCredentials = jest.fn(async () => {});
+    service.discoverProjectAndModels = jest.fn(async () => 'configured-project');
+    service.prepareRequestMetadata = jest.fn();
+    const response = { response: { candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] } };
+    service.callApi = jest.fn(async () => response);
+    service.streamApi = jest.fn(async function* () { yield response; });
+    return service;
+};
+
+const generationBody = () => ({ contents: [{ role: 'user', parts: [{ text: 'synthetic' }] }] });
+
+const startGeneration = (service, stream = false) => stream
+    ? service.generateContentStream('gemini-2.5-flash-lite', generationBody()).next()
+    : service.generateContent('gemini-2.5-flash-lite', generationBody());
+
 describe('Antigravity initialization lifecycle', () => {
+    test.each([false, true])('cold generation waits for model discovery (stream=%s)', async stream => {
+        const service = createGenerationService();
+        let completeProbe;
+        service.authClient.request.mockImplementation(() => new Promise(resolve => { completeProbe = resolve; }));
+        let settled = false;
+        const result = startGeneration(service, stream).then(
+            value => { settled = true; return { value }; },
+            error => { settled = true; return { error }; }
+        );
+        await new Promise(resolve => setImmediate(resolve));
+        expect(service.isInitialized).toBe(true);
+        expect(service.authClient.request).toHaveBeenCalledTimes(1);
+        expect(settled).toBe(false);
+        expect(service.callApi).not.toHaveBeenCalled();
+        expect(service.streamApi).not.toHaveBeenCalled();
+
+        completeProbe({ data: { models: { 'gemini-2.5-flash-lite': {} } } });
+        const outcome = await result;
+        expect(outcome.error).toBeUndefined();
+        expect(service.callApi.mock.calls.length + service.streamApi.mock.calls.length).toBe(1);
+        const response = stream ? outcome.value.value : outcome.value;
+        expect(response.candidates[0].finishReason).toBe('STOP');
+    });
+
+    test('concurrent unary and stream requests share the background model probe', async () => {
+        const service = createGenerationService();
+        let completeProbe;
+        service.authClient.request.mockImplementation(() => new Promise(resolve => { completeProbe = resolve; }));
+        await service.initialize();
+        await new Promise(resolve => setImmediate(resolve));
+        const results = [startGeneration(service), startGeneration(service, true)].map(promise =>
+            promise.then(value => ({ value }), error => ({ error })));
+        await new Promise(resolve => setImmediate(resolve));
+        expect(service.authClient.request).toHaveBeenCalledTimes(1);
+        expect(service.callApi).not.toHaveBeenCalled();
+        expect(service.streamApi).not.toHaveBeenCalled();
+        completeProbe({ data: { models: { 'gemini-2.5-flash-lite': {} } } });
+        const outcomes = await Promise.all(results);
+        expect(outcomes.every(outcome => !outcome.error)).toBe(true);
+        expect(service.callApi).toHaveBeenCalledTimes(1);
+        expect(service.streamApi).toHaveBeenCalledTimes(1);
+        await startGeneration(service);
+        expect(service.authClient.request).toHaveBeenCalledTimes(1);
+    });
+
+    test('failed discovery remains unavailable and uses its short negative cache', async () => {
+        const service = createGenerationService();
+        service.authClient.request.mockRejectedValue(new Error('synthetic discovery outage'));
+        await expect(startGeneration(service)).rejects.toMatchObject({ code: 'MODEL_LIST_UNAVAILABLE', status: 503 });
+        await expect(startGeneration(service, true)).rejects.toMatchObject({ code: 'MODEL_LIST_UNAVAILABLE', status: 503 });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(service.authClient.request).toHaveBeenCalledTimes(1);
+        expect(service.availableModels).toEqual([]);
+        expect(service.callApi).not.toHaveBeenCalled();
+        expect(service.streamApi).not.toHaveBeenCalled();
+    });
+
+    test('successful discovery cannot authorize a model absent from the account directory', async () => {
+        const service = createGenerationService();
+        service.authClient.request.mockResolvedValue({ data: { models: { 'gemini-2.5-flash': {} } } });
+        await expect(startGeneration(service)).rejects.toMatchObject({ code: 'MODEL_NOT_SUPPORTED', status: 400 });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(service.callApi).not.toHaveBeenCalled();
+    });
+
     test('caches provider model probes and re-probes after token identity changes', async () => {
         const service = createService();
         service.baseURLs = ['https://example.test'];
