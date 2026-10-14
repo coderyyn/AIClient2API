@@ -383,7 +383,7 @@ describe('Codex proxy quality gates', () => {
             });
             const old = inbound('0.154.0');
             expect(service.buildHeaders(null, false, old, 'gpt-6-luna')).toMatchObject({
-                version: '0.162.1', 'user-agent': 'codex_cli_rs/0.162.1 (Windows 10.0.19045; x86_64) unknown'
+                version: '0.162.1', 'user-agent': 'codex-tui/0.162.1 (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; 0.162.1)'
             });
             expect(service.buildHeaders(null, false, old, 'gpt-6-sol').version).toBe('0.162.1');
             expect(service.buildHeaders(null, false, old, 'gpt-6-astra').version).toBe('0.154.0');

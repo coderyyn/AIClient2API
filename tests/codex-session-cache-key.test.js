@@ -80,8 +80,8 @@ describe('Codex session cache key handling', () => {
             expect(configured.buildHeaders(null, false, state)).toMatchObject({ version: '0.163.0', 'user-agent': 'configured-agent' });
             expect(cloaked.buildHeaders(null, false, state)).toMatchObject({
                 version: '0.162.1',
-                originator: 'codex_cli_rs',
-                'user-agent': 'codex_cli_rs/0.162.1 (Windows 10.0.19045; x86_64) unknown'
+                originator: 'codex-tui',
+                'user-agent': 'codex-tui/0.162.1 (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; 0.162.1)'
             });
         } finally { configured.stopCacheCleanup(); cloaked.stopCacheCleanup(); }
     });
@@ -94,8 +94,8 @@ describe('Codex session cache key handling', () => {
                 .toMatchObject({ 'user-agent': ua, originator: 'codex-tui', version: '0.164.0' });
             // originator 与 UA 前缀不一致时整组回落默认身份，避免混搭。
             expect(service.buildHeaders(null, false, { inboundHeaders: { 'user-agent': ua, originator: 'Codex Desktop' } }))
-                .toMatchObject({ originator: 'codex_cli_rs', 'user-agent': 'codex_cli_rs/0.162.1 (Windows 10.0.19045; x86_64) unknown' });
-            expect(service.buildHeaders(null, false, { inboundHeaders: { 'user-agent': 'curl/8.0' } }).originator).toBe('codex_cli_rs');
+                .toMatchObject({ originator: 'codex-tui', 'user-agent': 'codex-tui/0.162.1 (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; 0.162.1)' });
+            expect(service.buildHeaders(null, false, { inboundHeaders: { 'user-agent': 'curl/8.0' } }).originator).toBe('codex-tui');
         } finally { service.stopCacheCleanup(); }
     });
 
@@ -106,8 +106,8 @@ describe('Codex session cache key handling', () => {
             const headers = service.buildHeaders(null, false);
 
             expect(headers.version).toBe('0.162.1');
-            expect(headers['user-agent']).toContain('codex_cli_rs/0.162.1');
-            expect(service.buildUsageHeaders()['user-agent']).toContain('codex_cli_rs/0.162.1');
+            expect(headers['user-agent']).toContain('codex-tui/0.162.1');
+            expect(service.buildUsageHeaders()['user-agent']).toContain('codex-tui/0.162.1');
         } finally {
             service.stopCacheCleanup();
         }

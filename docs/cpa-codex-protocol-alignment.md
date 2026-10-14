@@ -33,7 +33,7 @@
 
 | 项 | 实现 | 来源 / 与 CPA 的差异 |
 | --- | --- | --- |
-| 默认身份 | `originator: codex_cli_rs`，UA `codex_cli_rs/0.162.1 (Windows 10.0.19045; x86_64) unknown`，`version: 0.162.1`，`x-codex-beta-features: remote_compaction_v2` | Desktop 主请求带 attestation，无法生成，因此不冒充 Desktop，改用同平台的原生 CLI 形态；版本取 CLI 稳定版 0.162.1。CPA 强制 `codex-tui/0.154.0` Mac UA |
+| 默认身份 | `originator: codex-tui`，UA `codex-tui/0.162.1 (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; 0.162.1)`，`version: 0.162.1`，`x-codex-beta-features: remote_compaction_v2` | Desktop 主请求带 attestation，无法生成，因此不冒充 Desktop。2026-10-14 由 `codex_cli_rs` 改回 tui（与 CPA 同类）：10-13～10-14 全部账号 gpt-6 被 ModelTrace 判为 gpt-5.6-luna。版本保持 0.162.1，因 gpt-6-sol/luna 需 ≥0.155，不能用 CPA 的 `codex-tui/0.154.0` Mac UA |
 | Cloaking | `CODEX_CLOAKING_ENABLED` 默认开启，所有请求使用同一身份组 | 机制同 CPA；关闭时可识别的 Codex 身份整组透传，originator 不一致、UA 不可识别或版本过低时回落默认组 |
 | 会话头 | `session-id`（入站值，否则 `prompt_cache_key`）、`thread-id`、`x-client-request-id`、`x-codex-window-id`、`x-codex-turn-metadata` 透传 | 头名用原生小写连字符形式 |
 | `x-codex-routing-hint` | `model=<上游模型>[;tier=priority/ultrafast]` | 原生源码 + CPA |

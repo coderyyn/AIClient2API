@@ -57,12 +57,12 @@ import { beginRequestAttempt, finishRequestAttempt } from '../../utils/request-a
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const CODEX_MODELS = getCodexModelIds(baseModels);
 const CODEX_VERSION = '0.162.1';
-// 默认出站身份对齐本机原生 Codex CLI 形态（2026-10-12 抓包：Desktop 主请求带 x-oai-attestation，
-// 无法生成，故不冒充 Desktop）。终端段取本机抓包值 unknown。
-const CODEX_DEFAULT_ORIGINATOR = 'codex_cli_rs';
+// 默认出站身份使用 codex-tui 形态（与 CPA 同为 tui，平台保留 Windows；Desktop 主请求带
+// x-oai-attestation，无法生成，故不冒充 Desktop）。2026-10-14 起由 codex_cli_rs 改回 tui。
+const CODEX_DEFAULT_ORIGINATOR = 'codex-tui';
 const CODEX_DEFAULT_BETA_FEATURES = 'remote_compaction_v2';
 function defaultCodexUserAgent(version) {
-    return `${CODEX_DEFAULT_ORIGINATOR}/${version} (Windows 10.0.19045; x86_64) unknown`;
+    return `${CODEX_DEFAULT_ORIGINATOR}/${version} (Windows 10.0.26100; x86_64) WindowsTerminal (${CODEX_DEFAULT_ORIGINATOR}; ${version})`;
 }
 const CODEX_CLIENT_UA_PATTERN = /^(codex_cli_rs|codex-tui|codex_vscode|codex_exec|Codex Desktop)\/(\d+\.\d+\.\d+\S*)\s/;
 function codexVersionForModel(model, version) {
