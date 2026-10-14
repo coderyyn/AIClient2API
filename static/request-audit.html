@@ -1492,7 +1492,8 @@
             ? (attribution === 'selected-not-sent' ? `${accountName}（未发出）` : accountName)
             : attribution === 'selected-not-sent' ? '已选凭据（账号不可解析）' : '未知账号';
         const provider = event.request?.toProvider || '—';
-        const key = event.potluckKey?.name || event.potluckKey?.prefix || '未命名';
+        const key = event.potluckKey?.name || event.potluckKey?.prefix
+          || (event.request?.fromProvider === 'gpt-diagnostics' ? '质量检测' : '未命名');
         const providerHtml = `<div class="audit-cell"><span class="audit-truncate" title="${escapeHtml(account)}">${escapeHtml(account)}</span><small class="audit-truncate" title="${escapeHtml(provider)}">${escapeHtml(provider)}</small></div>`;
         const tr = document.createElement('tr');
         tr.tabIndex = 0;
