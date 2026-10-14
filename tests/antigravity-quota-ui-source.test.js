@@ -73,8 +73,10 @@ describe('Antigravity quota UI source', () => {
         expect(source).toContain('quotaExhaustedCount');
         expect(source).toContain('credentialUnavailableCount');
         expect(source).toContain('unprobedCount');
-        expect(source).toContain('aria-label="Gemini 模型可用性摘要"');
-        expect(source).toContain('availability.unprobed');
+        expect(source).toContain('aria-label="Gemini 模型 429 冷却摘要"');
+        expect(source).toContain('.filter(summary => summary.quotaExhaustedCount > 0)');
+        expect(source).not.toContain("renderCount('✓'");
+        expect(source).not.toContain("renderCount('✕'");
         expect(source).not.toContain("renderBadge('Claude+GPT'");
         expect(source).not.toContain('Claude+GPT');
         expect(source).toContain('usage-provider-group is-full-width');

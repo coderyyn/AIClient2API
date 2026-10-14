@@ -776,29 +776,25 @@ export function getAntigravityModelAvailabilitySummaries(providerType, instances
 
 function renderAntigravityModelAvailabilitySummary(instances, providerType) {
     if (providerType !== ANTIGRAVITY_PROVIDER_TYPE) return '';
-    const summaries = getAntigravityModelAvailabilitySummaries(providerType, instances);
+    const summaries = getAntigravityModelAvailabilitySummaries(providerType, instances)
+        .filter(summary => summary.quotaExhaustedCount > 0);
     if (summaries.length === 0) return '';
     const renderCount = (symbol, label, count, className) => count > 0
         ? `<span class="antigravity-model-availability-count ${className}" aria-label="${label} ${count} 个凭据" title="${label}：${count} 个凭据">${symbol}${count}</span>`
         : '';
     const rows = summaries.map(summary => {
         const details = [
-            t('usage.antigravity.availability.available', { count: summary.availableCount }),
-            t('usage.antigravity.availability.quotaExhausted', { count: summary.quotaExhaustedCount }),
-            t('usage.antigravity.availability.credentialUnavailable', { count: summary.credentialUnavailableCount }),
-            t('usage.antigravity.availability.unprobed', { count: summary.unprobedCount })
+            t('usage.antigravity.availability.quotaExhausted', { count: summary.quotaExhaustedCount })
         ];
         if (summary.earliestRecoveryTime) details.push(t('usage.antigravity.availability.recoveryAt', { time: formatDate(summary.earliestRecoveryTime) }));
         return `<div class="antigravity-model-availability-row" title="${escapeHtml(details.join('；'))}">
             <code class="antigravity-model-availability-name">${escapeHtml(summary.model)}</code>
             <span class="antigravity-model-availability-counts" aria-label="${escapeHtml(details.join('；'))}">
-                ${renderCount('✓', t('usage.antigravity.availability.availableLabel'), summary.availableCount, 'is-available')}
                 ${renderCount('⚠', t('usage.antigravity.availability.quotaExhaustedLabel'), summary.quotaExhaustedCount, 'is-quota-exhausted')}
-                ${renderCount('✕', t('usage.antigravity.availability.credentialUnavailableLabel'), summary.credentialUnavailableCount, 'is-credential-unavailable')}
             </span>
         </div>`;
     }).join('');
-    return `<div class="antigravity-model-availability-summary" aria-label="Gemini 模型可用性摘要">${rows}</div>`;
+    return `<div class="antigravity-model-availability-summary" aria-label="Gemini 模型 429 冷却摘要">${rows}</div>`;
 }
 
 function formatAntigravityCompactRecovery(value) {

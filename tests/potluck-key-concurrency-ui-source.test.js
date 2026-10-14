@@ -40,7 +40,7 @@ describe('Provider usage summary UI source contract', () => {
         expect(css).toContain('.antigravity-model-availability-row');
         expect(source).toContain('function renderAntigravityModelAvailabilitySummary');
         expect(source).toContain('usage.antigravity.availability.recoveryAt');
-        expect(source).toContain('aria-label="Gemini 模型可用性摘要"');
+        expect(source).toContain('aria-label="Gemini 模型 429 冷却摘要"');
         expect(source).not.toContain('usage-provider-summary-grid');
         expect(source).not.toContain('模型冷却：${activeModels.length}');
     });
