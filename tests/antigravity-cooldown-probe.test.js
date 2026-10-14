@@ -72,16 +72,17 @@ test('starts only after ten minutes and does not overlap sweeps', async () => {
     expect(generate).toHaveBeenCalledTimes(1);
 });
 
-test.each(['retired model', '', '44'])('HTTP 200 with invalid answer %s retains cooldown', async text => {
+test.each(['retired model', '', '44'])('HTTP 200 with any answer %s recovers the text model', async text => {
     const { service, generate, manager } = setup();
     generate.mockResolvedValue(answer(text)); await service.runOnce();
-    expect(manager._findProvider(type, 'one').config.antigravityQuotaHealth.models[model].isHealthy).toBe(false);
+    expect(manager._findProvider(type, 'one').config.antigravityQuotaHealth.models[model].isHealthy).toBe(true);
 });
 
-test('wrong model and incomplete response cannot recover', async () => {
+test('text recovery needs only a successful response from the target model', async () => {
     expect(await validateCooldownProbeResponse(model, answer('43', 'gemini-3-flash').response)).toBe(false);
-    const r = answer().response; r.candidates[0].finishReason = 'MAX_TOKENS';
-    expect(await validateCooldownProbeResponse(model, r)).toBe(false);
+    expect(await validateCooldownProbeResponse(model, { modelVersion: model, candidates: [] })).toBe(false);
+    const r = answer('not the answer').response; r.candidates[0].finishReason = 'MAX_TOKENS';
+    expect(await validateCooldownProbeResponse(model, r)).toBe(true);
 });
 
 test('image recovery requires a fully decodable image, not a text response or image header', async () => {

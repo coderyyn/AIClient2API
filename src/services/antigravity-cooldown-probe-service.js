@@ -9,11 +9,11 @@ export async function validateCooldownProbeResponse(model, response) {
     const reported = response?.modelVersion || response?.model;
     if (reported && normalizeProbeModel(reported) !== normalizeProbeModel(model)) return false;
     const candidate = response?.candidates?.[0];
+    // 文本模型只要目标模型返回了成功响应即可恢复，不判断终止原因和答案内容
+    // （思考型模型可能在输出上限内只产生思考内容）。
+    if (!model.includes('image')) return Boolean(candidate);
     if (candidate?.finishReason !== 'STOP') return false;
     const parts = candidate.content?.parts || [];
-    if (!model.includes('image')) {
-        return parts.filter(p => !p.thought).map(p => p.text || '').join('').trim() === '43';
-    }
     const { default: sharp } = await import('sharp');
     for (const part of parts) {
         const data = part.inlineData;
