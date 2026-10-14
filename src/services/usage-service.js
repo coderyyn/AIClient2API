@@ -45,6 +45,9 @@ export class UsageService {
      * @returns {Promise<Object>} 原始用量数据
      */
     async getUsage(providerType, uuid = null) {
+        const manager = getProviderPoolManager();
+        const provider = manager?.providerPools?.[providerType]?.find(item => item.uuid === uuid);
+        if (provider?.isArchived) throw new Error('凭据已归档，请先恢复');
         const handler = this.providerHandlers[providerType];
         if (!handler) {
             throw new Error(`不支持的提供商类型: ${providerType}`);

@@ -979,3 +979,19 @@ describe('API Potluck key credential routing', () => {
         }
     });
 });
+
+
+test('key routing writes reject archived credentials and expose only safe archive binding labels', async () => {
+    const { keyManager } = await loadPotluckModules();
+    const created = await keyManager.createKey('Archive binding', 100);
+    const routing = { routingMode: 'fixed', fixedCredential: { providerType: 'openai-codex-oauth', uuid: 'archive-a' } };
+    await keyManager.updateKeyRouting(created.id, routing);
+    const bindings = keyManager.getCredentialArchiveBindings('openai-codex-oauth');
+    expect(bindings).toEqual([{ uuid: 'archive-a', keyLabel: 'Archive binding' }]);
+    expect(JSON.stringify(bindings)).not.toContain(created.id);
+    fs.writeFileSync(path.join(tempDir, 'configs', 'provider_pools.json'), JSON.stringify({
+        'openai-codex-oauth': [{ uuid: 'archive-a', isArchived: true }]
+    }));
+    await expect(keyManager.updateKeyRouting(created.id, routing)).rejects.toMatchObject({ code: 'CREDENTIAL_ARCHIVED' });
+    await expect(keyManager.createKey('Invalid binding', 100, { defaultRouting: routing })).rejects.toMatchObject({ code: 'CREDENTIAL_ARCHIVED' });
+});

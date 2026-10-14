@@ -12,7 +12,7 @@ export function versionCooldown(state, at = Date.now()) {
 
 export function cooldownProbeEligible(config, state, now = Date.now()) {
     const recovery = Date.parse(state?.scheduledRecoveryTime || '');
-    return Boolean(config?.uuid && !config.isDisabled && !config.needsRefresh && config.isHealthy !== false
+    return Boolean(config?.uuid && !config.isArchived && !config.isDisabled && !config.needsRefresh && config.isHealthy !== false
         && state?.isHealthy === false && (!Number.isFinite(recovery) || recovery > now));
 }
 

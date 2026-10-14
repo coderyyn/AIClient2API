@@ -46,7 +46,7 @@ function initProvidersPageHelpers() {
 function updateProvidersHandoffSummary(providers = {}, supportedProviders = []) {
     const providerGroups = Object.values(providers).filter(group => Array.isArray(group) && group.length > 0);
     const totalGroups = providerGroups.length;
-    const allNodes = providerGroups.flat();
+    const allNodes = providerGroups.flat().filter(node => !node.isArchived);
     const totalNodes = allNodes.length;
     const healthyNodes = allNodes.filter(node => node.isHealthy && !node.isDisabled).length;
 
@@ -393,8 +393,8 @@ function renderProviders(providers, supportedProviders = []) {
         providerDiv.dataset.providerType = providerType;
         providerDiv.style.cursor = 'pointer';
 
-        const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
-        const totalCount = accounts.length;
+        const healthyCount = accounts.filter(acc => !acc.isArchived && acc.isHealthy && !acc.isDisabled).length;
+        const totalCount = accounts.filter(acc => !acc.isArchived).length;
         const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
         const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
         
@@ -445,7 +445,7 @@ function renderProviders(providers, supportedProviders = []) {
             <div class="provider-stats">
                 <div class="provider-stat">
                     <span class="provider-stat-label" data-i18n="providers.stat.totalAccounts">${t('providers.stat.totalAccounts')}</span>
-                    <span class="provider-stat-value">${totalCount}</span>
+                    <span class="provider-stat-value">${totalCount} <small>已归档 ${accounts.filter(acc => acc.isArchived).length}</small></span>
                 </div>
                 <div class="provider-stat">
                     <span class="provider-stat-label" data-i18n="providers.stat.healthyAccounts">${t('providers.stat.healthyAccounts')}</span>
@@ -622,9 +622,9 @@ function renderProviderStatusOverview(providers, configMap, sortedProviderTypes)
             }
         });
 
-        const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
-        const totalCount = accounts.length;
-        const disabledCount = accounts.filter(acc => acc.isDisabled).length;
+        const healthyCount = accounts.filter(acc => !acc.isArchived && acc.isHealthy && !acc.isDisabled).length;
+        const totalCount = accounts.filter(acc => !acc.isArchived).length;
+        const disabledCount = accounts.filter(acc => !acc.isArchived && acc.isDisabled).length;
         const unhealthyCount = totalCount - healthyCount - disabledCount;
 
         const totalUsage = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
@@ -633,7 +633,7 @@ function renderProviderStatusOverview(providers, configMap, sortedProviderTypes)
         card.innerHTML = `
             <div class="provider-info">
                 <span class="provider-name" title="${displayName}">${displayName}</span>
-                <span class="provider-count" style="font-size: 0.75rem; color: var(--text-secondary);">${healthyCount}/${totalCount}</span>
+                <span class="provider-count" style="font-size: 0.75rem; color: var(--text-secondary);">${healthyCount}/${totalCount} · 已归档 ${accounts.filter(acc => acc.isArchived).length}</span>
             </div>
             
             <div class="provider-nodes-summary">

@@ -28,6 +28,7 @@ function hasKnownExhaustedQuota(provider = {}) {
  * concurrency/capacity flags such as isAtCapacity and hasCapacity.
  */
 export function getProviderUiAvailability(provider = {}) {
+    if (provider.isArchived === true) return { uiAvailable: false, uiUnavailableReason: 'archived' };
     if (provider.isDisabled === true) {
         return { uiAvailable: false, uiUnavailableReason: 'disabled' };
     }

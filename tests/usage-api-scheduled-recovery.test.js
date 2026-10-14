@@ -18,7 +18,7 @@ jest.mock('../src/services/usage-service.js', () => ({
     }
 }));
 
-import { getServiceAdapter } from '../src/providers/adapter.js';
+import { serviceInstances, getServiceAdapter } from '../src/providers/adapter.js';
 import { usageService } from '../src/services/usage-service.js';
 import { getAllProvidersUsage } from '../src/ui-modules/usage-api.js';
 
@@ -500,4 +500,20 @@ describe('usage api scheduled recovery handling', () => {
             quotaHealth
         );
     });
+});
+
+
+test('archived credential never queries usage even when its adapter already exists', async () => {
+    serviceInstances['openai-codex-oautharchived-test'] = {};
+    try {
+        const usage = await getAllProvidersUsage({}, { providerPools: {
+            'openai-codex-oauth': [{ uuid: 'archived-test', isArchived: true, isDisabled: false }]
+        } });
+        expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
+        expect(getServiceAdapter).not.toHaveBeenCalled();
+        expect(usage.providers['openai-codex-oauth']).toMatchObject({ totalCount: 0, archivedCount: 1, refreshableCount: 0 });
+        expect(usage.providers['openai-codex-oauth'].instances[0]).toMatchObject({ skipped: true, skipReason: 'archived' });
+    } finally {
+        delete serviceInstances['openai-codex-oautharchived-test'];
+    }
 });

@@ -110,7 +110,7 @@ describe('provider modal source regressions', () => {
         expect(source).toContain('data-availability-filter="available"');
         expect(source).toContain('data-availability-filter="all"');
         expect(source).toContain('aria-pressed="true"');
-        expect(source).toContain("currentProviders.filter(provider => provider.uiAvailable === true)");
+        expect(source).toContain("categoryProviders.filter(provider => provider.uiAvailable === true)");
         expect(source.indexOf('const filteredProviders = getFilteredProviders()'))
             .toBeLessThan(source.indexOf('const totalPages = Math.ceil(filteredProviders.length'));
         expect(source).toContain('window.goToProviderPage(currentPage)');

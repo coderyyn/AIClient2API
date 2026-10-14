@@ -13,6 +13,9 @@ let currentProviders = [];
 let currentProviderType = '';
 let nodeSearchTerm = '';
 let currentAvailabilityFilter = 'available';
+let currentArchiveFilter = 'active';
+const selectedArchiveUuids = new Set();
+let archiveMutationPending = false;
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 let cachedProxyPools = [];
 let proxyPoolAssignments = new Map();
@@ -666,6 +669,8 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
     currentPage = 1;
     nodeSearchTerm = initialSearchTerm;
     currentAvailabilityFilter = 'available';
+    currentArchiveFilter = 'active';
+    selectedArchiveUuids.clear();
     cachedModels = [];
     
     // 移除已存在的模态框
@@ -724,6 +729,13 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
                     </div>
                 </div>
 
+                <div class="provider-archive-toolbar" role="group" aria-label="归档分类">
+                    <button class="btn btn-secondary" data-archive-filter="active">未归档</button>
+                    <button class="btn btn-secondary" data-archive-filter="archived">已归档</button>
+                    <label><input type="checkbox" data-archive-select-page> 全选当前页</label>
+                    <button class="btn btn-secondary" data-archive-batch disabled>归档所选</button>
+                    <span data-archive-status role="status" aria-live="polite"></span>
+                </div>
                 <div class="provider-nodes-toolbar" style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
                     <div class="search-input-wrapper" style="position: relative; flex: 1;">
                         <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary);"></i>
@@ -758,6 +770,21 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
     
     // 添加模态框事件监听
     addModalEventListeners(modal);
+    modal.querySelectorAll('[data-archive-filter]').forEach(button => button.addEventListener('click', () => {
+        if (archiveMutationPending) return;
+        currentArchiveFilter = button.dataset.archiveFilter;
+        updateProviderAvailabilityControls(modal);
+        goToProviderPage(1);
+    }));
+    modal.querySelector('[data-archive-select-page]').addEventListener('change', event => {
+        selectedArchiveUuids.clear();
+        modal.querySelectorAll('[data-archive-select]').forEach(input => {
+            input.checked = event.target.checked;
+            if (input.checked) selectedArchiveUuids.add(input.dataset.archiveSelect);
+        });
+        updateArchiveSelection();
+    });
+    modal.querySelector('[data-archive-batch]').addEventListener('click', () => mutateProviderArchive([...selectedArchiveUuids]));
     updateProviderAvailabilityControls(modal);
     
     // 初始渲染
@@ -965,9 +992,10 @@ function renderPagination(page, totalPages, totalItems, position = 'top') {
  * 获取过滤后的提供商列表
  */
 function getFilteredProviders() {
-    const availabilityFiltered = currentAvailabilityFilter === 'available'
-        ? currentProviders.filter(provider => provider.uiAvailable === true)
-        : currentProviders;
+    const categoryProviders = currentProviders.filter(provider => (provider.isArchived === true) === (currentArchiveFilter === 'archived'));
+    const availabilityFiltered = currentArchiveFilter !== 'archived' && currentAvailabilityFilter === 'available'
+        ? categoryProviders.filter(provider => provider.uiAvailable === true)
+        : categoryProviders;
     if (!nodeSearchTerm) return availabilityFiltered;
     const term = nodeSearchTerm.toLowerCase().trim();
     return availabilityFiltered.filter(p => {
@@ -1000,11 +1028,19 @@ function getFilteredProviders() {
 
 function updateProviderAvailabilityControls(modal = document.querySelector('.provider-modal')) {
     if (!modal) return;
-    const availableCount = currentProviders.filter(provider => provider.uiAvailable === true).length;
+    const activeProviders = currentProviders.filter(provider => !provider.isArchived);
+    const availableCount = activeProviders.filter(provider => provider.uiAvailable === true).length;
+    modal.querySelectorAll("[data-archive-filter]").forEach(button => {
+        const archived = button.dataset.archiveFilter === "archived";
+        button.textContent = `${archived ? "已归档" : "未归档"}（${archived ? currentProviders.length - activeProviders.length : activeProviders.length}）`;
+        button.setAttribute("aria-pressed", String(button.dataset.archiveFilter === currentArchiveFilter));
+    });
+    const availability = modal.querySelector(".provider-availability-filter");
+    if (availability) availability.hidden = currentArchiveFilter === "archived";
     const availableCountNode = modal.querySelector('[data-availability-count="available"]');
     const allCountNode = modal.querySelector('[data-availability-count="all"]');
     if (availableCountNode) availableCountNode.textContent = String(availableCount);
-    if (allCountNode) allCountNode.textContent = String(currentProviders.length);
+    if (allCountNode) allCountNode.textContent = String(activeProviders.length);
     modal.querySelectorAll('[data-availability-filter]').forEach(button => {
         const active = button.dataset.availabilityFilter === currentAvailabilityFilter;
         button.classList.toggle('active', active);
@@ -1024,6 +1060,7 @@ function setProviderAvailabilityFilter(filter) {
  * @param {number} page - 目标页码
  */
 function goToProviderPage(page) {
+    selectedArchiveUuids.clear();
     const filteredProviders = getFilteredProviders();
     const totalPages = Math.ceil(filteredProviders.length / PROVIDERS_PER_PAGE);
     
@@ -1038,6 +1075,8 @@ function goToProviderPage(page) {
     const providerList = document.getElementById('providerList');
     if (providerList) {
         providerList.innerHTML = renderProviderListPaginated(filteredProviders, page);
+        renderArchiveRowControls(providerList);
+        updateArchiveSelection();
     }
     
     // 更新分页控件
@@ -1060,7 +1099,8 @@ function goToProviderPage(page) {
     // 为当前页的提供商加载模型列表
     const startIndex = (page - 1) * PROVIDERS_PER_PAGE;
     const endIndex = Math.min(startIndex + PROVIDERS_PER_PAGE, filteredProviders.length);
-    const pageProviders = filteredProviders.slice(startIndex, endIndex);
+    const pageProviders = filteredProviders.slice(startIndex, endIndex).filter(provider => !provider.isArchived);
+    if (!pageProviders.length) return;
     
     // 如果已缓存模型列表，直接使用
     if (!usesManagedModelList(currentProviderType) && cachedModels.length > 0) {
@@ -1092,9 +1132,9 @@ function renderProviderListPaginated(providers, page) {
         `;
     }
 
-    // 如果是卡片模式，显示所有节点，不分页
+    // 卡片和列表使用同一分页范围，避免全选跨页。
     if (currentViewMode === 'card') {
-        return renderProviderList(providers);
+        return renderProviderList(providers.slice((page - 1) * PROVIDERS_PER_PAGE, page * PROVIDERS_PER_PAGE));
     }
 
     const startIndex = (page - 1) * PROVIDERS_PER_PAGE;
@@ -1851,6 +1891,7 @@ function getFieldOrder(provider) {
     
     // 获取当前对象中存在且不在预定义列表中的其他字段
     const otherFields = Object.keys(provider).filter(key =>
+        !['isArchived', 'archivedAt'].includes(key) &&
         !excludedFields.includes(key) &&
         !hiddenProviderConfigFields.includes(key) &&
         !orderedFields.includes(key) &&
@@ -2963,3 +3004,102 @@ window.showProxyPoolManager = showProxyPoolManager;
 window.addProxyPoolRow = addProxyPoolRow;
 window.saveProxyPools = saveProxyPools;
 window.setProviderAvailabilityFilter = setProviderAvailabilityFilter;
+
+function updateArchiveSelection() {
+    const modal = document.querySelector('.provider-modal');
+    if (!modal) return;
+    const button = modal.querySelector('[data-archive-batch]');
+    button.disabled = archiveMutationPending || selectedArchiveUuids.size === 0;
+    button.textContent = `${currentArchiveFilter === 'archived' ? '恢复' : '归档'}所选（${selectedArchiveUuids.size}）`;
+    const inputs = [...modal.querySelectorAll('[data-archive-select]')];
+    const all = modal.querySelector('[data-archive-select-page]');
+    all.disabled = archiveMutationPending || !inputs.length;
+    all.checked = inputs.length > 0 && inputs.every(input => input.checked);
+    all.indeterminate = selectedArchiveUuids.size > 0 && !all.checked;
+}
+
+function renderArchiveRowControls(list) {
+    list.querySelectorAll('.provider-item-detail, .provider-item-card').forEach(row => {
+        const provider = currentProviders.find(item => item.uuid === row.dataset.uuid);
+        if (!provider) return;
+        if (provider.isArchived) {
+            row.querySelectorAll('.provider-actions-group button, .card-actions button, .btn-edit').forEach(button => {
+                button.disabled = true;
+                button.title = '凭据已归档，请先恢复';
+            });
+        }
+        const controls = document.createElement('div');
+        controls.className = 'provider-archive-row-controls';
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.dataset.archiveSelect = provider.uuid;
+        input.disabled = archiveMutationPending;
+        input.addEventListener('change', () => {
+            if (input.checked) selectedArchiveUuids.add(provider.uuid);
+            else selectedArchiveUuids.delete(provider.uuid);
+            updateArchiveSelection();
+        });
+        label.append(input, document.createTextNode(' 选择'));
+        const button = document.createElement('button');
+        button.className = 'btn btn-secondary';
+        button.textContent = provider.isArchived ? '恢复' : '归档';
+        button.disabled = archiveMutationPending;
+        button.addEventListener('click', () => mutateProviderArchive([provider.uuid]));
+        controls.append(label, button);
+        if (provider.isArchived) {
+            const time = document.createElement('span');
+            time.textContent = `已归档 · ${provider.archivedAt ? new Date(provider.archivedAt).toLocaleString() : '时间未知'}`;
+            controls.append(time);
+        }
+        controls.addEventListener('click', event => event.stopPropagation());
+        row.prepend(controls);
+    });
+}
+
+async function mutateProviderArchive(uuids) {
+    if (archiveMutationPending || !uuids.length) return;
+    const type = currentProviderType;
+    const action = currentArchiveFilter === 'archived' ? 'restore' : 'archive';
+    const message = action === 'archive'
+        ? `归档 ${uuids.length} 个凭据？归档后停止接收新请求、自动刷新、健康检测和额度查询，已有历史保留。`
+        : `恢复 ${uuids.length} 个凭据？恢复后保持禁用，需要确认有效后手动启用。`;
+    if (!confirm(message)) return;
+    archiveMutationPending = true;
+    updateArchiveSelection();
+    const status = document.querySelector('[data-archive-status]');
+    try {
+        const result = await window.apiClient.post(`/providers/${encodeURIComponent(type)}/${action}`, { uuids });
+        if (status) status.textContent = result.runtimeSync === 'pending'
+            ? '已保存，运行态同步中' : '已保存，运行态已应用';
+        const data = await window.apiClient.get(`/providers/${encodeURIComponent(type)}`);
+        if (type === currentProviderType) {
+            currentProviders = data.providers || [];
+            const values = document.querySelectorAll('.provider-modal .provider-summary-item .value');
+            if (values[0]) values[0].textContent = data.totalCount;
+            if (values[1]) values[1].textContent = data.healthyCount;
+            updateProviderAvailabilityControls();
+            goToProviderPage(currentPage);
+        }
+        showToast('成功', action === 'restore' ? '已恢复，当前禁用，请确认有效后启用' : '凭据已归档', 'success');
+        window.loadProviders?.();
+        if (result.runtimeSync === 'pending') pollArchiveSync(type, status);
+    } catch (error) {
+        showToast('操作失败', error.message, 'error');
+    } finally {
+        archiveMutationPending = false;
+        goToProviderPage(currentPage);
+    }
+}
+
+async function pollArchiveSync(type, status) {
+    for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!status?.isConnected || currentProviderType !== type) return;
+        try {
+            const data = await window.apiClient.get(`/providers/${encodeURIComponent(type)}`);
+            if (data.runtimeSync === 'applied') { status.textContent = '已保存，运行态已应用'; return; }
+        } catch { status.textContent = '已保存，暂无法确认运行态同步'; return; }
+    }
+    if (status?.isConnected) status.textContent = '已保存，运行态仍待同步，请检查 worker 状态';
+}

@@ -2114,3 +2114,10 @@
     background: rgba(0, 0, 0, 0.2);
     border-color: var(--border-color);
 }
+
+.provider-archive-toolbar, .provider-archive-row-controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 0;
+}
+.provider-archive-toolbar [aria-pressed="true"] { outline: 2px solid var(--primary-color); }
+.provider-archive-row-controls { padding: 10px 16px; border-bottom: 1px solid var(--border-color); }
+.provider-availability-filter[hidden] { display: none; }

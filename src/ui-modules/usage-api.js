@@ -517,8 +517,9 @@ function buildUsageDiagnostics(providers = {}) {
 
 function recalculateProviderUsageCounts(providerData) {
     const instances = Array.isArray(providerData.instances) ? providerData.instances : [];
-    const activeInstances = instances.filter(inst => !inst.skipped && !inst.isDisabled);
-    providerData.totalCount = instances.length;
+    const activeInstances = instances.filter(inst => !inst.skipped && !(inst.isArchived || inst.isDisabled));
+    providerData.totalCount = instances.filter(instance => !instance.isArchived).length;
+    providerData.archivedCount = instances.filter(instance => instance.isArchived).length;
     providerData.refreshableCount = activeInstances.length;
     providerData.successCount = activeInstances.filter(inst => inst.success).length;
     providerData.errorCount = activeInstances.filter(inst => !inst.success).length;
@@ -564,7 +565,7 @@ function mergeProviderUsageWithLastSuccessfulCache(providerType, freshProviderDa
             });
             return {
                 ...cachedInstance,
-                ...Object.fromEntries(['name', 'codexAccountKey', 'codexAccountId', 'codexEmail', 'configFilePath', 'isHealthy', 'isDisabled', 'needsRefresh', 'scheduledRecoveryTime', 'subscription_active_start', 'subscription_active_until']
+                ...Object.fromEntries(['name', 'codexAccountKey', 'codexAccountId', 'codexEmail', 'configFilePath', 'isHealthy', 'isDisabled', 'isArchived', 'needsRefresh', 'scheduledRecoveryTime', 'subscription_active_start', 'subscription_active_until']
                     .filter(key => instance[key] !== undefined && instance[key] !== null)
                     .map(key => [key, instance[key]])),
                 codexQuotaHealth: instance.codexQuotaHealth || cachedInstance.codexQuotaHealth || null,
@@ -714,8 +715,9 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
     // 获取提供商池中的所有实例（使用统一的加载函数）
     const providers = loadProviderList(providerType, currentConfig, providerPoolManager);
 
-    result.totalCount = providers.length;
-    result.refreshableCount = providers.filter(provider => !provider?.isDisabled).length;
+    result.totalCount = providers.filter(provider => !provider.isArchived).length;
+    result.archivedCount = providers.filter(provider => provider.isArchived).length;
+    result.refreshableCount = providers.filter(provider => !provider?.isArchived && !provider?.isDisabled).length;
 
     const accountTimeoutMs = normalizePositiveInteger(
         currentConfig.USAGE_REFRESH_ACCOUNT_TIMEOUT_MS,
@@ -742,7 +744,8 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             configFilePath: getProviderConfigFilePath(provider, providerType),
             ...getProviderSubscriptionWindow(provider, providerType),
             isHealthy: provider.isHealthy !== false,
-            isDisabled: provider.isDisabled === true,
+            isArchived: provider.isArchived === true,
+            isDisabled: provider.isArchived === true || provider.isDisabled === true,
             needsRefresh: provider.needsRefresh === true,
             scheduledRecoveryTime: provider.scheduledRecoveryTime || null,
             success: false,
@@ -755,9 +758,9 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
         const scheduledRecoveryError = getScheduledRecoveryError(provider);
 
         // First check if disabled or cooling down, skip initialization for those providers
-        if (provider.isDisabled) {
+        if (provider.isArchived || provider.isDisabled) {
             instanceResult.skipped = true;
-            instanceResult.skipReason = 'disabled';
+            instanceResult.skipReason = provider.isArchived ? 'archived' : 'disabled';
         } else if (scheduledRecoveryError) {
             instanceResult.error = scheduledRecoveryError;
             result.errorCount++;
@@ -779,7 +782,7 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
         }
         
         // If adapter exists (including just initialized), and no error, try to get usage
-        if (adapter && !instanceResult.error) {
+        if (adapter && !instanceResult.error && !instanceResult.skipped) {
             try {
                 const usage = await withUsageAccountTimeout(
                     usageService.getFormattedUsage(providerType, provider.uuid),
@@ -885,7 +888,8 @@ function enrichProviderDataWithProviderConfig(providerType, providerData, curren
             configFilePath: instance.configFilePath || getProviderConfigFilePath(provider, providerType),
             ...getProviderSubscriptionWindow(provider, providerType, instance),
             isHealthy: provider.isHealthy !== false,
-            isDisabled: provider.isDisabled === true,
+            isArchived: provider.isArchived === true,
+            isDisabled: provider.isArchived === true || provider.isDisabled === true,
             needsRefresh: provider.needsRefresh === true,
             scheduledRecoveryTime: instance.scheduledRecoveryTime || provider.scheduledRecoveryTime || null
         };
@@ -955,7 +959,8 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         configFilePath: getProviderConfigFilePath(provider, providerType),
         ...getProviderSubscriptionWindow(provider, providerType),
         isHealthy: provider.isHealthy !== false,
-        isDisabled: provider.isDisabled === true,
+        isArchived: provider.isArchived === true,
+        isDisabled: provider.isArchived === true || provider.isDisabled === true,
         needsRefresh: provider.needsRefresh === true,
         scheduledRecoveryTime: provider.scheduledRecoveryTime || null,
         success: false,
@@ -965,9 +970,9 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         skipReason: null
     };
 
-    if (provider.isDisabled) {
+    if (provider.isArchived || provider.isDisabled) {
         instanceResult.skipped = true;
-        instanceResult.skipReason = 'disabled';
+        instanceResult.skipReason = provider.isArchived ? 'archived' : 'disabled';
         return { provider, adapter: null, instanceResult };
     }
 
@@ -1141,9 +1146,13 @@ export async function handleGetSingleInstanceUsage(req, res, currentConfig, prov
             uuid
         );
 
+        if (provider.isArchived) {
+            sendJson(res, 409, { error: { message: '凭据已归档，请先恢复', code: 'CREDENTIAL_ARCHIVED' } });
+            return true;
+        }
         instanceResult = baseInstanceResult;
 
-        if (adapter && !instanceResult.error) {
+        if (adapter && !instanceResult.error && !instanceResult.skipped) {
             try {
                 const usage = await usageService.getFormattedUsage(providerType, provider.uuid);
                 instanceResult.success = true;
@@ -1200,6 +1209,10 @@ export async function handleResetSingleInstanceUsage(req, res, currentConfig, pr
             uuid
         );
 
+        if (provider.isArchived) {
+            sendJson(res, 409, { error: { message: '凭据已归档，请先恢复', code: 'CREDENTIAL_ARCHIVED' } });
+            return true;
+        }
         if (baseInstanceResult.error) {
             throw new Error(baseInstanceResult.error);
         }
@@ -1265,7 +1278,7 @@ export async function handlePostCodexRateLimitReset(req, res, currentConfig, pro
         if (!provider) {
             throw new Error(`未找到指定的提供商实例: ${uuid}`);
         }
-        if (provider.isDisabled) {
+        if (provider.isArchived || provider.isDisabled) {
             throw new Error('Provider is disabled');
         }
 

@@ -279,6 +279,12 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     }
 
     // Disable/Enable specific provider configuration
+    const archiveMatch = pathParam.match(/^\/api\/providers\/([^/]+)(?:\/([^/]+))?\/(archive|restore)$/);
+    if (method === 'POST' && archiveMatch) {
+        return await providerApi.handleArchiveProviders(req, res, currentConfig, providerPoolManager,
+            decodeURIComponent(archiveMatch[1]), archiveMatch[3], archiveMatch[2] ? decodeURIComponent(archiveMatch[2]) : null);
+    }
+
     const disableEnableProviderMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/([^\/]+)\/(disable|enable)$/);
     if (disableEnableProviderMatch) {
         const providerType = decodeURIComponent(disableEnableProviderMatch[1]);

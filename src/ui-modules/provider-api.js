@@ -1,3 +1,5 @@
+import { withCredentialLifecycleLock, buildArchiveUpdate } from '../utils/provider-archive.js';
+import { getCredentialArchiveBindings } from '../plugins/api-potluck/key-manager.js';
 import { existsSync, readFileSync } from 'fs';
 import logger from '../utils/logger.js';
 import { getRequestBody } from '../utils/common.js';
@@ -87,6 +89,8 @@ function sanitizeProviderPools(pools, maskSensitive = false) {
 function filterMaskedData(data) {
     if (!data || typeof data !== 'object') return data;
     const result = { ...data };
+    delete result.isArchived;
+    delete result.archivedAt;
     
     for (const key in result) {
         const val = result[key];
@@ -136,15 +140,15 @@ function getManagedSupportedModels(providerType, providers = []) {
 }
 
 async function persistProviderStatusToFile(currentConfig, providerPoolManager) {
-    const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
-    const providerPools = {};
-
-    for (const providerType in providerPoolManager.providerStatus) {
-        providerPools[providerType] = providerPoolManager.providerStatus[providerType].map(providerStatus => providerStatus.config);
-    }
-
-    await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
-    return filePath;
+    const filePath = getProviderPoolsFilePath(currentConfig);
+    return withFileLock(filePath, async () => {
+        const providerPools = {};
+        for (const type in providerPoolManager.providerStatus) {
+            providerPools[type] = providerPoolManager.providerStatus[type].map(provider => provider.config);
+        }
+        await atomicWriteFile(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
+        return filePath;
+    });
 }
 
 function isAuthHealthCheckError(errorMessage = '') {
@@ -310,12 +314,17 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providerType,
+        runtimeSync: providerPoolManager?.configEventSink
+            ? (globalThis.providerConfigSyncStatus?.currentRevision >= providerPoolManager.providerConfigRevision
+                && globalThis.providerConfigSyncStatus?.pendingWorkerCount === 0 ? 'applied' : 'pending')
+            : 'applied',
         providers: providers.map(p => ({
             ...sanitizeProviderData(p, true),
             ...getProviderUiAvailability(p)
         })), // 详情页也进行打码，确保即便点击显示也是脱敏数据
-        totalCount: providers.length,
-        healthyCount: providers.filter(p => p.isHealthy).length
+        totalCount: providers.filter(p => !p.isArchived).length,
+        archivedCount: providers.filter(p => p.isArchived).length,
+        healthyCount: providers.filter(p => !p.isArchived && p.isHealthy && !p.isDisabled).length
     }));
     return true;
 }
@@ -411,6 +420,7 @@ export async function handleGetProviderTypeModels(req, res, currentConfig, provi
  * Detect available models for a specific provider node.
  */
 export async function handleDetectProviderModels(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
+    if (rejectArchivedProvider(res, currentConfig, providerPoolManager, providerType, providerUuid)) return true;
     try {
         if (!usesManagedModelList(providerType)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -639,6 +649,9 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         const updatedProvider = {
             ...existingProvider,
             ...filteredConfig,
+            isArchived: existingProvider.isArchived === true,
+            archivedAt: existingProvider.archivedAt || null,
+            ...(existingProvider.isArchived ? { isDisabled: true } : {}),
             uuid: providerUuid, // Ensure UUID doesn't change
             lastUsed: existingProvider.lastUsed, // Preserve usage stats
             lastSuccessTime: existingProvider.lastSuccessTime,
@@ -802,6 +815,11 @@ async function _handleDisableEnableProvider(req, res, currentConfig, providerPoo
 
         // Update isDisabled field
         const provider = providers[providerIndex];
+        if (provider.isArchived && action === 'enable') {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: '凭据已归档，请先恢复' } }));
+            return true;
+        }
         provider.isDisabled = action === 'disable';
         
         // Save to file
@@ -878,7 +896,7 @@ async function _handleResetProviderHealth(req, res, currentConfig, providerPoolM
             totalCount = pool.length;
             
             pool.forEach(ps => {
-                if (!ps.config.isHealthy || ps.config.needsRefresh || (ps.config.errorCount && ps.config.errorCount > 0)) {
+                if (!ps.config.isArchived && (!ps.config.isHealthy || ps.config.needsRefresh || (ps.config.errorCount && ps.config.errorCount > 0))) {
                     resetCount++;
                 }
             });
@@ -901,6 +919,7 @@ async function _handleResetProviderHealth(req, res, currentConfig, providerPoolM
 
             totalCount = providers.length;
             providers.forEach(provider => {
+                if (provider.isArchived) return;
                 if (!provider.isHealthy || provider.needsRefresh || (provider.errorCount && provider.errorCount > 0)) {
                     resetCount++;
                 }
@@ -988,8 +1007,8 @@ async function _handleDeleteUnhealthyProviders(req, res, currentConfig, provider
         }
 
         // Filter out unhealthy providers (keep only healthy ones)
-        const unhealthyProviders = providers.filter(p => !p.isHealthy);
-        const healthyProviders = providers.filter(p => p.isHealthy);
+        const unhealthyProviders = providers.filter(p => !p.isArchived && !p.isHealthy);
+        const healthyProviders = providers.filter(p => p.isArchived || p.isHealthy);
         
         if (unhealthyProviders.length === 0) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1084,7 +1103,7 @@ async function _handleRefreshUnhealthyUuids(req, res, currentConfig, providerPoo
         // Filter unhealthy providers and refresh their UUIDs
         const refreshedProviders = [];
         for (const provider of providers) {
-            if (!provider.isHealthy) {
+            if (!provider.isArchived && !provider.isHealthy) {
                 const oldUuid = provider.uuid;
                 const newUuid = generateUUID();
                 provider.uuid = newUuid;
@@ -1187,7 +1206,7 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
             const providerConfig = providerStatus.config;
             
             // 跳过已禁用的节点
-            if (providerConfig.isDisabled) {
+            if (providerConfig.isArchived || providerConfig.isDisabled) {
                 logger.info(`[UI API] Skipping health check for disabled provider: ${providerConfig.uuid}`);
                 continue;
             }
@@ -1312,6 +1331,7 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
  * 强制刷新单个提供商的 OAuth Token
  */
 export async function handleRefreshProviderToken(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
+    if (rejectArchivedProvider(res, currentConfig, providerPoolManager, providerType, providerUuid)) return true;
     try {
         if (!providerPoolManager) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1355,6 +1375,7 @@ export async function handleRefreshProviderToken(req, res, currentConfig, provid
  * 支持单个文件路径或文件路径数组
  */
 export async function handleSingleProviderHealthCheck(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
+    if (rejectArchivedProvider(res, currentConfig, providerPoolManager, providerType, providerUuid)) return true;
     try {
         if (!providerPoolManager) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1376,10 +1397,7 @@ export async function handleSingleProviderHealthCheck(req, res, currentConfig, p
         const result = await runProviderHealthCheck(providerPoolManager, providerType, providerStatus);
 
         // 使用文件锁进行持久化，防止并发写入冲突
-        const poolFilePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
-        const filePath = await withFileLock(poolFilePath, async () => {
-            return persistProviderStatusToFile(currentConfig, providerPoolManager);
-        });
+        const filePath = await persistProviderStatusToFile(currentConfig, providerPoolManager);
 
         broadcastEvent('config_update', {
             action: 'health_check_single',
@@ -1580,6 +1598,7 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
  * 刷新特定提供商的UUID
  */
 export async function handleRefreshProviderUuid(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
+    if (rejectArchivedProvider(res, currentConfig, providerPoolManager, providerType, providerUuid)) return true;
     const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
     return withFileLock(filePath, () => _handleRefreshProviderUuid(req, res, currentConfig, providerPoolManager, providerType, providerUuid)).catch(err => {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1657,4 +1676,38 @@ async function _handleRefreshProviderUuid(req, res, currentConfig, providerPoolM
         res.end(JSON.stringify({ error: { message: error.message } }));
         return true;
     }
+}
+
+export async function handleArchiveProviders(req, res, currentConfig, providerPoolManager, providerType, action, uuid = null) {
+    try {
+        const body = uuid ? null : await getRequestBody(req);
+        const uuids = uuid ? [uuid] : body?.uuids;
+        const filePath = getProviderPoolsFilePath(currentConfig);
+        const result = await withCredentialLifecycleLock(() => withFileLock(filePath, async () => {
+            const pools = JSON.parse(readFileSync(filePath, 'utf8'));
+            const providers = buildArchiveUpdate(pools[providerType] || [], uuids, action, getCredentialArchiveBindings(providerType));
+            pools[providerType] = providers;
+            await atomicWriteFile(filePath, JSON.stringify(pools, null, 2), 'utf-8');
+            currentConfig.providerPools = pools;
+            const sync = providerPoolManager?.publishProviderConfig(providerType, providers, { action, changedUuids: uuids });
+            for (const id of uuids) invalidateServiceAdapter(providerType, id);
+            broadcastEvent('config_update', { action, providerType, timestamp: new Date().toISOString() });
+            return { success: true, saved: true, revision: sync?.revision || null,
+                runtimeSync: providerPoolManager?.configEventSink ? 'pending' : 'applied' };
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+    } catch (error) {
+        res.writeHead(error.status || 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: { message: error.conflicts?.length ? `${error.message}：${error.conflicts.map(item => item.keyLabel).join('、')}` : error.message, conflicts: error.conflicts || [] } }));
+    }
+    return true;
+}
+
+function rejectArchivedProvider(res, config, manager, type, uuid) {
+    const provider = loadProviderPools(config, manager)[type]?.find(item => item.uuid === uuid);
+    if (!provider?.isArchived) return false;
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: '凭据已归档，请先恢复', code: 'CREDENTIAL_ARCHIVED' } }));
+    return true;
 }

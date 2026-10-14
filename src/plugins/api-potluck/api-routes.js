@@ -474,7 +474,7 @@ function normalizeCodexCredential(providerType, provider, usageCache) {
         ? provider.config
         : (provider || {});
     const uuid = provider?.uuid || config.uuid || null;
-    if (!uuid || !isCodexProviderType(providerType)) return null;
+    if (!uuid || config.isArchived || !isCodexProviderType(providerType)) return null;
 
     const cachedInstance = getCachedCodexUsageInstance(providerType, uuid, usageCache);
     const quotaRatios = getCodexQuotaRemainingRatios(cachedInstance?.usage);
@@ -1226,6 +1226,10 @@ export async function handlePotluckApiRoutes(method, path, req, res) {
         return true;
 
     } catch (error) {
+        if (error?.code === 'CREDENTIAL_ARCHIVED') {
+            sendJson(res, 409, { success: false, error: { message: error.message, code: error.code } });
+            return true;
+        }
         if (error?.code === 'INVALID_KEY_ROUTING') {
             sendJson(res, 400, {
                 success: false,

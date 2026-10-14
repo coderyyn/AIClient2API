@@ -813,7 +813,7 @@ export class ProviderPoolManager {
         return (this.providerStatus[providerType] || []).filter(provider =>
             provider.uuid !== excludeUuid &&
             provider.config.isHealthy &&
-            !provider.config.isDisabled &&
+            !(provider.config.isArchived || provider.config.isDisabled) &&
             !provider.config.needsRefresh
         );
     }
@@ -970,6 +970,7 @@ export class ProviderPoolManager {
      */
     async refreshNode(providerType, uuid, force = true) {
         const provider = this._findProvider(providerType, uuid);
+        if (provider?.config.isArchived) return false;
         if (provider) {
             this._log('info', `Manually triggering refresh for node ${this._getDisplayName(provider.config)} (${providerType})`);
             this._enqueueRefresh(providerType, provider, force);
@@ -1010,7 +1011,7 @@ export class ProviderPoolManager {
                 
                 // logger.info(`Checking node ${this._getDisplayName(config)} (${providerType}) expiry date... configPath: ${configPath}`);
                 // 排除禁用的节点（不健康节点也应允许尝试刷新以恢复健康）
-                if (config.isDisabled) continue;
+                if (config.isArchived || config.isDisabled) continue;
 
                 if (configPath && fs.existsSync(configPath)) {
                     try {
@@ -1047,7 +1048,7 @@ export class ProviderPoolManager {
         for (const type in this.providerStatus) {
             if (!isAntigravityProviderType(type)) continue;
             const candidate = (this.providerStatus[type] || []).find(
-                provider => provider.config.isHealthy && !provider.config.isDisabled
+                provider => provider.config.isHealthy && !(provider.config.isArchived || provider.config.isDisabled)
             );
             if (candidate) {
                 void this._probeAntigravityAvailableModels(type, candidate);
@@ -1071,7 +1072,7 @@ export class ProviderPoolManager {
             
             // 挑选当前提供商下需要预热的节点
             const candidates = pool
-                .filter(p => p.config.isHealthy && !p.config.isDisabled && !this.refreshingUuids.has(p.uuid))
+                .filter(p => p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !this.refreshingUuids.has(p.uuid))
                 .sort((a, b) => {
                     // 优先级 A: 明确标记需要刷新的
                     if (a.config.needsRefresh && !b.config.needsRefresh) return -1;
@@ -1111,7 +1112,7 @@ export class ProviderPoolManager {
         const uuid = providerStatus.uuid;
         
         // 如果节点被禁用，不进行刷新
-        if (providerStatus.config.isDisabled) {
+        if (providerStatus.config.isArchived || providerStatus.config.isDisabled) {
             this._log('debug', `Skipping refresh for disabled node ${this._getDisplayName(providerStatus.config)}`);
             return;
         }
@@ -1418,7 +1419,9 @@ export class ProviderPoolManager {
      * @private
      */
     async _refreshNodeToken(providerType, providerStatus, force = false) {
-        const config = providerStatus.config;
+        const current = this._findProvider(providerType, providerStatus.uuid);
+        if (!current || current.config.isArchived || current.config.isDisabled) return false;
+        const config = current.config;
         let refreshFence = null;
         let refreshFenceTimer = null;
 
@@ -1458,6 +1461,7 @@ export class ProviderPoolManager {
         // await new Promise(resolve => setTimeout(resolve, randomDelay));
 
         try {
+            if (this._findProvider(providerType, config.uuid)?.config.isArchived) return false;
             // 增加刷新计数
             config.refreshCount = currentRefreshCount + 1;
 
@@ -1640,7 +1644,7 @@ export class ProviderPoolManager {
         const state = providerStatus.state;
         
         // 1. 基础健康分：不健康的排最后
-        if (!config.isHealthy || config.isDisabled) return 1e18;
+        if (!config.isHealthy || config.isArchived || config.isDisabled) return 1e18;
         
         // 检查并发限制
         const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
@@ -1741,12 +1745,12 @@ export class ProviderPoolManager {
         let candidates;
         if (isAntigravityProviderType(providerType) && Array.isArray(options.antigravityBaseCandidates)) {
             candidates = options.antigravityBaseCandidates.filter(p =>
-                p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+                p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh
             );
         } else {
             const availableProviders = this.providerStatus[providerType] || [];
             candidates = availableProviders.filter(p =>
-                p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+                p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh
             );
 
             if (Array.isArray(options.allowedProviderUuids)) {
@@ -1801,7 +1805,7 @@ export class ProviderPoolManager {
     _getAntigravityBaseCandidates(providerType, options = {}) {
         this._checkAndRecoverScheduledProviders(providerType);
         let candidates = (this.providerStatus[providerType] || []).filter(p =>
-            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+            p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh
         );
         if (Array.isArray(options.allowedProviderUuids)) {
             const allowedProviderUuids = new Set(options.allowedProviderUuids.filter(Boolean).map(String));
@@ -1845,7 +1849,7 @@ export class ProviderPoolManager {
             return [
                 config.uuid || provider.uuid || '',
                 config.isHealthy === true,
-                config.isDisabled === true,
+                (config.isArchived || config.isDisabled === true),
                 config.needsRefresh === true,
                 config.codexGeneralMax5hPercent ?? '',
                 config.codexGeneralMaxWeeklyPercent ?? '',
@@ -2110,7 +2114,7 @@ export class ProviderPoolManager {
             accumulateRoutingWait('credentialLeaseWaitMs', leaseWaitMs);
             if (!lease) return null;
             const selected = this._findProvider(lease.providerType, lease.uuid);
-            if (!selected) {
+            if (!selected || selected.config.isArchived || selected.config.isDisabled) {
                 await this.coordination.release(lease.leaseId);
                 return null;
             }
@@ -2131,6 +2135,7 @@ export class ProviderPoolManager {
         }
 
         const acquiredConfig = await this._acquireSelectedProviderSlot(selected, options);
+        if (!acquiredConfig) return null;
         this._log('info', `Mixed pool ${mixedPool.name} acquired ${selected.type}: ${this._getDisplayName(acquiredConfig)}${requestedModel ? ` for model: ${requestedModel}` : ''}`);
         return {
             config: acquiredConfig,
@@ -2142,6 +2147,7 @@ export class ProviderPoolManager {
 
     async _acquireSelectedProviderSlot(provider, options = {}) {
         const config = provider.config;
+        if (provider.config.isArchived || provider.config.isDisabled) return null;
         const state = provider.state;
         const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
         const queueLimit = parseInt(config.queueLimit || 0);
@@ -2180,6 +2186,7 @@ export class ProviderPoolManager {
             } finally {
                 state.waitingCount--;
             }
+            if (config.isArchived || config.isDisabled) return null;
 
             state.activeCount++;
             return config;
@@ -2198,7 +2205,7 @@ export class ProviderPoolManager {
      */
     getHealthyCount(providerType) {
         return (this.providerStatus[providerType] || []).filter(p =>
-            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+            p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh
         ).length;
     }
 
@@ -2238,7 +2245,7 @@ export class ProviderPoolManager {
         for (const providerType in this.providerStatus) {
             for (const providerStatus of this.providerStatus[providerType] || []) {
                 const config = providerStatus.config;
-                if (!config || config.isDisabled || config.needsRefresh !== true) continue;
+                if (!config || config.isArchived || config.isDisabled || config.needsRefresh !== true) continue;
                 if ((config.refreshCount || 0) !== 0) continue;
                 const lastActivity = Math.max(
                     Date.parse(config.lastHealthStateTime || '') || 0,
@@ -2431,7 +2438,7 @@ export class ProviderPoolManager {
 
                     // Ensure initial health and usage stats are present in the config
                     providerConfig.isHealthy = providerConfig.isHealthy !== undefined ? providerConfig.isHealthy : true;
-                    providerConfig.isDisabled = providerConfig.isDisabled !== undefined ? providerConfig.isDisabled : false;
+                    providerConfig.isDisabled = providerConfig.isArchived === true || (providerConfig.isDisabled !== undefined ? providerConfig.isDisabled : false);
                     
                     // --- V3: 统计数据管理 ---
                     if (isColdStart && !syncFromConfig) {
@@ -2495,7 +2502,7 @@ export class ProviderPoolManager {
                     // Quota exhaustion is bucket-scoped and must not leave a
                     // persisted Codex credential looking auth-unhealthy.
                     if (isCodexProviderType(providerType)
-                        && providerConfig.isDisabled !== true
+                        && (!providerConfig.isArchived && providerConfig.isDisabled !== true)
                         && providerConfig.isHealthy === false
                         && isCodexQuotaExhaustionMessage(providerConfig.lastErrorMessage)) {
                         providerConfig.isHealthy = true;
@@ -2577,7 +2584,7 @@ export class ProviderPoolManager {
             accumulateRoutingWait('credentialLeaseWaitMs', leaseWaitMs);
             if (!lease) return null;
             const selected = this._findProvider(lease.providerType, lease.uuid);
-            if (!selected) {
+            if (!selected || selected.config.isArchived || selected.config.isDisabled) {
                 await this.coordination.release(lease.leaseId);
                 return null;
             }
@@ -2600,6 +2607,7 @@ export class ProviderPoolManager {
         if (!provider) return selectedConfig;
 
         const config = provider.config;
+        if (provider.config.isArchived || provider.config.isDisabled) return null;
         const state = provider.state;
         const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
         const queueLimit = parseInt(config.queueLimit || 0);
@@ -2643,6 +2651,7 @@ export class ProviderPoolManager {
             } finally {
                 state.waitingCount--;
             }
+            if (config.isArchived || config.isDisabled) return null;
 
             // 获得信号后，增加活跃计数
             state.activeCount++;
@@ -2792,7 +2801,7 @@ export class ProviderPoolManager {
 
         if (selectionDiagnostics) {
             const temporaryRecoveryTimes = availableProviders
-                .filter(provider => provider.config.isHealthy === false && !provider.config.isDisabled)
+                .filter(provider => provider.config.isHealthy === false && !(provider.config.isArchived || provider.config.isDisabled))
                 .map(provider => Date.parse(provider.config.scheduledRecoveryTime || ''))
                 .filter(recoveryTime => Number.isFinite(recoveryTime) && recoveryTime > now);
             selectionDiagnostics.temporaryCooldownSkipped = temporaryRecoveryTimes.length;
@@ -2805,13 +2814,13 @@ export class ProviderPoolManager {
         const minSeq = Math.min(...availableProviders.map(p => p.config._lastSelectionSeq || 0));
 
         let availableAndHealthyProviders = availableProviders.filter(p =>
-            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+            p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh
         );
         if (selectionDiagnostics) {
             selectionDiagnostics.healthCooldownSkipped = availableProviders.length - availableAndHealthyProviders.length;
             const healthReasons = {};
             for (const provider of availableProviders) {
-                if (provider.config.isDisabled) healthReasons.disabled = (healthReasons.disabled || 0) + 1;
+                if (provider.config.isArchived || provider.config.isDisabled) healthReasons.disabled = (healthReasons.disabled || 0) + 1;
                 else if (provider.config.needsRefresh) healthReasons.needs_refresh = (healthReasons.needs_refresh || 0) + 1;
                 else if (!provider.config.isHealthy) healthReasons.unhealthy = (healthReasons.unhealthy || 0) + 1;
             }
@@ -3570,7 +3579,7 @@ export class ProviderPoolManager {
     async _probeAntigravityAvailableModels(providerType, providerStatus) {
         if (!isAntigravityProviderType(providerType)) return false;
         const config = providerStatus?.config;
-        if (!config || config.isDisabled) return false;
+        if (!config || config.isArchived || config.isDisabled) return false;
 
         try {
             const tempConfig = {
@@ -4873,7 +4882,7 @@ export class ProviderPoolManager {
         if (providers.length === 0) {
             return true;
         }
-        return providers.every(p => !p.config.isHealthy || p.config.isDisabled);
+        return providers.every(p => p.config.isArchived || !p.config.isHealthy || p.config.isDisabled);
     }
 
     /**
@@ -4891,7 +4900,7 @@ export class ProviderPoolManager {
         };
         
         for (const p of providers) {
-            if (p.config.isDisabled) {
+            if (p.config.isArchived || p.config.isDisabled) {
                 stats.disabled++;
             } else if (p.config.isHealthy) {
                 stats.healthy++;
@@ -5375,7 +5384,7 @@ export class ProviderPoolManager {
         if (task.configRevision !== this.providerConfigRevision) return null;
         const provider = this._findProvider(MODEL_PROVIDER.ANTIGRAVITY, task.uuid);
         const state = provider?.config.antigravityQuotaHealth?.models?.[task.model];
-        if (!cooldownProbeEligible(provider?.config, state) || cooldownVersion(state) !== task.version) return null;
+        if (provider?.config.isArchived || !cooldownProbeEligible(provider?.config, state) || cooldownVersion(state) !== task.version) return null;
         return provider;
     }
 
@@ -5815,6 +5824,7 @@ export class ProviderPoolManager {
         if (!pool) return;
 
         pool.forEach(provider => {
+            if (provider.config.isArchived) return;
             provider.config.isHealthy = true;
             provider.config.errorCount = 0;
             provider.config.lastErrorTime = null;
@@ -5860,6 +5870,7 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
+            if (provider.config.isArchived) return;
             provider.config.isDisabled = false;
             this._syncProviderBalanceOnEnable(providerType, provider);
             this._log('info', `Enabled provider: ${this._getDisplayName(providerConfig)} for type ${providerType}`);
@@ -6173,7 +6184,7 @@ export class ProviderPoolManager {
             
             for (const provider of this.providerStatus[providerType]) {
                 // Skip manually disabled providers
-                if (provider.config.isDisabled === true) {
+                if (provider.config.isArchived || provider.config.isDisabled === true) {
                     skippedCount++;
                     this._log('debug', `[ScheduledHealthCheck] Skipping ${this._getDisplayName(provider.config)} (${providerType}): manually disabled`);
                     continue;
@@ -6333,6 +6344,7 @@ export class ProviderPoolManager {
      * @returns {Promise<{success: boolean, modelName: string, errorMessage: string}>} - Health check result object.
      */
     async _checkProviderHealth(providerType, providerConfig) {
+        if (this._findProvider(providerType, providerConfig.uuid)?.config.isArchived || providerConfig.isArchived) return null;
         const healthCheckKey = providerConfig?.uuid ? `${providerType}:${providerConfig.uuid}` : null;
         if (healthCheckKey && this.healthCheckPromises.has(healthCheckKey)) {
             this._log('debug', `[HealthCheck] Reusing in-flight check for ${healthCheckKey}`);
@@ -6375,6 +6387,7 @@ export class ProviderPoolManager {
     }
 
     async _runProviderHealthCheck(providerType, providerConfig) {
+        if (this._findProvider(providerType, providerConfig.uuid)?.config.isArchived || providerConfig.isArchived) return null;
         // 确定健康检查使用的模型名称
         const baseProviderType = this._getBaseProviderType(providerType);
         const modelName = providerConfig.checkModelName ||
@@ -6612,6 +6625,13 @@ export class ProviderPoolManager {
     applyProviderConfigSync(event) {
         const result = applyProviderConfigEvent(this.providerPools, event, { revision: this.providerConfigRevision });
         if (!result.applied) return result;
+        // Queued work may still hold the old config object. Mark it before rebuilding.
+        for (const provider of this.providerStatus[event.providerType] || []) {
+            const next = event.providers.find(item => item.uuid === provider.uuid);
+            if (next?.isArchived) Object.assign(provider.config, { isArchived: true, isDisabled: true, archivedAt: next.archivedAt });
+        }
+        this._codexQuotaFilterSnapshots?.clear();
+        this.invalidateAntigravityAvailability();
         this.providerConfigRevision = result.revision;
         this.initializeProviderStatus(true);
         return result;

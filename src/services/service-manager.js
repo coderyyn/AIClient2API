@@ -788,6 +788,17 @@ export async function autoLinkProviderConfigs(config, options = {}) {
         const filePath = config.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
         try {
             await withFileLock(filePath, async () => {
+                // Auto-link may have awaited filesystem discovery while archive/restore committed.
+                const latest = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : {};
+                for (const [type, providers] of Object.entries(config.providerPools)) {
+                    for (const provider of providers) {
+                        const persisted = latest[type]?.find(item => item.uuid === provider.uuid);
+                        if (!persisted) continue;
+                        provider.isArchived = persisted.isArchived === true;
+                        provider.archivedAt = persisted.archivedAt || null;
+                        if (persisted.isArchived || persisted.isDisabled) provider.isDisabled = true;
+                    }
+                }
                 await atomicWriteFile(filePath, JSON.stringify(config.providerPools, null, 2), 'utf8');
             });
             persistedProviderChanges = true;
@@ -1305,7 +1316,7 @@ export async function initApiService(config, isReady = false, runtimeOptions = {
             // 鍒濆鍖栬鎻愪緵鍟嗙被鍨嬬殑鎵€鏈夎妭鐐?
             for (const providerConfig of providerConfigs) {
                 // 璺宠繃宸茬鐢ㄧ殑鑺傜偣
-                if (providerConfig.isDisabled) {
+                if (providerConfig.isArchived || providerConfig.isDisabled) {
                     continue;
                 }
                 
@@ -1952,7 +1963,7 @@ export async function getProviderStatus(config, options = {}) {
         
         const slimArr = providerPools[key]
             .filter(item => {
-                if (item.isDisabled) return false;
+                if (item.isArchived || item.isDisabled) return false;
                 if (filterCustomName && item.customName !== filterCustomName) return false;
                 return true;
             })

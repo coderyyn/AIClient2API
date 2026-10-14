@@ -1,3 +1,4 @@
+import { withCredentialLifecycleLock, assertRoutingNotArchived } from '../../utils/provider-archive.js';
 /**
  * API 大锅饭 - Key 管理模块
  * 使用内存缓存 + 写锁 + 定期持久化，解决并发安全问题
@@ -1951,7 +1952,10 @@ function checkAndResetDailyCount(keyData) {
  * @param {string} name - Key 名称
  * @param {number} [dailyLimit] - 每日限额，不传则使用配置的默认值
  */
-export async function createKey(name = '', dailyLimit = null, options = {}) {
+export function createKey(name = '', dailyLimit = null, options = {}) {
+    return withCredentialLifecycleLock(() => createKeyUnlocked(name, dailyLimit, options));
+}
+async function createKeyUnlocked(name, dailyLimit, options) {
     ensureLoaded();
     const config = getConfig();
     const actualDailyLimit = dailyLimit ?? config.defaultDailyLimit ?? DEFAULT_CONFIG.defaultDailyLimit;
@@ -1961,6 +1965,7 @@ export async function createKey(name = '', dailyLimit = null, options = {}) {
     const today = getTodayDateString();
 
     const defaultRouting = normalizeKeyRouting(options.defaultRouting || { routingMode: 'pool' });
+    assertRoutingNotArchived(defaultRouting);
     const keyData = {
         id: apiKey,
         name: name || `Key-${Object.keys(keyStore.keys).length + 1}`,
@@ -2207,12 +2212,16 @@ export async function updateKeyName(keyId, newName) {
 /**
  * 更新 Key 的 Codex 凭据路由配置。
  */
-export async function updateKeyRouting(keyId, routing = {}) {
+export function updateKeyRouting(keyId, routing = {}) {
+    return withCredentialLifecycleLock(() => updateKeyRoutingUnlocked(keyId, routing));
+}
+async function updateKeyRoutingUnlocked(keyId, routing) {
     ensureLoaded();
     const keyData = keyStore.keys[keyId];
     if (!keyData) return null;
 
     const normalizedRouting = normalizeKeyRouting(routing, { strict: true });
+    assertRoutingNotArchived(normalizedRouting);
     Object.assign(keyData, normalizedRouting);
     const targetVersion = markDirty();
     const result = await buildManagementMutationResult(targetVersion, keyData);
@@ -3012,3 +3021,22 @@ export async function regenerateKey(oldKeyId) {
 
 // 导出常量
 export { KEY_PREFIX };
+
+// Only management-safe labels leave the key store; never expose the raw key ID.
+export function getCredentialArchiveBindings(providerType) {
+    ensureLoaded();
+    const bindings = [];
+    // Pending unbinds must not permit archive until the durable key store agrees.
+    const persistedKeys = existsSync(KEYS_STORE_FILE) ? JSON.parse(readFileSync(KEYS_STORE_FILE, 'utf8')).keys || {} : {};
+    for (const key of [...Object.values(keyStore.keys), ...Object.values(persistedKeys)]) {
+        const keyLabel = key.name || `Key-${hashSecret(key.id).slice(-8)}`;
+        if (key.routingMode === 'fixed' && key.fixedCredential?.uuid
+            && (!key.fixedCredential.providerType || key.fixedCredential.providerType === providerType)) {
+            bindings.push({ uuid: key.fixedCredential.uuid, keyLabel });
+        }
+        if (key.routingMode === 'restricted' && providerType === 'openai-codex-oauth') {
+            for (const uuid of key.restrictedCredentialUuids || []) bindings.push({ uuid, keyLabel });
+        }
+    }
+    return bindings.filter((binding, index) => bindings.findIndex(item => item.uuid === binding.uuid && item.keyLabel === binding.keyLabel) === index);
+}
