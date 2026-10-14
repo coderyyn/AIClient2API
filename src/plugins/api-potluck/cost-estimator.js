@@ -11,6 +11,7 @@ const PRICING = JSON.parse(fs.readFileSync(PRICING_FILE, 'utf8'));
 export const PRICING_VERSION = PRICING.pricingVersion;
 
 const PRICE_PER_MILLION = PRICING.pricePerMillion;
+const PRICE_SCHEDULE = PRICING.priceSchedule || {};
 const LONG_CONTEXT_PRICING = PRICING.longContext || {};
 
 const MODEL_PRICE_ALIASES = PRICING.modelPriceAliases;
@@ -63,7 +64,7 @@ function isTextPricingModel(model) {
     return normalized !== '' && !/(?:image|audio|tts|transcrib|whisper)/.test(normalized);
 }
 
-function normalizeUsageParts(usage = {}) {
+function normalizeUsageParts(usage = {}, pricedModel = '') {
     const promptTokens = toNumber(usage.promptTokens);
     const cachedTokens = Math.min(promptTokens, toNumber(usage.cachedTokens));
     const cacheWriteTokens = toNumber(
@@ -72,10 +73,25 @@ function normalizeUsageParts(usage = {}) {
         usage.input_tokens_details?.cache_write_tokens ?? usage.input_tokens_details?.cache_creation_tokens
     );
     const billableInputTokens = Math.max(0, promptTokens - cachedTokens);
-    const outputTokens = toNumber(usage.completionTokens);
+    const completionTokens = toNumber(usage.completionTokens);
+    const reasoningTokens = toNumber(usage.reasoningTokens);
+    const totalTokens = toNumber(usage.totalTokens) || (promptTokens + completionTokens);
+    // Gemini usageMetadata reports thoughtsTokenCount separately from
+    // candidatesTokenCount, while totalTokenCount includes both.
+    const outputTokens = pricedModel.startsWith('gemini-') &&
+        totalTokens >= promptTokens + completionTokens + reasoningTokens
+        ? completionTokens + reasoningTokens : completionTokens;
+    const imageOutputTokens = Math.min(completionTokens, toNumber(usage.imageOutputTokens));
     const classifiedTokens = billableInputTokens + cachedTokens + outputTokens;
-    const totalTokens = toNumber(usage.totalTokens) || (promptTokens + outputTokens);
-    return { promptTokens, cachedTokens, cacheWriteTokens, billableInputTokens, outputTokens, classifiedTokens, totalTokens };
+    return { promptTokens, cachedTokens, cacheWriteTokens, billableInputTokens, outputTokens, imageOutputTokens, classifiedTokens, totalTokens };
+}
+
+function resolvePrice(pricedModel, at = new Date()) {
+    const base = PRICE_PER_MILLION[pricedModel];
+    if (!base) return null;
+    const date = at instanceof Date ? at.toISOString().slice(0, 10) : String(at).slice(0, 10);
+    const rate = (PRICE_SCHEDULE[pricedModel] || []).filter(entry => entry.from <= date).at(-1);
+    return rate ? { ...base, ...rate } : base;
 }
 
 function getLongContextRates(parts) {
@@ -121,8 +137,8 @@ export function normalizeConversionModel(model) {
     return GEMINI_CONVERSION_MODELS.includes(normalized) ? normalized : DEFAULT_CONVERSION_MODEL;
 }
 
-export function getModelPricing(model) {
-    return PRICE_PER_MILLION[resolvePricedModel(model).pricedModel] || null;
+export function getModelPricing(model, at = new Date()) {
+    return resolvePrice(resolvePricedModel(model).pricedModel, at);
 }
 
 export function buildAveragePricingProfile(models = {}) {
@@ -198,8 +214,8 @@ function estimateFromAverageProfile(usage, profile) {
 
 export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL, options = {}) {
     const resolvedModel = resolvePricedModel(model);
-    const pricing = getModelPricing(resolvedModel.pricedModel);
-    const parts = normalizeUsageParts(usage);
+    const pricing = getModelPricing(resolvedModel.pricedModel, options.at);
+    const parts = normalizeUsageParts(usage, resolvedModel.pricedModel);
 
     if (!pricing) {
         const average = estimateFromAverageProfile(usage, options.averageProfile);
@@ -244,10 +260,14 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL, 
     }
 
     const longContextRates = getLongContextRates(parts);
+    const unknownImageTokens = pricing.imageOutput && !parts.imageOutputTokens
+        ? Math.max(0, toNumber(usage.completionTokens)) : 0;
+    const textOutputTokens = parts.outputTokens - parts.imageOutputTokens - unknownImageTokens;
     const standardUsd = (
         (parts.billableInputTokens * pricing.input * longContextRates.inputMultiplier) +
         (parts.cachedTokens * pricing.cachedInput * longContextRates.cachedInputMultiplier) +
-        (parts.outputTokens * pricing.output * longContextRates.outputMultiplier)
+        (textOutputTokens * pricing.output * longContextRates.outputMultiplier) +
+        (parts.imageOutputTokens * (pricing.imageOutput || pricing.output) * longContextRates.outputMultiplier)
     ) / 1_000_000;
     const usd = standardUsd * resolvedModel.multiplier;
 
@@ -256,10 +276,10 @@ export function estimateUsageCost(usage = {}, model = DEFAULT_CONVERSION_MODEL, 
         actualUsd: usd,
         estimatedUsd: 0,
         estimatedPriceTokens: 0,
-        missingPriceTokens: 0,
+        missingPriceTokens: unknownImageTokens,
         model: resolvedModel.displayModel,
         pricingVersion: PRICING_VERSION,
-        pricingSource: resolvedModel.multiplierSource || pricing.source,
+        pricingSource: unknownImageTokens ? `partial:${pricing.source}` : (resolvedModel.multiplierSource || pricing.source),
         priceMultiplier: resolvedModel.multiplier
     };
 }

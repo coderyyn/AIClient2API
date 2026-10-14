@@ -42,6 +42,7 @@ function createTextInput(filePath) {
 export const PRICING_VERSION = PRICING.pricingVersion;
 
 const PRICE_PER_MILLION = PRICING.pricePerMillion;
+const PRICE_SCHEDULE = PRICING.priceSchedule || {};
 const LONG_CONTEXT_PRICING = PRICING.longContext || {};
 
 const MODEL_PRICE_ALIASES = PRICING.modelPriceAliases;
@@ -68,6 +69,14 @@ function resolvePricedModel(model) {
   };
 }
 
+function resolvePrice(pricedModel, date) {
+  const base = PRICE_PER_MILLION[pricedModel];
+  if (!base) return null;
+  const day = String(date || new Date().toISOString()).slice(0, 10);
+  const rate = (PRICE_SCHEDULE[pricedModel] || []).filter(entry => entry.from <= day).at(-1);
+  return rate ? { ...base, ...rate } : base;
+}
+
 function normalizeEmail(value) {
   const text = String(value || '').trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : null;
@@ -91,6 +100,7 @@ function normalizeUsage(usage = {}) {
       usage.input_tokens_details?.cached_tokens
     ),
     completionTokens: toNumber(usage.completionTokens ?? usage.completion_tokens ?? usage.output_tokens),
+    imageOutputTokens: toNumber(usage.imageOutputTokens ?? usage.image_output_tokens),
     reasoningTokens: toNumber(
       usage.reasoningTokens ??
       usage.reasoning_tokens ??
@@ -109,6 +119,7 @@ function emptyUsage() {
     promptTokens: 0,
     cachedTokens: 0,
     completionTokens: 0,
+    imageOutputTokens: 0,
     reasoningTokens: 0,
     totalTokens: 0,
   };
@@ -120,6 +131,7 @@ function addUsage(target, usage) {
   target.promptTokens += normalized.promptTokens;
   target.cachedTokens += normalized.cachedTokens;
   target.completionTokens += normalized.completionTokens;
+  target.imageOutputTokens += normalized.imageOutputTokens;
   target.reasoningTokens += normalized.reasoningTokens;
   target.totalTokens += normalized.totalTokens;
 }
@@ -132,6 +144,7 @@ function subtractUsage(total, covered) {
     promptTokens: Math.max(0, normalizedTotal.promptTokens - normalizedCovered.promptTokens),
     cachedTokens: Math.max(0, normalizedTotal.cachedTokens - normalizedCovered.cachedTokens),
     completionTokens: Math.max(0, normalizedTotal.completionTokens - normalizedCovered.completionTokens),
+    imageOutputTokens: Math.max(0, normalizedTotal.imageOutputTokens - normalizedCovered.imageOutputTokens),
     reasoningTokens: Math.max(0, normalizedTotal.reasoningTokens - normalizedCovered.reasoningTokens),
     totalTokens: Math.max(0, normalizedTotal.totalTokens - normalizedCovered.totalTokens),
   };
@@ -143,6 +156,7 @@ function hasUsageValue(usage) {
     normalized.promptTokens > 0 ||
     normalized.cachedTokens > 0 ||
     normalized.completionTokens > 0 ||
+    normalized.imageOutputTokens > 0 ||
     normalized.reasoningTokens > 0 ||
     normalized.totalTokens > 0;
 }
@@ -302,9 +316,9 @@ export function resolveAuditProvider(event = {}, providerByEmail = new Map()) {
   return (email && providerByEmail.get(email)) || 'unknown';
 }
 
-function estimateUsageCost(usage, model, { averageProfile = null, averageScope = null } = {}) {
+function estimateUsageCost(usage, model, { averageProfile = null, averageScope = null, date = null } = {}) {
   const resolvedModel = resolvePricedModel(model);
-  const pricing = PRICE_PER_MILLION[resolvedModel.pricedModel];
+  const pricing = resolvePrice(resolvedModel.pricedModel, date);
   if (!pricing) {
     const normalized = normalizeUsage(usage);
     if (averageProfile?.effective > 0 && normalized.totalTokens > 0) {
@@ -350,10 +364,17 @@ function estimateUsageCost(usage, model, { averageProfile = null, averageScope =
   const cachedTokens = Math.min(normalized.promptTokens, normalized.cachedTokens);
   const billableInputTokens = Math.max(0, normalized.promptTokens - cachedTokens);
   const longContextRates = getLongContextRates(normalized.promptTokens);
+  const outputTokens = resolvedModel.pricedModel.startsWith('gemini-') &&
+    normalized.totalTokens >= normalized.promptTokens + normalized.completionTokens + normalized.reasoningTokens
+    ? normalized.completionTokens + normalized.reasoningTokens : normalized.completionTokens;
+  const imageOutputTokens = Math.min(normalized.completionTokens, normalized.imageOutputTokens);
+  const unknownImageTokens = pricing.imageOutput && !imageOutputTokens
+    ? Math.max(0, normalized.completionTokens) : 0;
   const actualUsd = ((
     billableInputTokens * pricing.input * longContextRates.inputMultiplier +
     cachedTokens * pricing.cachedInput * longContextRates.cachedInputMultiplier +
-    normalized.completionTokens * pricing.output * longContextRates.outputMultiplier
+    (outputTokens - imageOutputTokens - unknownImageTokens) * pricing.output * longContextRates.outputMultiplier +
+    imageOutputTokens * (pricing.imageOutput || pricing.output) * longContextRates.outputMultiplier
   ) / 1_000_000) * resolvedModel.multiplier;
 
   return {
@@ -361,9 +382,9 @@ function estimateUsageCost(usage, model, { averageProfile = null, averageScope =
     actualUsd,
     estimatedUsd: 0,
     estimatedPriceTokens: 0,
-    missingPriceTokens: 0,
+    missingPriceTokens: unknownImageTokens,
     pricingModel: resolvedModel.displayModel,
-    pricingSource: pricing.source,
+    pricingSource: unknownImageTokens ? `partial:${pricing.source}` : pricing.source,
   };
 }
 
@@ -394,7 +415,7 @@ function applyAveragePricing(rows) {
     const averageScope = providerProfile ? 'provider-day' : 'global-day';
     return {
       ...row,
-      cost: estimateUsageCost(row.usage, row.model, { averageProfile, averageScope }),
+      cost: estimateUsageCost(row.usage, row.model, { averageProfile, averageScope, date }),
       pricingVersion: PRICING_VERSION,
     };
   });
@@ -412,7 +433,7 @@ function baseRow({
   usage,
 }) {
   const normalizedUsage = normalizeUsage(usage);
-  const cost = estimateUsageCost(normalizedUsage, model);
+  const cost = estimateUsageCost(normalizedUsage, model, { date });
   return {
     schemaVersion: 1,
     ledgerType: hour === null ? 'daily-key-account-model' : 'hourly-key-account-model',

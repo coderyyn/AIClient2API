@@ -65,13 +65,18 @@ describe('upstream model registrations', () => {
         expect(getProviderModels('gemini-antigravity')).toEqual(expect.arrayContaining([
             'gemini-3.8-flash-low',
             'gemini-3.8-flash-medium',
-            'gemini-3.8-flash-high'
+            'gemini-3.8-flash-high',
+            'gemini-3.8-flash-tiered'
         ]));
         expect(getProviderModels('gemini-antigravity')).toEqual(expect.not.arrayContaining([
             'gemini-3.8-flash',
-            'gemini-3.8-flash-tiered',
             'gemini-3.8-flash-cyber'
         ]));
+    });
+
+    test('registers only the verified upstream Gemini 4 Argon effort ID', () => {
+        expect(getProviderModels('gemini-antigravity')).toContain('gemini-4-argon-high');
+        expect(getProviderModels('gemini-antigravity')).not.toContain('gemini-4-argon-low');
     });
 
     test('registers Claude Opus 5 for Kiro', () => {

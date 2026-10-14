@@ -363,16 +363,41 @@ describe('api potluck cost estimator', () => {
         const usage = { promptTokens: 1000, cachedTokens: 100, completionTokens: 500, totalTokens: 1500 };
         const models = [
             'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-thinking',
-            'gemini-3-flash', 'gemini-3-flash-agent', 'gemini-3.1-flash-image',
+            'gemini-3-flash', 'gemini-3-flash-agent',
             'gemini-3.1-pro-low', 'gemini-3.1-pro-high', 'gemini-pro-agent',
             'gemini-3.5-flash-low', 'gemini-3.5-flash-high',
             'gemini-3.6-flash', 'gemini-3.6-flash-low', 'gemini-3.6-flash-high',
             'gemini-3.7-flash', 'gemini-3.7-flash-low', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-high',
-            'gemini-3.8-flash', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high'
+            'gemini-3.8-flash', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high',
+            'gemini-3.8-flash-tiered', 'gemini-4-argon-high'
         ];
 
         for (const model of models) {
             expect(estimateUsageCost(usage, model)).toMatchObject({ missingPriceTokens: 0 });
         }
+    });
+
+    test('applies dated Gemini Argon and Flash promotional rates', () => {
+        const usage = { promptTokens: 1_000_000, cachedTokens: 0, completionTokens: 100_000, totalTokens: 1_100_000 };
+        expect(estimateUsageCost(usage, 'gemini-4-argon-high', { at: '2026-11-30' }).usd).toBeCloseTo(3);
+        expect(estimateUsageCost(usage, 'gemini-4-argon-high', { at: '2026-12-01' }).usd).toBeCloseTo(6);
+        expect(estimateUsageCost(usage, 'gemini-3.8-flash-high', { at: '2026-12-31' }).usd).toBeCloseTo(1.125);
+        expect(estimateUsageCost(usage, 'gemini-3.8-flash-high', { at: '2027-01-01' }).usd).toBeCloseTo(2.25);
+    });
+
+    test('does not claim a precise image price without image output token counts', () => {
+        const usage = { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 };
+        const partial = estimateUsageCost(usage, 'gemini-3.1-flash-image');
+        expect(partial.missingPriceTokens).toBe(500);
+        expect(partial.pricingSource).toMatch(/^partial:/);
+        const exact = estimateUsageCost({ ...usage, imageOutputTokens: 400 }, 'gemini-3.1-flash-image');
+        expect(exact.missingPriceTokens).toBe(0);
+        expect(exact.usd).toBeCloseTo((1000 * 0.5 + 100 * 3 + 400 * 60) / 1_000_000);
+    });
+
+    test('includes Gemini thoughts only when total proves they are separate', () => {
+        const usage = { promptTokens: 12, completionTokens: 8, reasoningTokens: 80, totalTokens: 100 };
+        expect(estimateUsageCost(usage, 'gemini-3.8-flash').usd)
+            .toBeCloseTo((12 * 0.75 + 88 * 3.75) / 1_000_000);
     });
 });

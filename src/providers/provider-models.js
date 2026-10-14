@@ -74,6 +74,8 @@ export const PROVIDER_MODELS = {
         'gemini-3.8-flash-low',
         'gemini-3.8-flash-medium',
         'gemini-3.8-flash-high',
+        'gemini-3.8-flash-tiered',
+        'gemini-4-argon-high',
         'gemini-claude-opus-4-6-thinking',
         'gemini-claude-sonnet-4-6',
         'claude-opus-4-6-thinking',

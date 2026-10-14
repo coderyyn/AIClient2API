@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { estimateUsageCost } from '../../src/plugins/api-potluck/cost-estimator.js';
 import {
   aggregateAuditEvents,
   buildKeyLookup,
@@ -14,6 +15,50 @@ import {
   resolveAuditProvider,
   PRICING_VERSION,
 } from '../../scripts/usage-ledger/daily-usage-ledger.mjs';
+
+test('daily and hourly image costs preserve modality tokens and match the live estimator', () => {
+  const date = '2026-10-14';
+  for (const imageOutputTokens of [undefined, 400, 500]) {
+    const usage = { requestCount: 1, promptTokens: 1000, completionTokens: 500, totalTokens: 1500,
+      ...(imageOutputTokens === undefined ? {} : { imageOutputTokens }) };
+    const account = { provider: 'gemini-antigravity', accountEmail: 'user@example.com',
+      models: { 'gemini-3.1-flash-image': usage } };
+    const accounts = { 'gemini-antigravity:user@example.com': account };
+    const day = { accounts, hours: { '10': { accounts } } };
+    const store = { keys: { example_image_key: { usageHistory: { [date]: day } } } };
+    const expected = estimateUsageCost(usage, 'gemini-3.1-flash-image', { at: date });
+    const dailyRows = buildDailyRowsFromPotluck(store, { from: date, to: date });
+    assert.equal(dailyRows.length, 1);
+    const hourlyRows = buildHourlyRowsFromPotluck(store, { from: date, to: date });
+    assert.equal(hourlyRows.length, 1);
+    for (const row of [...dailyRows, ...hourlyRows]) {
+      assert.equal(row.usage.imageOutputTokens, imageOutputTokens || 0);
+      assert.ok(Math.abs(row.cost.actualUsd - expected.actualUsd) < 1e-12);
+      assert.equal(row.cost.missingPriceTokens, expected.missingPriceTokens);
+      assert.equal(row.cost.pricingSource, expected.pricingSource);
+    }
+  }
+});
+
+test('image summary deltas preserve uncovered image tokens without double counting', () => {
+  const date = '2026-10-14';
+  const model = 'gemini-3.1-flash-image';
+  const covered = { requestCount: 1, promptTokens: 1000, completionTokens: 500,
+    imageOutputTokens: 400, totalTokens: 1500 };
+  const total = Object.fromEntries(Object.entries(covered).map(([key, value]) => [key, value * 2]));
+  const store = { keys: { example_image_key: { usageHistory: { [date]: {
+    models: { [model]: total },
+    accounts: { 'gemini-antigravity:user@example.com': {
+      provider: 'gemini-antigravity', accountEmail: 'user@example.com', models: { [model]: covered },
+    } },
+  } } } } };
+  const rows = buildDailyRowsFromPotluck(store, { from: date, to: date });
+  assert.equal(rows.length, 2);
+  assert.equal(rows.reduce((sum, row) => sum + row.usage.imageOutputTokens, 0), 800);
+  assert.ok(rows.every(row => row.cost.missingPriceTokens === 0));
+  assert.ok(Math.abs(rows.reduce((sum, row) => sum + row.cost.actualUsd, 0) -
+    estimateUsageCost(total, model, { at: date }).actualUsd) < 1e-12);
+});
 
 test('SQLite usage history remains ledger-readable after metadata JSON is stripped', () => {
   const rawKey = 'example_sqlite_key';
@@ -130,7 +175,7 @@ test('potluck daily rows price GPT-5.6 fast models with the configured multiplie
   };
 
   const [row] = buildDailyRowsFromPotluck(store, { from: '2026-07-12', to: '2026-07-12' });
-  const normalCost = ((750_000 * 5) + (250_000 * 0.5) + (100_000 * 30)) / 1_000_000;
+  const normalCost = ((750_000 * 4) + (250_000 * 0.4) + (100_000 * 20)) / 1_000_000;
 
   assert.equal(row.cost.missingPriceTokens, 0);
   assert.ok(Math.abs(row.cost.actualUsd - normalCost * 2.5) < 1e-12);

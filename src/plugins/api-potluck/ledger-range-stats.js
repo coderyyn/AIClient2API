@@ -198,7 +198,7 @@ export function createLedgerRangeAggregator({
                 const globalProfile = globalProfiles.get(date);
                 const averageProfile = providerProfile || globalProfile;
                 const averageScope = providerProfile ? 'provider-day' : 'global-day';
-                const currentCost = estimateUsageCost(row.usage || {}, row.model || 'unknown', { averageProfile, averageScope });
+                const currentCost = estimateUsageCost(row.usage || {}, row.model || 'unknown', { averageProfile, averageScope, at: date });
 
                 addRowToBucket(summary, row, currentCost);
 

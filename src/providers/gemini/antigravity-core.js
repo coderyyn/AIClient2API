@@ -34,7 +34,7 @@ const ANTIGRAVITY_BASE_URL_PROD = 'https://cloudcode-pa.googleapis.com';
 const ANTIGRAVITY_API_VERSION = 'v1internal';
 const OAUTH_CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
 const OAUTH_CLIENT_SECRET = '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';
-const DEFAULT_USER_AGENT = 'antigravity/2.8.1 darwin/arm64';
+const DEFAULT_USER_AGENT = 'antigravity/2.9.1 darwin/arm64';
 const REFRESH_SKEW = 3000; // 3000秒（50分钟）提前刷新Token
 
 const ANTIGRAVITY_SYSTEM_PROMPT = `You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**`;
@@ -71,6 +71,7 @@ const ANTIGRAVITY_CLIENT_MODEL_THINKING_LEVEL = {
     'gemini-3.6-flash-high': 'high',
     'gemini-3.7-flash-high': 'high',
     'gemini-3.8-flash-high': 'high',
+    'gemini-4-argon-high': 'high',
     'gemini-3.1-pro-low': 'low',
     'gemini-3-pro-low': 'low',
     'gemini-3.6-flash-low': 'low',
@@ -140,6 +141,18 @@ const ANTIGRAVITY_MODEL_METADATA = {
     'gemini-3.8-flash-high': {
         maxOutputTokens: 65535,
         thinking: { min: 1, max: 65535, dynamicAllowed: true, levels: ['low', 'medium', 'high'] }
+    },
+    'gemini-3.8-flash-medium': {
+        maxOutputTokens: 65535,
+        thinking: { min: 1, max: 65535, dynamicAllowed: true, levels: ['low', 'medium', 'high'] }
+    },
+    'gemini-3.8-flash-tiered': {
+        maxOutputTokens: 65535,
+        thinking: { min: 1, max: 65535, dynamicAllowed: true, levels: ['low', 'medium', 'high'] }
+    },
+    'gemini-4-argon-high': {
+        maxOutputTokens: 1048576,
+        thinking: { min: 1, max: 65535, dynamicAllowed: true, levels: ['low', 'medium', 'high'] }
     }
 };
 
@@ -161,6 +174,7 @@ function stripModelSuffix(modelName) {
 function resolveAntigravityUpstreamModel(modelName) {
     const baseModel = stripModelSuffix(modelName);
     if (!baseModel) return '';
+    if (baseModel === 'gemini-4-argon') return 'gemini-4-argon-high';
     if (baseModel.startsWith('gemini-claude-')) {
         return baseModel.replace('gemini-claude-', 'claude-');
     }
@@ -271,6 +285,7 @@ function modelSupportsThinking(modelName) {
     const name = modelName.toLowerCase();
     // 支持 thinking 的模型：gemini-3*, gemini-2.5-*, claude-*-thinking
     return name.includes('gemini-3') ||
+           name.includes('gemini-4') ||
            name.startsWith('gemini-2.5-') ||
            name.includes('-thinking');
 }
@@ -974,7 +989,7 @@ export class AntigravityApiService {
         this.config = config;
         this.host = config.HOST;
         this.oauthCredsFilePath = config.ANTIGRAVITY_OAUTH_CREDS_FILE_PATH;
-        this.userAgent = DEFAULT_USER_AGENT; // 支持通用 USER_AGENT 配置
+        this.userAgent = config.ANTIGRAVITY_USER_AGENT || DEFAULT_USER_AGENT;
         this.projectId = config.PROJECT_ID;
         this.tierId = null;
         this.accountEmail = config.accountEmail || null;
@@ -1077,11 +1092,9 @@ export class AntigravityApiService {
             return [config.ANTIGRAVITY_BASE_URL.replace(/\/$/, '')];
         }
         
-        // 默认降级顺序与 Antigravity 官方调用链保持一致：daily -> prod
-        return [
-            ANTIGRAVITY_BASE_URL_DAILY,
-            ANTIGRAVITY_BASE_URL_PROD
-        ];
+        // Control-plane calls retain their historical fallback order; model
+        // discovery and generation are pinned to the same endpoint below.
+        return [ANTIGRAVITY_BASE_URL_DAILY, ANTIGRAVITY_BASE_URL_PROD];
     }
 
     _createInitializationCooldownError() {
@@ -1615,7 +1628,8 @@ export class AntigravityApiService {
                 this.modelProbeCache = {
                     identity,
                     models: [...this.availableModels],
-                    expiresAt: Date.now() + this._getModelProbeCacheTtlMs()
+                    expiresAt: Date.now() + (this._lastModelProbeSucceeded
+                        ? this._getModelProbeCacheTtlMs() : 15000)
                 };
                 this._publishAvailableModelsToPool();
             })
@@ -1629,7 +1643,7 @@ export class AntigravityApiService {
         const modelListStartedAt = Date.now();
         logger.info('[Antigravity] Fetching available models...');
 
-        for (const baseURL of this.baseURLs) {
+        for (const baseURL of this.baseURLs.slice(0, 1)) {
             try {
                 const modelsURL = `${baseURL}/${ANTIGRAVITY_API_VERSION}:fetchAvailableModels`;
                 const requestOptions = {
@@ -1675,9 +1689,9 @@ export class AntigravityApiService {
             }
         }
 
-        logger.warn('[Antigravity] Failed to fetch models from all endpoints. Using default models.');
+        logger.warn('[Antigravity] Failed to fetch models from the generation endpoint. No verified model list.');
         this._lastModelProbeSucceeded = false;
-        this.availableModels = ANTIGRAVITY_MODELS;
+        this.availableModels = [];
         logger.info(`[Gemini Diagnostics] ${JSON.stringify({
             event: 'provider_model_list_probe',
             providerUuidHash: hashDiagnosticIdentifier(this.uuid),
@@ -1737,12 +1751,13 @@ export class AntigravityApiService {
     async callApi(method, body, isRetry = false, retryCount = 0, baseURLIndex = 0) {
         const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;
+        const baseURLs = method === 'generateContent' ? this.baseURLs.slice(0, 1) : this.baseURLs;
 
-        if (baseURLIndex >= this.baseURLs.length) {
+        if (baseURLIndex >= baseURLs.length) {
             throw new Error('All Antigravity base URLs failed');
         }
 
-        const baseURL = this.baseURLs[baseURLIndex];
+        const baseURL = baseURLs[baseURLIndex];
 
         try {
             const requestOptions = {
@@ -1811,7 +1826,7 @@ export class AntigravityApiService {
                     if (transientLogDecision.log) logger.warn(`[Antigravity API] Received 429 with Retry-After: ${retryAfter}ms. Throwing to upper layer.`);
                     throw error;
                 }
-                if (baseURLIndex + 1 < this.baseURLs.length) {
+                if (baseURLIndex + 1 < baseURLs.length) {
                     logger.info(`[Antigravity API] Rate limited on ${baseURL}. Trying next base URL...`);
                     return this.callApi(method, body, isRetry, retryCount, baseURLIndex + 1);
                 } else if (retryCount < maxRetries) {
@@ -1824,7 +1839,7 @@ export class AntigravityApiService {
 
             // Handle network errors - try next base URL first, then retry with backoff
             if (isNetworkError) {
-                if (baseURLIndex + 1 < this.baseURLs.length) {
+                if (baseURLIndex + 1 < baseURLs.length) {
                     const errorIdentifier = errorCode || errorMessage.substring(0, 50);
                     logger.info(`[Antigravity API] Network error (${errorIdentifier}) on ${baseURL}. Trying next base URL...`);
                     return this.callApi(method, body, isRetry, retryCount, baseURLIndex + 1);
@@ -1865,12 +1880,13 @@ export class AntigravityApiService {
     async * streamApi(method, body, isRetry = false, retryCount = 0, baseURLIndex = 0) {
         const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;
+        const baseURLs = method === 'streamGenerateContent' ? this.baseURLs.slice(0, 1) : this.baseURLs;
 
-        if (baseURLIndex >= this.baseURLs.length) {
+        if (baseURLIndex >= baseURLs.length) {
             throw new Error('All Antigravity base URLs failed');
         }
 
-        const baseURL = this.baseURLs[baseURLIndex];
+        const baseURL = baseURLs[baseURLIndex];
         let hasYielded = false;
 
         try {
@@ -1995,7 +2011,7 @@ export class AntigravityApiService {
                     if (transientLogDecision.log) logger.warn(`[Antigravity API] Received 429 with Retry-After: ${retryAfter}ms during stream. Throwing to upper layer.`);
                     throw error;
                 }
-                if (baseURLIndex + 1 < this.baseURLs.length) {
+                if (baseURLIndex + 1 < baseURLs.length) {
                     logger.info(`[Antigravity API] Rate limited on ${baseURL}. Trying next base URL...`);
                     yield* this.streamApi(method, body, isRetry, retryCount, baseURLIndex + 1);
                     return;
@@ -2010,7 +2026,7 @@ export class AntigravityApiService {
 
             // Handle network errors - try next base URL first, then retry with backoff
             if (isNetworkError) {
-                if (baseURLIndex + 1 < this.baseURLs.length) {
+                if (baseURLIndex + 1 < baseURLs.length) {
                     const errorIdentifier = errorCode || errorMessage.substring(0, 50);
                     logger.info(`[Antigravity API] Network error (${errorIdentifier}) on ${baseURL} during stream. Trying next base URL...`);
                     yield* this.streamApi(method, body, isRetry, retryCount, baseURLIndex + 1);
@@ -2283,9 +2299,19 @@ export class AntigravityApiService {
     buildAntigravityPayload(model, requestBody) {
         let selectedModel = normalizeAntigravityModelId(model);
         const hasFetchedAvailableModels = Array.isArray(this.availableModels) && this.availableModels.length > 0;
+        const upstreamModel = resolveAntigravityUpstreamModel(selectedModel);
+        if (this._lastModelProbeSucceeded === false && !hasFetchedAvailableModels) {
+            const error = new Error('[Antigravity] Cannot verify account model capabilities');
+            error.status = 503;
+            error.statusCode = 503;
+            error.code = 'MODEL_LIST_UNAVAILABLE';
+            error.retryable = true;
+            error.skipErrorCount = true;
+            throw error;
+        }
         const modelIsAvailable = hasFetchedAvailableModels
-            ? this.availableModels.includes(selectedModel)
-            : isKnownAntigravityModel(selectedModel);
+            ? this.availableModels.includes(upstreamModel)
+            : isKnownAntigravityModel(upstreamModel);
         if (!modelIsAvailable) {
             // The client asked for a model this provider does not serve, which
             // is a request error rather than an internal failure.
@@ -2300,7 +2326,7 @@ export class AntigravityApiService {
             throw error;
         }
 
-        const actualModelName = resolveAntigravityUpstreamModel(selectedModel);
+        const actualModelName = upstreamModel;
         logger.info(`[Antigravity] Selected model: ${selectedModel} -> upstream: ${actualModelName}`);
 
         applyAntigravityClientModelThinkingLevelToRequest(requestBody, selectedModel);
