@@ -2115,72 +2115,9 @@
     border-color: var(--border-color);
 }
 
-/* Compact account management; proxy and other dialogs retain their layouts. */
-.provider-accounts-modal { animation: none; }
-.provider-accounts-modal .provider-modal-content { width: min(1120px, calc(100vw - 48px)); max-height: 90vh; border-radius: 16px; box-shadow: 0 16px 56px #0002; animation: none; }
-.provider-accounts-modal .provider-modal-header { padding: 20px 24px; align-items: center; background: var(--bg-secondary); }
-.provider-accounts-modal .provider-modal-header h3 { margin: 0 0 3px; font-size: 20px; }
-.provider-accounts-modal .provider-dialog-subtitle { font-size: 12px; color: var(--text-secondary); }
-.provider-accounts-modal .provider-modal-body { padding: 20px 24px; max-height: calc(90vh - 90px); }
-.provider-accounts-modal .provider-summary { padding: 0; margin-bottom: 18px; background: none; border: 0; gap: 12px; flex-wrap: wrap; }
-.provider-accounts-modal .provider-summary-counts { display: flex; align-items: baseline; gap: 10px; color: var(--text-secondary); font-size: 13px; }
-.provider-accounts-modal .provider-summary-item { display: inline-flex; flex-direction: row; align-items: baseline; gap: 6px; padding: 0; }
-.provider-accounts-modal .provider-summary-item .value { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.provider-accounts-modal .provider-summary-divider { color: var(--text-tertiary); }
-.provider-accounts-modal .provider-summary-actions { gap: 8px; flex-wrap: wrap; }
-.provider-accounts-modal .provider-nodes-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
-.provider-accounts-modal .search-input-wrapper { max-width: none; flex: 1; min-width: 180px; position: relative; }
-.provider-accounts-modal .search-input-wrapper > i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); font-size: 13px; }
-.provider-accounts-modal #nodeSearchInput { width: 100%; min-height: 38px; padding: 8px 12px 8px 34px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); background: var(--bg-primary); font-size: 13px; }
-.provider-accounts-modal .provider-availability-filter, .provider-accounts-modal .view-mode-toggle { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
-.provider-accounts-modal .provider-availability-btn, .provider-accounts-modal .view-mode-btn { padding: 6px 10px; min-height: 30px; border: 0; border-radius: 5px; background: transparent; font-size: 12px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
-.provider-accounts-modal .provider-availability-btn.active, .provider-accounts-modal .view-mode-btn.active { background: var(--primary-color); color: white; box-shadow: none; }
-.provider-accounts-modal .btn, .provider-accounts-modal .btn-small { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-primary); color: var(--text-primary); box-shadow: none; transform: none; font-size: 12px; font-weight: 500; line-height: 20px; white-space: nowrap; cursor: pointer; }
-.provider-accounts-modal .btn:hover, .provider-accounts-modal .btn-small:hover { background: var(--bg-secondary); box-shadow: none; transform: none; }
-.provider-accounts-modal .btn.btn-success, .provider-accounts-modal .btn-save { color: white; background: var(--primary-color); border-color: var(--primary-color); }
-.provider-accounts-modal button:disabled { cursor: wait; opacity: .5; }
-.provider-accounts-modal button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
-.provider-accounts-modal .provider-list { display: flex; flex-direction: column; gap: 10px; }
-.provider-accounts-modal .provider-item-detail, .provider-accounts-modal .provider-item-card { margin: 0; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-primary); box-shadow: none; opacity: 1; overflow: visible; transform: none; animation: none; }
-.provider-accounts-modal .provider-item-detail:hover, .provider-accounts-modal .provider-item-card:hover { box-shadow: none; transform: none; border-color: var(--border-color); }
-.provider-accounts-modal .provider-item-header { display: flex; align-items: center; gap: 16px; padding: 16px; background: none; border-radius: 10px; cursor: default; }
-.provider-accounts-modal .provider-item-header:hover { background: none; }
-.provider-accounts-modal .provider-account-heading { display: flex; flex: 1; min-width: 0; align-items: flex-start; flex-direction: column; gap: 8px; padding: 0; border: 0; text-align: left; color: var(--text-primary); background: transparent; cursor: pointer; }
-.provider-accounts-modal .provider-name { font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
-.provider-accounts-modal .provider-meta-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.provider-accounts-modal .provider-meta-chip, .provider-accounts-modal .provider-proxy-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px; border: 0; background: var(--bg-secondary); font-size: 11px; line-height: 18px; font-weight: 400; }
-.provider-accounts-modal .provider-proxy-badge code { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
-.provider-accounts-modal .provider-status-dot { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; }
-.provider-accounts-modal .healthy .health-status { color: var(--primary-color); }
-.provider-accounts-modal .healthy .provider-status-dot { background: var(--primary-color); }
-.provider-accounts-modal .unhealthy .health-status, .provider-accounts-modal .refreshing .health-status { color: #b45309; }
-.provider-accounts-modal .unhealthy .provider-status-dot, .provider-accounts-modal .refreshing .provider-status-dot { background: #d97706; }
-.provider-accounts-modal .provider-actions-group { display: flex; gap: 6px; margin: 0; padding: 0; border: 0; background: none; }
-.provider-accounts-modal .provider-item-content { border-radius: 0 0 10px 10px; }
-.provider-accounts-modal .provider-detail-timestamps { display: flex; flex-wrap: wrap; gap: 10px 24px; font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; }
-.provider-accounts-modal .provider-archived-at { font-size: 11px; color: var(--text-secondary); }
-.provider-accounts-modal .provider-sync-status { font-size: 12px; color: var(--text-secondary); }
-.provider-accounts-modal .provider-sync-status:not(:empty) { margin-bottom: 12px; }
-.provider-accounts-modal .provider-cards-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.provider-accounts-modal .provider-item-card .provider-item-header { align-items: stretch; flex-direction: column; gap: 14px; }
-.provider-accounts-modal .provider-item-card .provider-actions-group { justify-content: flex-end; }
-.provider-accounts-modal .provider-menu-wrap { display: inline-flex; }
-.provider-accounts-modal .provider-menu-trigger i { font-size: 9px; color: var(--text-secondary); }
-.provider-accounts-modal .provider-action-menu { position: fixed; inset: auto; margin: 0; min-width: 190px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 5px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 8px 28px #0002; }
-.provider-accounts-modal .provider-action-menu::backdrop { background: transparent; }
-.provider-accounts-modal .provider-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 7px 10px; text-align: left; font-size: 13px; border: 0; border-radius: 5px; color: var(--text-primary); background: transparent; cursor: pointer; }
-.provider-accounts-modal .provider-menu-item > i { width: 14px; font-size: 12px; color: var(--text-secondary); }
-.provider-accounts-modal .provider-menu-item:hover, .provider-accounts-modal .provider-menu-item:focus-visible { background: var(--bg-secondary); }
-.provider-accounts-modal .provider-menu-item.menu-separated { border-top: 1px solid var(--border-color); border-radius: 0; margin-top: 4px; padding-top: 10px; }
-.provider-accounts-modal .provider-menu-item.menu-danger, .provider-accounts-modal .provider-menu-item.menu-danger > i { color: #dc2626; }
-@media (max-width: 720px) {
-    .provider-accounts-modal .provider-modal-content { width: calc(100vw - 20px); max-height: 94vh; }
-    .provider-accounts-modal .provider-modal-header { padding: 16px; }
-    .provider-accounts-modal .provider-modal-body { padding: 16px; max-height: calc(94vh - 90px); }
-    .provider-accounts-modal .provider-summary { gap: 12px; }
-    .provider-accounts-modal .provider-summary-actions { margin-left: 0; }
-    .provider-accounts-modal .search-input-wrapper { flex-basis: 100%; }
-    .provider-accounts-modal .provider-item-header { align-items: stretch; flex-direction: column; gap: 12px; padding: 14px; }
-    .provider-accounts-modal .provider-actions-group { justify-content: flex-end; }
-    .provider-accounts-modal .provider-cards-grid { grid-template-columns: 1fr; }
-}
+/* Archive controls use the existing provider styles and action row. */
+.provider-modal .provider-archive-time { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.provider-modal .provider-archive-sync-status:not(:empty) { margin-bottom: 12px; color: var(--text-secondary); font-size: 13px; }
+.provider-modal .provider-item-card.archived .card-actions { opacity: 1; }
+.provider-modal .btn-archive-provider { background: var(--neutral-100); color: var(--text-secondary); }
+.provider-modal .btn-archive-provider:hover { background: var(--neutral-200); }

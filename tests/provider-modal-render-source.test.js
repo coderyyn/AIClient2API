@@ -67,8 +67,8 @@ describe('provider modal source regressions', () => {
 
     test('provider cards and details show needsRefresh as a scheduling-blocking refreshing state', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/modal.js'), 'utf8').replace(/\r\n/g, '\n');
-        const detailStart = source.indexOf('function renderProviderAccount(provider, card)');
-        const detailEnd = source.indexOf('function renderProviderActions(provider)', detailStart);
+        const detailStart = source.indexOf('function renderProviderDetailList(providers)');
+        const detailEnd = source.indexOf('function renderProviderCardList(providers)', detailStart);
         const cardEnd = source.indexOf('function renderProviderConfig(provider)', detailEnd);
         const providerListRendering = source.slice(detailStart, cardEnd);
 
@@ -122,8 +122,8 @@ describe('provider modal source regressions', () => {
 
     test('provider detail list renders metadata as a wrapping chip row', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/modal.js'), 'utf8').replace(/\r\n/g, '\n');
-        const detailStart = source.indexOf('function renderProviderAccount(provider, card)');
-        const detailEnd = source.indexOf('function renderProviderActions(provider)', detailStart);
+        const detailStart = source.indexOf('function renderProviderDetailList(providers)');
+        const detailEnd = source.indexOf('function renderProviderCardList(providers)', detailStart);
         const detailList = source.slice(detailStart, detailEnd);
 
         expect(detailList).toContain('provider-meta-chips');

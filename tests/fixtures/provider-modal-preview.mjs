@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../static');
 const port = Number(process.env.PREVIEW_PORT || 13841);
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>账号管理 · 模拟验收</title><link rel="stylesheet" href="/app/base.css"><link rel="stylesheet" href="/components/section-providers.css">
+<title>账号管理 · 模拟验收</title><link rel="stylesheet" href="/app/base.css"><link rel="stylesheet" href="/app/mobile.css"><link rel="stylesheet" href="/components/section-providers.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>body{margin:0;background:var(--bg-secondary);font-family:system-ui,sans-serif}main{padding:24px}#fixture-status{font-size:12px} .provider-modal{background:var(--bg-secondary)}</style></head><body>
 <main><h1>账号管理模拟验收</h1><button id="reopen">重新打开</button><p id="fixture-status" role="status">就绪</p></main><div id="toastContainer" class="toast-container"></div>

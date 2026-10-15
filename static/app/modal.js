@@ -683,46 +683,75 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
     
     // 创建模态框
     const modal = document.createElement('div');
-    modal.className = 'provider-modal provider-accounts-modal';
+    modal.className = 'provider-modal';
     modal.setAttribute('data-provider-type', providerType);
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
-    modal.setAttribute('aria-labelledby', 'provider-dialog-title');
+    modal.setAttribute('aria-label', '提供商账号管理');
     modal.innerHTML = `
         <div class="provider-modal-content">
             <div class="provider-modal-header">
-                <div><h3 id="provider-dialog-title">账号管理</h3><span class="provider-dialog-subtitle">${escapeHtml(providerType)}</span></div>
-                <button class="modal-close" aria-label="关闭账号管理" onclick="window.closeProviderModal(this)"><i class="fas fa-times"></i></button>
+                <h3 data-i18n="modal.provider.manage" data-i18n-params='{"type":"${providerType}"}'><i class="fas fa-cogs"></i> 管理 ${providerType} 提供商配置</h3>
+                <button class="modal-close" onclick="window.closeProviderModal(this)">
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
             <div class="provider-modal-body">
                 <div class="provider-summary">
-                    <div class="provider-summary-counts">
-                        <span class="provider-summary-item">账号 <strong class="value">${totalCount}</strong></span>
-                        <span class="provider-summary-divider">·</span>
-                        <span class="provider-summary-item">健康 <strong class="value">${healthyCount}</strong></span>
+                    <div class="provider-summary-item">
+                        <span class="label" data-i18n="modal.provider.totalAccounts">总账户数:</span>
+                        <span class="value">${totalCount}</span>
+                    </div>
+                    <div class="provider-summary-item">
+                        <span class="label" data-i18n="modal.provider.healthyAccounts">健康账户:</span>
+                        <span class="value">${healthyCount}</span>
                     </div>
                     <div class="provider-summary-actions">
-                        <button class="btn btn-success" onclick="window.showAddProviderForm('${providerType}')"><i class="fas fa-plus"></i> 添加账号</button>
-                        <button class="btn btn-secondary" onclick="window.showProxyPoolManager()">代理池</button>
-                        ${renderProviderMenu(null)}
+                        <button class="btn btn-success" onclick="window.showAddProviderForm('${providerType}')">
+                            <i class="fas fa-plus"></i> <span data-i18n="modal.provider.add">添加新提供商</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.showProxyPoolManager()">
+                            <i class="fas fa-network-wired"></i> <span data-i18n="modal.proxyPool.title">${t('modal.proxyPool.title')}</span>
+                        </button>
+                        <button class="btn btn-warning" onclick="window.resetAllProvidersHealth('${providerType}')" data-i18n="modal.provider.resetHealth" title="将所有节点的健康状态重置为健康">
+                            <i class="fas fa-heartbeat"></i> 重置为健康
+                        </button>
+                        <button class="btn btn-info" onclick="window.performHealthCheck('${providerType}')" data-i18n="modal.provider.healthCheck" title="对不健康节点执行健康检测">
+                            <i class="fas fa-stethoscope"></i> 检测不健康
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.refreshUnhealthyUuids('${providerType}')" data-i18n="modal.provider.refreshUnhealthyUuids" title="刷新不健康节点的UUID">
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="modal.provider.refreshUnhealthyUuidsBtn">刷新UUID</span>
+                        </button>
+                        <button class="btn btn-danger" onclick="window.deleteUnhealthyProviders('${providerType}')" data-i18n="modal.provider.deleteUnhealthy" title="删除不健康节点">
+                            <i class="fas fa-trash-alt"></i> <span data-i18n="modal.provider.deleteUnhealthyBtn">删除不健康</span>
+                        </button>
                     </div>
                 </div>
-                <div class="provider-nodes-toolbar">
-                    <div class="search-input-wrapper">
-                        <i class="fas fa-search"></i>
-                        <input type="search" id="nodeSearchInput" value="${escapeHtml(nodeSearchTerm)}" aria-label="搜索账号" placeholder="搜索账号、UUID 或配置…">
+
+                <div class="provider-nodes-toolbar" style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                    <div class="search-input-wrapper" style="position: relative; flex: 1;">
+                        <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary);"></i>
+                        <input type="text" id="nodeSearchInput"
+                               value="${escapeHtml(nodeSearchTerm)}"
+                               placeholder="${t('modal.provider.searchNodesPlaceholder') || '搜索节点名称、UUID 或配置内容...'}"
+                               style="width: 100%; padding: 10px 12px 10px 35px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary);">
                     </div>
-                    <div class="provider-availability-filter" role="group" aria-label="账号显示范围">
+                    <div class="provider-availability-filter" role="group" aria-label="凭据显示范围">
                         <button type="button" class="provider-availability-btn active" data-availability-filter="available" aria-pressed="true">可用（<span data-availability-count="available">0</span>）</button>
                         <button type="button" class="provider-availability-btn" data-availability-filter="all" aria-pressed="false">全部（<span data-availability-count="all">0</span>）</button>
                         <button type="button" class="provider-availability-btn" data-availability-filter="archived" aria-pressed="false">归档（<span data-availability-count="archived">0</span>）</button>
                     </div>
-                    <div class="view-mode-toggle" role="group" aria-label="显示方式">
-                        <button class="view-mode-btn ${currentViewMode === 'list' ? 'active' : ''}" data-mode="list" aria-label="列表视图" aria-pressed="${currentViewMode === 'list'}" title="列表视图"><i class="fas fa-list"></i></button>
-                        <button class="view-mode-btn ${currentViewMode === 'card' ? 'active' : ''}" data-mode="card" aria-label="卡片视图" aria-pressed="${currentViewMode === 'card'}" title="卡片视图"><i class="fas fa-th-large"></i></button>
+                    <div class="view-mode-toggle" style="display: flex; background: var(--bg-secondary); padding: 4px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <button class="view-mode-btn ${currentViewMode === 'list' ? 'active' : ''}" data-mode="list" title="${t('common.view.list') || '列表视图'}" style="border: none; background: ${currentViewMode === 'list' ? 'var(--primary-color)' : 'transparent'}; color: ${currentViewMode === 'list' ? '#fff' : 'var(--text-secondary)'}; padding: 6px 10px; border-radius: 6px; cursor: pointer; transition: all 0.2s;">
+                            <i class="fas fa-list"></i>
+                        </button>
+                        <button class="view-mode-btn ${currentViewMode === 'card' ? 'active' : ''}" data-mode="card" title="${t('common.view.card') || '卡片视图'}" style="border: none; background: ${currentViewMode === 'card' ? 'var(--primary-color)' : 'transparent'}; color: ${currentViewMode === 'card' ? '#fff' : 'var(--text-secondary)'}; padding: 6px 10px; border-radius: 6px; cursor: pointer; transition: all 0.2s;">
+                            <i class="fas fa-th-large"></i>
+                        </button>
                     </div>
                 </div>
-                <div class="provider-sync-status" data-archive-status role="status" aria-live="polite"></div>
+
+                <div class="provider-archive-sync-status" data-archive-status role="status" aria-live="polite"></div>
                 <div id="paginationTop"></div>
                 <div class="provider-list" id="providerList"></div>
                 <div id="paginationBottom"></div>
@@ -736,6 +765,7 @@ async function showProviderManagerModal(data, initialSearchTerm = '') {
     // 添加模态框事件监听
     addModalEventListeners(modal);
     updateProviderAvailabilityControls(modal);
+
     // 初始渲染
     window.goToProviderPage(1);
 }
@@ -1004,7 +1034,6 @@ function setProviderAvailabilityFilter(filter) {
  * @param {number} page - 目标页码
  */
 function goToProviderPage(page) {
-    closeProviderMenus();
     const filteredProviders = getFilteredProviders();
     const totalPages = Math.ceil(filteredProviders.length / PROVIDERS_PER_PAGE);
     
@@ -1136,11 +1165,6 @@ function addModalEventListeners(modal) {
     // ESC键关闭模态框
     const handleEscKey = (event) => {
         if (event.key === 'Escape') {
-            if (modal.querySelector('.provider-action-menu:popover-open')) {
-                event.preventDefault();
-                closeProviderMenus(true);
-                return;
-            }
             modal.cleanup?.();
             modal.remove();
         }
@@ -1237,11 +1261,6 @@ function addModalEventListeners(modal) {
     
     // 添加事件监听器
     document.addEventListener('keydown', handleEscKey, true);
-    modal.addEventListener('keydown', handleProviderMenuKeyboard);
-    const handleMenuScroll = event => { if (!event.target.closest?.('.provider-action-menu')) closeProviderMenus(); };
-    modal.addEventListener('wheel', handleMenuScroll, { capture: true, passive: true });
-    modal.addEventListener('touchmove', handleMenuScroll, { capture: true, passive: true });
-    window.addEventListener('resize', closeProviderMenus);
     modal.addEventListener('click', handleBackgroundClick);
     if (modalContent) {
         modalContent.addEventListener('click', handleContentClick);
@@ -1252,12 +1271,7 @@ function addModalEventListeners(modal) {
     // 清理函数，在模态框关闭时调用
     modal.cleanup = () => {
         document.removeEventListener('keydown', handleEscKey, true);
-        modal.removeEventListener('keydown', handleProviderMenuKeyboard);
-        modal.removeEventListener('wheel', handleMenuScroll, true);
-        modal.removeEventListener('touchmove', handleMenuScroll, true);
-        window.removeEventListener('resize', closeProviderMenus);
-        closeProviderMenus();
-        modal.removeEventListener('click', handleBackgroundClick);
+            modal.removeEventListener('click', handleBackgroundClick);
         if (modalContent) {
             modalContent.removeEventListener('click', handleContentClick);
             modalContent.removeEventListener('click', handlePasswordToggleClick);
@@ -1286,83 +1300,145 @@ function closeProviderModal(button) {
  * @returns {string} HTML字符串
  */
 function renderProviderDetailList(providers) {
-    return providers.map(provider => renderProviderAccount(provider, false)).join('');
-}
+    return providers.map(provider => {
+        const isHealthy = provider.isHealthy;
+        const isDisabled = provider.isArchived || provider.isDisabled || false;
+        const isRefreshing = provider.needsRefresh === true && !isDisabled;
+        const lastSuccessfulUse = provider.lastSuccessTime || provider.lastUsed;
+        const lastUsed = lastSuccessfulUse ? new Date(lastSuccessfulUse).toLocaleString() : t('modal.provider.neverUsed');
+        const lastHealthCheckTime = provider.lastHealthCheckTime ? new Date(provider.lastHealthCheckTime).toLocaleString() : t('modal.provider.neverChecked');
+        const lastHealthCheckModel = provider.lastHealthCheckModel || '-';
+        const healthClass = provider.isArchived ? 'archived' : isRefreshing ? 'refreshing' : (isHealthy ? 'healthy' : 'unhealthy');
+        const disabledClass = provider.isArchived ? 'archived' : (isDisabled ? 'disabled' : '');
+        const healthIcon = provider.isArchived ? 'fas fa-archive' : isRefreshing
+            ? 'fas fa-sync-alt fa-spin text-warning'
+            : (isHealthy ? 'fas fa-check-circle text-success' : 'fas fa-exclamation-triangle text-warning');
+        const healthText = provider.isArchived ? '已归档' : isRefreshing
+            ? t('providers.status.needsRefresh')
+            : (isHealthy ? t('modal.provider.status.healthy') : t('modal.provider.status.unhealthy'));
+        const healthI18nKey = isRefreshing
+            ? 'providers.status.needsRefresh'
+            : (isHealthy ? 'modal.provider.status.healthy' : 'modal.provider.status.unhealthy');
 
-function renderProviderCardList(providers) {
-    return `<div class="provider-cards-grid">${providers.map(provider => renderProviderAccount(provider, true)).join('')}</div>`;
-}
+        const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
+        // 构建错误信息显示
+        let errorInfoHtml = '';
+        if (!isHealthy && provider.lastErrorMessage) {
+            const escapedErrorMsg = escapeHtml(provider.lastErrorMessage);
+            errorInfoHtml = `
+                <div class="provider-error-info">
+                    <i class="fas fa-exclamation-circle text-danger"></i>
+                    <span class="error-label" data-i18n="modal.provider.lastError">最后错误:</span>
+                    <span class="error-message" title="${escapedErrorMsg}">${escapedErrorMsg}</span>
+                </div>
+            `;
+        }
 
-function renderProviderAccount(provider, card) {
-    const isDisabled = provider.isDisabled || provider.isArchived;
-    const refreshing = provider.needsRefresh && !isDisabled;
-    const state = provider.isArchived ? '已归档' : isDisabled ? '已禁用' : refreshing ? t('providers.status.needsRefresh')
-        : provider.isHealthy ? t('modal.provider.status.healthy') : t('modal.provider.status.unhealthy');
-    const healthClass = provider.isArchived ? 'archived' : isDisabled ? 'disabled' : refreshing ? 'refreshing' : provider.isHealthy ? 'healthy' : 'unhealthy';
-    const name = escapeHtml(provider.customName || provider.uuid);
-    const lastSuccessfulUse = provider.lastSuccessTime || provider.lastUsed;
-    const lastUsed = lastSuccessfulUse ? new Date(lastSuccessfulUse).toLocaleString() : t('modal.provider.neverUsed');
-    const lastCheck = provider.lastHealthCheckTime ? new Date(provider.lastHealthCheckTime).toLocaleString() : t('modal.provider.neverChecked');
-    const archivedAt = provider.archivedAt ? new Date(provider.archivedAt).toLocaleString(document.documentElement.lang || 'zh-CN') : '时间未知';
-    const model = provider.lastHealthCheckModel || provider.checkModelName;
-    const uuid = escapeHtml(provider.uuid);
-    return `<div class="${card ? 'provider-item-card' : 'provider-item-detail'} ${healthClass}" data-uuid="${uuid}">
-        <div class="provider-item-header">
-            <button type="button" class="provider-account-heading" aria-expanded="false" aria-controls="content-${uuid}" onclick="window.toggleProviderDetails('${uuid}')">
-                <span class="provider-name">${name}</span>
-                <span class="provider-meta-chips">
-                    <span class="provider-meta-chip health-status"><span class="provider-status-dot"></span>${escapeHtml(state)}</span>
-                    ${model ? `<span class="provider-meta-chip"><i class="fas fa-cube"></i>${escapeHtml(model)}</span>` : ''}
-                    ${getProviderProxyBadgeHtml(provider)}
-                </span>
-                ${provider.isArchived ? `<span class="provider-archived-at">归档于 ${escapeHtml(archivedAt)}</span>` : ''}
-            </button>
-            <div class="provider-actions-group">${renderProviderActions(provider)}</div>
-        </div>
-        <div class="provider-item-content" id="content-${uuid}">
-            <div class="provider-detail-timestamps">
-                <span>${t('modal.provider.chip.lastUsed')}：${escapeHtml(lastUsed)}</span>
-                <span>${t('modal.provider.chip.lastCheck')}：${escapeHtml(lastCheck)}</span>
+        return `
+            <div class="provider-item-detail ${healthClass} ${disabledClass}" data-uuid="${provider.uuid}">
+                <div class="provider-item-header" onclick="window.toggleProviderDetails('${provider.uuid}')">
+                    <div class="provider-info">
+                        <div class="provider-name">
+                            ${escapeHtml(provider.customName || provider.uuid)}
+                        </div>
+                        <div class="provider-meta-chips">
+                            <span class="provider-meta-chip health-status" title="${t('modal.provider.healthCheckLabel')}: ${healthText}">
+                                <i class="${healthIcon}"></i>
+                                <span ${provider.isArchived ? '' : `data-i18n="${healthI18nKey}"`}>${healthText}</span>
+                            </span>
+                            <span class="provider-meta-chip" title="${t('modal.provider.lastUsed')} ${lastUsed}">
+                                <i class="fas fa-clock"></i>
+                                <span data-i18n="modal.provider.chip.lastUsed">${t('modal.provider.chip.lastUsed')}</span>
+                                <span>${lastUsed}</span>
+                            </span>
+                            <span class="provider-meta-chip" title="${t('modal.provider.lastCheck')} ${lastHealthCheckTime}">
+                                <i class="fas fa-stethoscope"></i>
+                                <span data-i18n="modal.provider.chip.lastCheck">${t('modal.provider.chip.lastCheck')}</span>
+                                <span>${lastHealthCheckTime}</span>
+                            </span>
+                            <span class="provider-meta-chip" title="${t('modal.provider.checkModel')} ${lastHealthCheckModel}">
+                                <i class="fas fa-cube"></i>
+                                <span>${lastHealthCheckModel}</span>
+                            </span>
+                            ${proxyBadgeHtml}
+                        </div>
+                        ${provider.isArchived ? renderProviderArchiveTime(provider) : ''}
+                        ${errorInfoHtml}
+                    </div>
+                    <div class="provider-actions-group">${renderProviderActions(provider)}
+                    </div>
+                </div>
+                <div class="provider-item-content" id="content-${provider.uuid}">
+                    <div class="">
+                        ${renderProviderConfig(provider)}
+                    </div>
+                </div>
             </div>
-            ${provider.lastErrorMessage ? `<div class="provider-error-info"><span class="error-label">最后错误</span><span class="error-message">${escapeHtml(provider.lastErrorMessage)}</span></div>` : ''}
-            ${renderProviderConfig(provider)}
-        </div>
-    </div>`;
+        `;
+    }).join('');
 }
 
-function renderProviderActions(provider) {
+/**
+ * 渲染提供商列表（卡片模式）
+ * @param {Array} providers - 提供商数组
+ * @returns {string} HTML字符串
+ */
+function renderProviderCardList(providers) {
+    let html = '<div class="provider-cards-grid">';
+    html += providers.map(provider => {
+        const isHealthy = provider.isHealthy;
+        const isDisabled = provider.isArchived || provider.isDisabled || false;
+        const isRefreshing = provider.needsRefresh === true && !isDisabled;
+        const healthClass = provider.isArchived ? 'archived' : isRefreshing ? 'refreshing' : (isHealthy ? 'healthy' : 'unhealthy');
+        const disabledClass = provider.isArchived ? 'archived' : (isDisabled ? 'disabled' : '');
+        const displayName = escapeHtml(provider.customName || provider.uuid);
+
+        const proxyBadgeHtml = getProviderProxyBadgeHtml(provider);
+        return `
+            <div class="provider-item-card ${healthClass} ${disabledClass}" data-uuid="${provider.uuid}">
+                <div class="card-header" onclick="window.toggleProviderDetails('${provider.uuid}')">
+                    <div class="card-status-dot"></div>
+                    <div class="card-name" title="${displayName}">${displayName}</div>
+                    ${isRefreshing ? `<span class="card-refresh-label" data-i18n="providers.status.needsRefresh">${t('providers.status.needsRefresh')}</span>` : ''}
+                </div>
+                <div class="card-body">
+                    ${proxyBadgeHtml}
+                    ${provider.isArchived ? renderProviderArchiveTime(provider) : ''}
+                </div>
+                <div class="card-actions" onclick="event.stopPropagation()">${renderProviderActions(provider, true)}
+                </div>
+                <div class="provider-item-content" id="content-${provider.uuid}">
+                    ${renderProviderConfig(provider)}
+                </div>
+            </div>
+        `;
+    }).join('');
+    html += '</div>';
+    return html;
+}
+
+function renderProviderArchiveTime(provider) {
+    const time = provider.archivedAt ? new Date(provider.archivedAt).toLocaleString() : '时间未知';
+    return `<div class="provider-archive-time"><i class="fas fa-archive"></i> 已归档 · ${escapeHtml(time)}</div>`;
+}
+
+function renderProviderActions(provider, card = false) {
     const uuid = escapeHtml(provider.uuid);
-    if (provider.isArchived) return `<button class="btn-small provider-restore" onclick="window.runProviderAction('restore', '${uuid}', event)">恢复</button>`;
-    const label = provider.isDisabled ? '启用' : '禁用';
-    return `<button class="btn-small provider-toggle" onclick="window.runProviderAction('toggleProviderStatus', '${uuid}', event)">${label}</button>
-        <button class="btn-small btn-edit" onclick="window.runProviderAction('editProvider', '${uuid}', event)">编辑</button>
-        ${renderProviderMenu(provider)}`;
-}
-
-let providerMenuSequence = 0;
-function renderProviderMenu(provider) {
-    const id = `provider-menu-${++providerMenuSequence}`;
-    const oauth = /oauth|antigravity|grok/.test(currentProviderType);
-    const reauthorize = ['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].some(type => currentProviderType === type || currentProviderType.startsWith(type + '-'));
-    const items = provider ? [
-        ['performSingleHealthCheck', '检测', 'fas fa-stethoscope'],
-        ...(oauth ? [['refreshProviderToken', '刷新 Token', 'fas fa-redo-alt']] : []),
-        ...(reauthorize ? [['reauthorizeProvider', '更新授权', 'fas fa-key']] : []),
-        ['refreshProviderUuid', '刷新 UUID', 'fas fa-sync-alt'],
-        ['archive', '归档', 'fas fa-archive', true],
-        ['deleteProvider', '删除', 'fas fa-trash', true, true]
-    ] : [
-        ['resetAllProvidersHealth', '重置为健康', 'fas fa-heartbeat'],
-        ['performHealthCheck', '检测不健康', 'fas fa-stethoscope'],
-        ['refreshUnhealthyUuids', '刷新不健康 UUID', 'fas fa-sync-alt'],
-        ['deleteUnhealthyProviders', '删除不健康账号', 'fas fa-trash', true, true]
-    ];
-    return `<span class="provider-menu-wrap">
-        <button type="button" class="btn-small provider-menu-trigger" aria-label="${provider ? '账号更多操作' : '批量维护操作'}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}" popovertarget="${id}" onclick="window.toggleProviderMenu(event)">更多 <i class="fas fa-chevron-down"></i></button>
-        <div id="${id}" class="provider-action-menu" popover="auto" role="menu" aria-label="${provider ? '账号操作' : '批量维护'}">
-            ${items.map(([action, label, icon, separated, danger]) => `<button type="button" role="menuitem" class="provider-menu-item${separated ? ' menu-separated' : ''}${danger ? ' menu-danger' : ''}" onclick="window.runProviderAction('${action}', '${provider ? escapeHtml(provider.uuid) : ''}', event)"><i class="${icon}"></i>${label}</button>`).join('')}
-        </div>
-    </span>`;
+    const style = card ? 'card-action-btn' : 'btn-small';
+    const button = (action, label, icon, color) => `<button class="${style} ${color}" onclick="window.runProviderAction('${action}', '${uuid}', event)" title="${label}"><i class="${icon}"></i>${card ? '' : ` ${label}`}</button>`;
+    if (provider.isArchived) return button('restore', '恢复', 'fas fa-box-open', 'btn-success btn-restore-provider');
+    const toggle = button('toggleProviderStatus', provider.isDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled'), provider.isDisabled ? 'fas fa-play' : 'fas fa-ban', provider.isDisabled ? 'btn-success' : 'btn-warning');
+    const reauthorize = ['openai-codex-oauth', 'gemini-cli-oauth', 'gemini-antigravity'].includes(currentProviderType)
+        ? button('reauthorizeProvider', t('modal.provider.reauthorize'), 'fas fa-key', 'btn-info btn-reauthorize-provider') : '';
+    const archive = button('archive', '归档', 'fas fa-archive', 'btn-secondary btn-archive-provider');
+    const remove = button('deleteProvider', t('modal.provider.delete'), 'fas fa-trash', 'btn-delete');
+    const refresh = button('refreshProviderToken', t('modal.provider.refreshToken'), 'fas fa-redo-alt', 'btn-info btn-refresh-token');
+    if (card) return toggle + refresh + reauthorize + archive + remove;
+    return toggle
+        + button('editProvider', t('modal.provider.edit'), 'fas fa-edit', 'btn-edit')
+        + button('performSingleHealthCheck', t('modal.provider.healthCheck'), 'fas fa-stethoscope', 'btn-info btn-provider-health-check')
+        + refresh + reauthorize + archive + remove
+        + `<button class="btn-small btn-refresh-uuid" onclick="window.runProviderAction('refreshProviderUuid', '${uuid}', event)" title="${t('modal.provider.refreshUuid')}"><i class="fas fa-sync-alt"></i></button>`;
 }
 
 /**
@@ -2898,54 +2974,6 @@ async function pollArchiveSync(type, status) {
 }
 
 
-function closeProviderMenus(restoreFocus = false) {
-    document.querySelectorAll('.provider-accounts-modal .provider-action-menu:popover-open').forEach(menu => {
-        menu.hidePopover();
-        const trigger = menu.parentElement.querySelector('.provider-menu-trigger');
-        trigger?.setAttribute('aria-expanded', 'false');
-        if (restoreFocus === true) trigger?.focus();
-    });
-}
-
-function toggleProviderMenu(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    const trigger = event.target.closest('.provider-menu-trigger');
-    const menu = document.getElementById(trigger.getAttribute('aria-controls'));
-    const wasOpen = menu.matches(':popover-open');
-    closeProviderMenus();
-    if (wasOpen) return;
-    menu.showPopover();
-    const rect = trigger.getBoundingClientRect();
-    const height = menu.getBoundingClientRect().height;
-    menu.style.left = `${Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
-    menu.style.top = `${Math.max(8, rect.bottom + height + 8 > window.innerHeight ? rect.top - height - 6 : rect.bottom + 6)}px`;
-    trigger.setAttribute('aria-expanded', 'true');
-    menu.ontoggle = () => trigger.setAttribute('aria-expanded', String(menu.matches(':popover-open')));
-    menu.querySelector('[role="menuitem"]')?.focus();
-}
-
-function handleProviderMenuKeyboard(event) {
-    const trigger = event.target.closest('.provider-menu-trigger');
-    if (trigger && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
-        toggleProviderMenu(event);
-        if (event.key === 'ArrowUp') document.getElementById(trigger.getAttribute('aria-controls')).querySelector('[role="menuitem"]:last-child')?.focus();
-        return;
-    }
-    const menu = event.target.closest('.provider-action-menu');
-    if (!menu) return;
-    const items = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
-    const index = items.indexOf(document.activeElement);
-    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-        event.preventDefault();
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-            : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-        items[next]?.focus();
-    } else if (event.key === 'Tab') {
-        closeProviderMenus(true);
-    }
-}
-
 const providerActionLocks = new Set();
 async function runProviderAction(action, uuid, event) {
     event.preventDefault();
@@ -2958,9 +2986,8 @@ async function runProviderAction(action, uuid, event) {
         refreshProviderToken, reauthorizeProvider, refreshProviderUuid, deleteProvider,
         resetAllProvidersHealth, performHealthCheck, refreshUnhealthyUuids, deleteUnhealthyProviders };
     if (!operations[action] && !['archive', 'restore'].includes(action)) return;
-    closeProviderMenus();
     providerActionLocks.add(key);
-    const scope = row?.querySelector('.provider-actions-group') || modal?.querySelector('.provider-summary-actions');
+    const scope = row?.querySelector('.provider-actions-group, .card-actions') || modal?.querySelector('.provider-summary-actions');
     const buttons = [...(scope?.querySelectorAll('button') || [])];
     buttons.forEach(button => button.disabled = true);
     scope?.setAttribute('aria-busy', 'true');
@@ -2975,5 +3002,4 @@ async function runProviderAction(action, uuid, event) {
         scope?.removeAttribute('aria-busy');
     }
 }
-window.toggleProviderMenu = toggleProviderMenu;
 window.runProviderAction = runProviderAction;
