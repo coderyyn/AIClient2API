@@ -2584,7 +2584,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         });
         if (shouldSwitchNow) {
             const isCodexTransient = isCodexTransientCredentialError(error);
-            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall;
+            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall
+                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY && error.code === 'MODEL_LIST_UNAVAILABLE');
             if (isAntigravityTransientCapacity) providerPoolManager.recordGeminiSchedulingEvent?.('retryAttempts');
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
@@ -3103,7 +3104,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         });
         if (shouldSwitchNow) {
             const isCodexTransient = isCodexTransientCredentialError(error);
-            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall;
+            const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall
+                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY && error.code === 'MODEL_LIST_UNAVAILABLE');
             if (isAntigravityTransientCapacity) providerPoolManager.recordGeminiSchedulingEvent?.('retryAttempts');
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),

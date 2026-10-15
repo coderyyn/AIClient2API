@@ -246,6 +246,72 @@ function createCapacityPoolManager() {
     };
 }
 
+describe('Antigravity model discovery credential failover', () => {
+    function discoveryError() {
+        return Object.assign(new Error('[Antigravity] Cannot verify account model capabilities'), {
+            code: 'MODEL_LIST_UNAVAILABLE', status: 503, statusCode: 503,
+            retryable: true, shouldSwitchCredential: true, skipErrorCount: true
+        });
+    }
+
+    function serviceWithError() {
+        return {
+            generateContent: jest.fn().mockRejectedValue(discoveryError()),
+            generateContentStream: jest.fn().mockImplementation(async function* () { throw discoveryError(); })
+        };
+    }
+
+    async function run(mode, first, pool, retries) {
+        const res = mode === 'stream' ? new StreamFakeResponse() : new FakeResponse();
+        const handler = mode === 'stream' ? handleStreamRequest : handleUnaryRequest;
+        await handler(res, first, 'gemini-2.5-flash-lite', { contents: [] },
+            'gemini', 'gemini-antigravity', 'none', null, pool, 'discovery-failed', 'Synthetic provider',
+            { CONFIG: { CREDENTIAL_SWITCH_MAX_RETRIES: retries }, maxRetries: retries });
+        return res;
+    }
+
+    test.each(['unary', 'stream'])('%s switches the same model without quarantining the failed account', async mode => {
+        mockGetApiServiceWithFallback.mockReset();
+        const response = { candidates: [{ content: { role: 'model', parts: [{ text: 'discovery-failover-ok' }] }, finishReason: 'STOP' }] };
+        const second = {
+            generateContent: jest.fn().mockResolvedValue(response),
+            generateContentStream: jest.fn().mockImplementation(async function* () { yield response; })
+        };
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: second, uuid: 'discovery-healthy', actualModel: 'gemini-2.5-flash-lite',
+            actualProviderType: 'gemini-antigravity', serviceConfig: {}
+        });
+        const pool = createCapacityPoolManager();
+        const res = await run(mode, serviceWithError(), pool, 1);
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(1);
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(expect.anything(), 'gemini-2.5-flash-lite',
+            expect.objectContaining({ acquireSlot: true, excludeProviderUuids: ['discovery-failed'], allowExcludedProviderFallback: false }));
+        expect(res.body).toContain('discovery-failover-ok');
+        expect(pool.markProviderUnhealthy).not.toHaveBeenCalled();
+        expect(pool.markProviderUnhealthyImmediately).not.toHaveBeenCalled();
+        expect(pool.markAntigravityModelCapacityUnavailable).not.toHaveBeenCalled();
+        expect(pool.releaseSlot).toHaveBeenCalledWith('gemini-antigravity', 'discovery-healthy');
+    });
+
+    test.each(['unary', 'stream'])('%s stops at the configured retry cap if discovery keeps failing', async mode => {
+        mockGetApiServiceWithFallback.mockReset();
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: serviceWithError(), uuid: 'discovery-second-failed', actualModel: 'gemini-2.5-flash-lite',
+            actualProviderType: 'gemini-antigravity', serviceConfig: {}
+        });
+        const res = await run(mode, serviceWithError(), createCapacityPoolManager(), 1);
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(1);
+        expect(res.body).toContain('"code":503');
+    });
+
+    test.each(['unary', 'stream'])('%s respects disabled credential retries', async mode => {
+        mockGetApiServiceWithFallback.mockReset();
+        const res = await run(mode, serviceWithError(), createCapacityPoolManager(), 0);
+        expect(mockGetApiServiceWithFallback).not.toHaveBeenCalled();
+        expect(res.body).toContain('"code":503');
+    });
+});
+
 function parseSseErrorType(body) {
     const match = String(body).match(/data: ({.*})/);
     if (!match) return null;

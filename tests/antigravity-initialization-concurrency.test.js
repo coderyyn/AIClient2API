@@ -99,8 +99,12 @@ describe('Antigravity initialization lifecycle', () => {
     test('failed discovery remains unavailable and uses its short negative cache', async () => {
         const service = createGenerationService();
         service.authClient.request.mockRejectedValue(new Error('synthetic discovery outage'));
-        await expect(startGeneration(service)).rejects.toMatchObject({ code: 'MODEL_LIST_UNAVAILABLE', status: 503 });
-        await expect(startGeneration(service, true)).rejects.toMatchObject({ code: 'MODEL_LIST_UNAVAILABLE', status: 503 });
+        const expectedError = {
+            code: 'MODEL_LIST_UNAVAILABLE', status: 503,
+            retryable: true, shouldSwitchCredential: true, skipErrorCount: true
+        };
+        await expect(startGeneration(service)).rejects.toMatchObject(expectedError);
+        await expect(startGeneration(service, true)).rejects.toMatchObject(expectedError);
         await new Promise(resolve => setImmediate(resolve));
         expect(service.authClient.request).toHaveBeenCalledTimes(1);
         expect(service.availableModels).toEqual([]);

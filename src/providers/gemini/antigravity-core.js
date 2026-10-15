@@ -2306,6 +2306,7 @@ export class AntigravityApiService {
             error.statusCode = 503;
             error.code = 'MODEL_LIST_UNAVAILABLE';
             error.retryable = true;
+            error.shouldSwitchCredential = true;
             error.skipErrorCount = true;
             throw error;
         }
