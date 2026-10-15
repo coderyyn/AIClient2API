@@ -142,12 +142,12 @@ test('UI categories and search exclude archived entries from normal all/availabl
         { uuid: 'a', customName: 'old', uiAvailable: true, isArchived: true },
         { uuid: 'b', customName: 'new', uiAvailable: true },
         { uuid: 'c', customName: 'disabled', uiAvailable: false }
-    ], currentArchiveFilter: 'active', currentAvailabilityFilter: 'all', nodeSearchTerm: '' };
+    ], currentAvailabilityFilter: 'all', nodeSearchTerm: '' };
     vm.runInNewContext(source.slice(start, end), context);
     expect(context.getFilteredProviders().map(p => p.uuid)).toEqual(['b', 'c']);
     context.currentAvailabilityFilter = 'available';
     expect(context.getFilteredProviders().map(p => p.uuid)).toEqual(['b']);
-    context.currentArchiveFilter = 'archived';
+    context.currentAvailabilityFilter = 'archived';
     expect(context.getFilteredProviders().map(p => p.uuid)).toEqual(['a']);
     context.nodeSearchTerm = 'new';
     expect(context.getFilteredProviders()).toHaveLength(0);
@@ -178,15 +178,15 @@ test('cards only render the current page', () => {
 });
 
 
-test('pagination clears prior selections even when the next filter has no results', () => {
+test('switching categories resets pagination without selection state', () => {
     const source = fs.readFileSync('static/app/modal.js', 'utf8');
-    const start = source.indexOf('function goToProviderPage(');
-    const end = source.indexOf('function renderProviderListPaginated', start);
-    const selected = new Set(['previous-page']);
-    const context = { selectedArchiveUuids: selected, getFilteredProviders: () => [], PROVIDERS_PER_PAGE: 5,
-        document: { getElementById: () => null, querySelector: () => null }, currentPage: 3 };
+    const start = source.indexOf('function setProviderAvailabilityFilter(');
+    const end = source.indexOf('function goToProviderPage(', start);
+    const page = jest.fn();
+    const context = { currentAvailabilityFilter: 'available', updateProviderAvailabilityControls: jest.fn(), window: { goToProviderPage: page } };
     vm.runInNewContext(source.slice(start, end), context);
-    context.goToProviderPage(1);
-    expect(selected.size).toBe(0);
-    expect(context.currentPage).toBe(1);
+    context.setProviderAvailabilityFilter('archived');
+    expect(context.currentAvailabilityFilter).toBe('archived');
+    expect(page).toHaveBeenCalledWith(1);
+    expect(source).not.toContain('selectedArchiveUuids');
 });
