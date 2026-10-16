@@ -59,10 +59,14 @@ try {
   assert.match(await page.locator('#requestRows tr').nth(4).innerText(), /上游失败 400/);
   assert.match(await page.locator('#requestRows tr').nth(2).innerText(), /gpt-5.6-sol → gpt-5.6-luna/);
   assert.ok(!(await page.locator('#requestRows').innerText()).includes('sha256:fixture'));
-  assert.match(await page.locator('#requestRows tr').nth(3).innerText(), /响应头模型存在差异/);
-  assert.ok(!(await page.locator('#requestRows tr').nth(5).innerText()).includes('响应头模型存在差异'));
-  assert.ok(!(await page.locator('#requestRows tr').nth(0).innerText()).includes('响应头模型存在差异'));
-  assert.ok(!(await page.locator('#requestRows tr').nth(6).innerText()).includes('响应头模型存在差异'));
+  const headerRow = page.locator('#requestRows tr').nth(3);
+  assert.equal(await headerRow.locator('.audit-model-header').innerText(), '⚠ 响应头：gpt-6-luna');
+  assert.ok(!(await headerRow.innerText()).includes('响应头模型存在差异'));
+  assert.ok(await headerRow.locator('.audit-model-header').evaluate(header => {
+    const main = header.previousElementSibling;
+    return Math.abs(main.getBoundingClientRect().top - header.getBoundingClientRect().top) < 5;
+  }), 'desktop model and response-header signal share a line');
+  for (const index of [0, 5, 6]) assert.equal(await page.locator('#requestRows tr').nth(index).locator('.audit-model-header').count(), 0);
   await page.locator('#requestRows tr').nth(3).click();
   assert.equal(await page.locator('#detailDrawer .safety-buffering-difference').count(), 1);
   assert.match(await page.locator('#detailDrawer').innerText(), /响应头 faster-model：gpt-6-luna/);
@@ -126,9 +130,14 @@ try {
   assert.match(await page.locator('.mobile-request-card').first().innerText(), /首出/);
   assert.match(await page.locator('.mobile-request-card').first().innerText(), /openai-codex-oauth/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const mobileHeader = page.locator('.mobile-request-card').nth(3).locator('.audit-model-header');
+  assert.equal(await mobileHeader.innerText(), '⚠ 响应头：gpt-6-luna');
+  assert.ok(await mobileHeader.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'mobile header signal stays whole');
   if (output) {
     await page.locator('.request-card').evaluate(node => node.scrollIntoView());
     await page.screenshot({ path: path.join(output, 'mobile.png'), fullPage: false });
+    await mobileHeader.locator('xpath=ancestor::article').evaluate(node => node.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: path.join(output, 'mobile-model-difference.png'), fullPage: false });
   }
   pass('390px mobile cards retain provider and timing without horizontal overflow');
   await page.setViewportSize({ width: 1280, height: 1000 });
