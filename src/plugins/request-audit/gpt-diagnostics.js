@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import { analyzeModelTraceOutputs, loadModelTraceBank, modelTraceChallenges, MODELTRACE_BANK_VERSION } from './modeltrace.js';
 import { getRequestAttempts } from '../../utils/request-attempts.js';
 
-const TEST_VERSION = 'gpt-diagnostics-v4';
+const TEST_VERSION = 'gpt-diagnostics-v5';
 const MAX_TARGETS = 10;
 // 每个凭据固定对这组模型逐一执行 ModelTrace 归因，前端不再选择模型。
 export const FIXED_MODELS = Object.freeze(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']);
@@ -232,7 +232,7 @@ export class GptDiagnosticsRunner {
         let saveChain = Promise.resolve();
         await Promise.all(run.targets.map(async target => {
             if (this.cancelled.has(run.runId)) return;
-            const result = await this.executeTarget(run, target, bank, limits).catch(error => ({ ...target, status: 'failed', error: error.message }));
+            const result = await this.executeTarget(run, target, bank, limits).catch(error => ({ ...target, status: 'failed', error: error.message, ...(error.diagnosticProbes ? { probes: error.diagnosticProbes } : {}) }));
             run.results.push(result);
             saveChain = saveChain.then(() => this.store.save(run));
             await saveChain;
@@ -271,6 +271,15 @@ ${b.model}`) ?? 0));
             const requestId = `diag_${crypto.randomUUID()}`;
             const requestBody = buildRequest(providerType, target.model, prompt, maxTokens);
             Object.defineProperty(requestBody, '_monitorRequestId', { value: requestId, writable: true, configurable: true, enumerable: false });
+            const modelEvidence = () => {
+                const attempt = getRequestAttempts(requestBody).at(-1);
+                return {
+                    outboundModel: attempt?.outboundModel || null,
+                    ...(attempt?.upstreamResponseModel ? { responseModel: attempt.upstreamResponseModel } : {}),
+                    ...(/^openai-codex-oauth(?:-|$)/.test(providerType) && attempt?.codexSafetyBuffering
+                        ? { codexSafetyBuffering: attempt.codexSafetyBuffering } : {})
+                };
+            };
             let timeout;
             let response;
             try {
@@ -283,7 +292,7 @@ ${b.model}`) ?? 0));
                 ]).finally(() => clearTimeout(timeout));
             } catch (error) {
                 const completedAt = new Date().toISOString();
-                const probe = { requestId, test, startedAt, completedAt, failed: true, error: error.code || error.name || 'Error' };
+                const probe = { requestId, test, startedAt, completedAt, failed: true, error: error.code || error.name || 'Error', ...modelEvidence() };
                 probes.push(probe);
                 await this.recordProbe?.({
                     requestId, timestamp: completedAt, path: '/internal/gpt-diagnostics', normalizedPath: '/internal/gpt-diagnostics',
@@ -294,13 +303,14 @@ ${b.model}`) ?? 0));
                     response: { httpStatus: Number(error?.response?.status || 500), completed: false, durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)), errorCode: error.code || error.name },
                     errorClass: error.code || error.name || 'diagnostic_failure', usage: {}
                 });
+                error.diagnosticProbes = probes;
                 throw error;
             }
             const text = extractText(response);
             const model = responseModel(response);
             const reasoning = reasoningTokens(response);
             const probe = {
-                requestId, test, startedAt, completedAt: new Date().toISOString(), responseModel: model,
+                requestId, test, startedAt, completedAt: new Date().toISOString(), responseModel: model, ...modelEvidence(),
                 emptyOutput: !text.trim(), reasoningTokens: reasoning,
                 reasoningTruncationHeuristic: reasoning > 0 && (reasoning + 2) % 518 === 0,
                 modelMismatch: Boolean(model && model !== target.model), text

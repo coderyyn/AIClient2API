@@ -920,7 +920,8 @@
     </aside>
   </main>
 
-  <script>
+  <script type="module">
+    import { safetyBufferingDifference, safetyBufferingHtml } from './app/codex-safety-buffering.js';
     const SECTION_ORDER = ['instructions', 'tools', 'conversation', 'attachments', 'metadata', 'cached_input', 'output', 'reasoning'];
     const SECTION_LABELS = {
       instructions: '系统 / 开发者指令',
@@ -1282,6 +1283,15 @@
     }
 
     function modelEvidence(event) {
+      const models = baseModelEvidence(event);
+      if (!/^openai-codex-oauth(?:-|$)/.test(event.request?.toProvider || '')) return models;
+      if (safetyBufferingDifference(event.request)) {
+        models.detail += safetyBufferingHtml(event.request);
+      }
+      return models;
+    }
+
+    function baseModelEvidence(event) {
       const request = event.request || {};
       const fields = [
         ['客户端', request.requestedModel || request.model],
@@ -1328,6 +1338,7 @@
         <div class="reason-item">
           <strong>#${escapeHtml(attempt.sequence)} ${escapeHtml(attempt.status || 'unknown')}</strong><br>
           <span class="muted">${escapeHtml(attempt.providerType || '-')} · ${escapeHtml(attempt.outboundModel || '-')} → ${escapeHtml(attempt.upstreamResponseModel || '未知')} · HTTP ${escapeHtml(attempt.httpStatus ?? '-')} · ${formatDuration(attempt.durationMs)}</span>
+          ${/^openai-codex-oauth(?:-|$)/.test(attempt.providerType || '') ? safetyBufferingHtml(attempt) : ''}
           ${attempt.errorCode || attempt.errorType || attempt.errorMessage ? `<br><span class="muted">${escapeHtml(attempt.errorCode || attempt.errorType || 'error')}${attempt.errorMessage ? ` · ${escapeHtml(attempt.errorMessage)}` : ''}${attempt.errorTruncated ? ' · 已截断' : ''}</span>` : ''}
         </div>`).join('');
       const failure = event.failure || null;
@@ -1452,7 +1463,8 @@
       const main = requested && outbound && requested !== outbound ? `${requested} → ${outbound}` : outbound || (requested ? `请求 ${requested}` : '—');
       const known = [requested, request.plannedModel, outbound, request.upstreamResponseModel].filter(Boolean);
       const differs = request.modelMismatch || new Set(known).size > 1;
-      const note = [differs ? '路由差异' : '', !request.upstreamResponseModel ? '上游未报告' : ''].filter(Boolean).join(' · ');
+      const headerDiff = /^openai-codex-oauth(?:-|$)/.test(request.toProvider || '') && safetyBufferingDifference(request);
+      const note = [differs ? '路由差异' : '', !request.upstreamResponseModel ? '上游未报告' : '', headerDiff ? '响应头模型存在差异' : ''].filter(Boolean).join(' · ');
       return `<div class="audit-cell audit-model"><span class="audit-truncate" title="${escapeHtml(main)}">${escapeHtml(main)}</span>${note ? `<small class="audit-truncate" title="${escapeHtml(note)}">${escapeHtml(note)}</small>` : ''}</div>`;
     }
 

@@ -29,6 +29,7 @@ const historical = { runId: 'history-1', status: 'partial', createdAt: '2026-09-
     results: [{ providerUuid: 'deleted-account', model: 'gpt-test', status: 'failed', error: '模拟上游错误：服务暂不可用',
         knowledge: { correct: 1, total: 2, claimedKnowledgeCutoff: '2025-04', raw: '{"answers":{}}' },
         modelTrace: { valid: true, prediction: 'gpt-5.6-luna', predictionName: 'gpt-5.6-luna', closedSetProbability: .8123, bankVersion: 'fixture' },
+        providerType: 'openai-codex-oauth', probes: [1, 2].map(() => ({ outboundModel: 'gpt-6-astra', responseModel: 'gpt-6-astra', codexSafetyBuffering: { enabled: false, fasterModel: 'gpt-6-luna' } })),
         passiveSignals: [{ code: 'response_model_mismatch', responseModel: 'upstream-model' }], pelican: { previewSvg: '<svg></svg>', manualScore: 4 } }] };
 let runs = [historical];
 let failConfig = true;
@@ -71,7 +72,7 @@ await page.route('**/*', async route => {
         runGets++;
         return failRuns ? respond({ error: { message: '模拟历史读取失败' } }, 503) : respond({ success: true, data: { runs } });
     }
-    const assets = { '/gpt-diagnostics.html': 'text/html', '/app/gpt-diagnostics.js': 'text/javascript', '/app/gpt-diagnostics.css': 'text/css' };
+    const assets = { '/gpt-diagnostics.html': 'text/html', '/app/gpt-diagnostics.js': 'text/javascript', '/app/codex-safety-buffering.js': 'text/javascript', '/app/gpt-diagnostics.css': 'text/css' };
     if (assets[url.pathname]) return route.fulfill({ contentType: assets[url.pathname], body: await readFile(path.join(root, url.pathname)) });
     return route.fulfill({ status: 404, body: 'Not found' });
 });
@@ -91,6 +92,9 @@ try {
     failConfig = false;
     await page.locator('#retry-config').click();
     await wait(() => page.locator('#credential-toggle').isEnabled());
+    await page.locator('.safety-buffering-difference').waitFor({ state: 'attached' });
+    assert.match(await page.locator('.safety-buffering-difference').textContent(), /响应头模型存在差异（2 次）/);
+    pass('grouped header differences displayed independently of ModelTrace');
     assert(await page.locator('#start').isDisabled());
     assert.deepEqual(await page.locator('#fixed-models .chip').allTextContents(), models);
     pass('configuration error/retry, raw API shapes, fixed model chips, no default selections');

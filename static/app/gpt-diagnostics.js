@@ -1,3 +1,5 @@
+import { groupedSafetyBufferingHtml } from './codex-safety-buffering.js';
+
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = value => Number(value || 0).toLocaleString('zh-CN');
@@ -145,7 +147,7 @@ function resultHtml(group, key) {
             : esc(traceReasons[trace?.reason] || trace?.reason || '暂无结果');
         return `<tr class="${mismatch ? 'mismatch' : ''}"><td class="mono">${esc(row.model)}</td>
             <td><strong>${trace?.valid ? esc(trace.predictionName || trace.prediction) : '—'}</strong><p class="field-help">${detail}</p></td>
-            <td>${badge(row.status)}</td></tr>`;
+            <td>${badge(row.status)}${/^openai-codex-oauth(?:-|$)/.test(row.providerType || group.provider) ? groupedSafetyBufferingHtml(row.probes) : ''}</td></tr>`;
     }).join('');
     return `<article class="result"><div class="result-header"><div><h3 class="result-name">${esc(group.name)}</h3>
         <p class="target-meta">${esc(group.provider)} · ${esc(group.providerUuid || '')}</p></div>${badge(overall)}</div>
