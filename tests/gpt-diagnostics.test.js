@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beginRequestAttempt, finishRequestAttempt } from '../src/utils/request-attempts.js';
 
 const diagnosticsPage = readFileSync(new URL('../static/gpt-diagnostics.html', import.meta.url), 'utf8');
 
@@ -24,36 +23,9 @@ async function waitForRun(runner, runId) {
 }
 
 describe('GPT diagnostics safety and fingerprint inputs', () => {
-  test.each([false, true])('persists final attempt buffering evidence in diagnostic probes: failed=%s', async failed => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-diag-buffering-'));
-    const recorded = [];
-    const signal = { enabled: true, fasterModel: 'gpt-6-luna' };
-    const generateContent = jest.fn(async (model, body) => {
-      finishRequestAttempt(beginRequestAttempt(body, { providerType: 'openai-codex-oauth', outboundModel: 'gpt-6-sol' }), {
-        status: failed ? 'error' : 'success', upstreamResponseModel: 'gpt-6-astra', codexSafetyBuffering: signal
-      });
-      if (failed) throw new Error('fixture failure');
-      return { model: 'gpt-6-astra', output_text: '{}' };
-    });
-    try {
-      const runner = await new GptDiagnosticsRunner({ dir,
-        providerManager: { globalConfig: {}, findProviderByUuid: () => ({ MODEL_PROVIDER: 'openai-codex-oauth' }) },
-        adapterFactory: () => ({ generateContent }), recordProbe: event => recorded.push(event)
-      }).init();
-      const run = await runner.create({ targets: [{ providerUuid: 'fixture' }] });
-      await waitForRun(runner, run.runId);
-      expect(recorded.length).toBeGreaterThan(0);
-      expect(recorded[0].requestAttempts.at(-1).codexSafetyBuffering).toEqual(signal);
-      {
-        const reloaded = await new GptDiagnosticsRunner({ dir }).init();
-        expect(reloaded.get(run.runId).results[0].probes[0]).toMatchObject({ outboundModel: 'gpt-6-sol', responseModel: 'gpt-6-astra', codexSafetyBuffering: signal });
-        expect(generateContent).toHaveBeenCalledTimes(9);
-      }
-    } finally { await rm(dir, { recursive: true }); }
-  });
   test('advertises the fixed-model fingerprint budget and rejects removed tests without creating runs', async () => {
     const runner = new GptDiagnosticsRunner();
-    expect(runner.capabilities()).toMatchObject({ testVersion: 'gpt-diagnostics-v5', maxTargets: 10,
+    expect(runner.capabilities()).toMatchObject({ testVersion: 'gpt-diagnostics-v4', maxTargets: 10,
       models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'],
       defaultTests: ['modeltrace'], perCredential: { requestCount: 9, maxOutputTokens: 73728 } });
     expect(runner.estimate({ targets: [{}, {}] })).toEqual({ credentialCount: 2, targetCount: 6, requestCount: 18, maxOutputTokens: 147456 });
@@ -101,7 +73,7 @@ describe('GPT diagnostics safety and fingerprint inputs', () => {
       expect(created.targets.map(target => target.model)).toEqual([...FIXED_MODELS]);
       expect(created.estimate).toEqual({ credentialCount: 1, targetCount: 3, requestCount: 9, maxOutputTokens: 73728 });
       const run = await waitForRun(runner, created.runId);
-      expect(run.testVersion).toBe('gpt-diagnostics-v5');
+      expect(run.testVersion).toBe('gpt-diagnostics-v4');
       expect(run.status).toBe('completed');
       expect(generateContent).toHaveBeenCalledTimes(9);
       expect(generateContent.mock.calls.reduce((sum, [, body]) => sum + body.max_output_tokens, 0)).toBe(73728);

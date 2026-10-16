@@ -3,12 +3,11 @@
 import assert from 'node:assert/strict';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
+import { chromium } from 'playwright';
 
 const output = process.argv[2];
 if (output) await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_CHANNEL ? { channel: process.env.BROWSER_CHANNEL } : {}) });
+const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1680, height: 1100 } });
 const errors = [], calls = [], checks = [];
 let failList = false, failSummary = false, fallback = false, empty = false;
@@ -18,7 +17,7 @@ const event = i => ({
   requestId: `request-${i}`, timestamp: '2026-09-23T07:33:58.000Z',
   potluckKey: { name: i === 0 ? '测试 Key 名称很长很长很长很长' : `Key ${i % 3}`, hash: 'sha256:fixture' },
   account: { providerNameDisplay: i === 0 ? '这是一个很长的账号名称用于验证文字截断与详情查看' : `account-${i % 4}` },
-  request: { toProvider: i === 6 ? 'openai-custom' : 'openai-codex-oauth', model: 'gpt-5.6-sol', requestedModel: 'gpt-5.6-sol', outboundModel: i === 2 ? 'gpt-5.6-luna' : 'gpt-5.6-sol', plannedModel: 'gpt-5.6-sol', upstreamResponseModel: i === 1 ? undefined : 'gpt-5.6-sol', ...([3, 6].includes(i) ? { codexSafetyBuffering: { enabled: true, fasterModel: 'gpt-6-luna' } } : i === 5 ? { codexSafetyBuffering: { enabled: false, fasterModel: 'gpt-5.6-sol' } } : {}) },
+  request: { toProvider: 'openai-codex-oauth', model: 'gpt-5.6-sol', requestedModel: 'gpt-5.6-sol', outboundModel: i === 2 ? 'gpt-5.6-luna' : 'gpt-5.6-sol', plannedModel: 'gpt-5.6-sol', upstreamResponseModel: i === 1 ? undefined : 'gpt-5.6-sol' },
   response: { durationMs: i === 0 ? null : i === 1 ? 0 : 22600 },
   runtime: { stages: { clientFirstOutputMs: i === 0 ? 5400 : 350 } },
   usage: { promptTokens: 48152, completionTokens: 165, cachedTokens: 46848, cacheHitRatio: 0.9729, totalTokens: 48317 },
@@ -59,19 +58,6 @@ try {
   assert.match(await page.locator('#requestRows tr').nth(4).innerText(), /上游失败 400/);
   assert.match(await page.locator('#requestRows tr').nth(2).innerText(), /gpt-5.6-sol → gpt-5.6-luna/);
   assert.ok(!(await page.locator('#requestRows').innerText()).includes('sha256:fixture'));
-  const headerRow = page.locator('#requestRows tr').nth(3);
-  assert.equal(await headerRow.locator('.audit-model-header').innerText(), '⚠ 响应头：gpt-6-luna');
-  assert.ok(!(await headerRow.innerText()).includes('响应头模型存在差异'));
-  assert.ok(await headerRow.locator('.audit-model-header').evaluate(header => {
-    const main = header.previousElementSibling;
-    return Math.abs(main.getBoundingClientRect().top - header.getBoundingClientRect().top) < 5;
-  }), 'desktop model and response-header signal share a line');
-  for (const index of [0, 5, 6]) assert.equal(await page.locator('#requestRows tr').nth(index).locator('.audit-model-header').count(), 0);
-  await page.locator('#requestRows tr').nth(3).click();
-  assert.equal(await page.locator('#detailDrawer .safety-buffering-difference').count(), 1);
-  assert.match(await page.locator('#detailDrawer').innerText(), /响应头 faster-model：gpt-6-luna/);
-  await page.keyboard.press('Escape');
-  pass('buffering differences only, legacy and equal values stay quiet');
   pass('compact columns, null/zero duration, model difference, terminal failure with HTTP 200');
   if (output) {
     await page.locator('.request-card').evaluate(node => node.scrollIntoView());
@@ -110,9 +96,9 @@ try {
   assert.equal(calls.filter(call => call.path.endsWith('/requests')).length, listCalls);
   pass('page size resets pagination; summary failure/retry independent of list');
 
-  await page.evaluate(() => { document.getElementById('modelFilter').value = 'slow'; document.getElementById('modelFilter').dispatchEvent(new Event('change')); });
-  await page.waitForFunction(() => document.querySelector('.request-card').getAttribute('aria-busy') === 'true');
-  await page.evaluate(() => { document.getElementById('modelFilter').value = 'fast'; document.getElementById('modelFilter').dispatchEvent(new Event('change')); });
+  await page.evaluate(() => { document.getElementById('modelFilter').value = 'slow'; loadAudit(); });
+  await page.waitForFunction(() => listBusy);
+  await page.evaluate(() => { document.getElementById('modelFilter').value = 'fast'; loadAudit(); });
   await settled();
   await page.waitForTimeout(350);
   assert.equal(await page.evaluate(() => window.__auditRequests[0].marker), 'fast');
@@ -130,14 +116,9 @@ try {
   assert.match(await page.locator('.mobile-request-card').first().innerText(), /首出/);
   assert.match(await page.locator('.mobile-request-card').first().innerText(), /openai-codex-oauth/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  const mobileHeader = page.locator('.mobile-request-card').nth(3).locator('.audit-model-header');
-  assert.equal(await mobileHeader.innerText(), '⚠ 响应头：gpt-6-luna');
-  assert.ok(await mobileHeader.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'mobile header signal stays whole');
   if (output) {
     await page.locator('.request-card').evaluate(node => node.scrollIntoView());
     await page.screenshot({ path: path.join(output, 'mobile.png'), fullPage: false });
-    await mobileHeader.locator('xpath=ancestor::article').evaluate(node => node.scrollIntoView({ block: 'start' }));
-    await page.screenshot({ path: path.join(output, 'mobile-model-difference.png'), fullPage: false });
   }
   pass('390px mobile cards retain provider and timing without horizontal overflow');
   await page.setViewportSize({ width: 1280, height: 1000 });

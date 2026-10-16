@@ -1,4 +1,3 @@
-import { normalizeCodexSafetyBuffering } from '../../providers/openai/codex-safety-buffering.js';
 import crypto from 'crypto';
 import { normalizeUsageCandidate } from '../../utils/usage-normalizer.js';
 import { compactAntigravitySourceAvailability } from '../../utils/gemini-diagnostics.js';
@@ -194,8 +193,6 @@ function normalizeAttempts(context = {}) {
             outboundModel: attempt.outboundModel || null,
             modelOverrideApplied: attempt.modelOverrideApplied === true,
             upstreamResponseModel: attempt.upstreamResponseModel || null,
-            ...(/^openai-codex-oauth(?:-|$)/.test(attempt.providerType || '') && attempt.codexSafetyBuffering && typeof attempt.codexSafetyBuffering === 'object'
-                ? { codexSafetyBuffering: normalizeCodexSafetyBuffering(attempt.codexSafetyBuffering) } : {}),
             reasoningEffort: attempt.reasoningEffort || null,
             serviceTier: attempt.serviceTier || null,
             // [turn-state-disabled 2026-09-23] turnStateEnabled: attempt.turnStateEnabled === true,
@@ -316,7 +313,6 @@ export function buildRequestAuditEvent(context = {}) {
             plannedModel,
             outboundModel,
             upstreamResponseModel,
-            ...(lastAttempt?.codexSafetyBuffering ? { codexSafetyBuffering: lastAttempt.codexSafetyBuffering } : {}),
             modelMismatch: Boolean(upstreamResponseModel && outboundModel && upstreamResponseModel !== outboundModel),
             billingModel,
             stream: Boolean(context.isStream)

@@ -724,7 +724,7 @@
     .request-table th, .request-table td { border-bottom: 0; }
     .request-table .time-col { width: 124px; white-space: nowrap; }
     .request-table .key-col { width: 100px; }
-    .request-table .model-col { width: 300px; }
+    .request-table .model-col { width: 190px; }
     .request-table .provider-col { width: 180px; }
     .request-table .number-col { width: 100px; text-align: right; }
     .request-table .input-col { width: 148px; text-align: right; }
@@ -734,10 +734,6 @@
     .audit-cell small { color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
     .audit-truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .audit-model { font-family: var(--mono); }
-    .audit-model-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
-    .audit-model-main { max-width: 100%; font-weight: 600; }
-    .audit-model-header { max-width: 100%; color: #b45309; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    [data-theme="dark"] .audit-model-header { color: #fbbf24; }
     .audit-timing { display: flex; flex-wrap: wrap; gap: 3px 5px; font-variant-numeric: tabular-nums; }
     .audit-timing span { white-space: nowrap; }
     .request-table .pill, .mobile-request-card .pill { padding: 0; border: 0; border-radius: 0; background: transparent; font-size: 12px; font-weight: 500; }
@@ -924,8 +920,7 @@
     </aside>
   </main>
 
-  <script type="module">
-    import { safetyBufferingDifference, safetyBufferingHtml } from './app/codex-safety-buffering.js';
+  <script>
     const SECTION_ORDER = ['instructions', 'tools', 'conversation', 'attachments', 'metadata', 'cached_input', 'output', 'reasoning'];
     const SECTION_LABELS = {
       instructions: '系统 / 开发者指令',
@@ -1287,15 +1282,6 @@
     }
 
     function modelEvidence(event) {
-      const models = baseModelEvidence(event);
-      if (!/^openai-codex-oauth(?:-|$)/.test(event.request?.toProvider || '')) return models;
-      if (safetyBufferingDifference(event.request)) {
-        models.detail += safetyBufferingHtml(event.request);
-      }
-      return models;
-    }
-
-    function baseModelEvidence(event) {
       const request = event.request || {};
       const fields = [
         ['客户端', request.requestedModel || request.model],
@@ -1342,7 +1328,6 @@
         <div class="reason-item">
           <strong>#${escapeHtml(attempt.sequence)} ${escapeHtml(attempt.status || 'unknown')}</strong><br>
           <span class="muted">${escapeHtml(attempt.providerType || '-')} · ${escapeHtml(attempt.outboundModel || '-')} → ${escapeHtml(attempt.upstreamResponseModel || '未知')} · HTTP ${escapeHtml(attempt.httpStatus ?? '-')} · ${formatDuration(attempt.durationMs)}</span>
-          ${/^openai-codex-oauth(?:-|$)/.test(attempt.providerType || '') ? safetyBufferingHtml(attempt) : ''}
           ${attempt.errorCode || attempt.errorType || attempt.errorMessage ? `<br><span class="muted">${escapeHtml(attempt.errorCode || attempt.errorType || 'error')}${attempt.errorMessage ? ` · ${escapeHtml(attempt.errorMessage)}` : ''}${attempt.errorTruncated ? ' · 已截断' : ''}</span>` : ''}
         </div>`).join('');
       const failure = event.failure || null;
@@ -1467,10 +1452,8 @@
       const main = requested && outbound && requested !== outbound ? `${requested} → ${outbound}` : outbound || (requested ? `请求 ${requested}` : '—');
       const known = [requested, request.plannedModel, outbound, request.upstreamResponseModel].filter(Boolean);
       const differs = request.modelMismatch || new Set(known).size > 1;
-      const headerDiff = /^openai-codex-oauth(?:-|$)/.test(request.toProvider || '') && safetyBufferingDifference(request);
       const note = [differs ? '路由差异' : '', !request.upstreamResponseModel ? '上游未报告' : ''].filter(Boolean).join(' · ');
-      const header = headerDiff ? `<span class="audit-model-header" title="${escapeHtml(`上游响应头 faster-model：${headerDiff.fasterModel}，不代表独立验证的模型身份`)}">⚠ 响应头：${escapeHtml(headerDiff.fasterModel)}</span>` : '';
-      return `<div class="audit-cell audit-model"><div class="audit-model-line"><strong class="audit-truncate audit-model-main" title="${escapeHtml(main)}">${escapeHtml(main)}</strong>${header}</div>${note ? `<small class="audit-truncate" title="${escapeHtml(note)}">${escapeHtml(note)}</small>` : ''}</div>`;
+      return `<div class="audit-cell audit-model"><span class="audit-truncate" title="${escapeHtml(main)}">${escapeHtml(main)}</span>${note ? `<small class="audit-truncate" title="${escapeHtml(note)}">${escapeHtml(note)}</small>` : ''}</div>`;
     }
 
     function listTiming(event) {

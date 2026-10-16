@@ -2,7 +2,6 @@ import { assertVerifiedCodexProxy, CODEX_PROXY_SNAPSHOT } from '../../utils/prox
 import { rewriteProxyTimeContext } from './codex-proxy-time-context.js';
 import { atomicWriteFile } from '../../utils/file-lock.js';
 import axios from 'axios';
-import { parseCodexSafetyBuffering } from './codex-safety-buffering.js';
 import logger from '../../utils/logger.js';
 import crypto from 'crypto';
 import {promises as fs} from 'fs';
@@ -628,7 +627,6 @@ export class CodexApiService {
 
                 const upstreamStartedAt = performance.now();
                 const response = await axios.request(axiosRequestConfig);
-                attempt.codexSafetyBuffering = parseCodexSafetyBuffering(response.headers);
                 this.observeTurnStateFromResponse(response?.headers, fingerprintState);
                 const upstreamReceivedAt = performance.now();
                 const runtimeRequest = requestContext.get('runtimeRequest');
@@ -648,9 +646,6 @@ export class CodexApiService {
                 });
                 return parsed;
             } catch (error) {
-                if (!attempt.codexSafetyBuffering && error.response) {
-                    attempt.codexSafetyBuffering = parseCodexSafetyBuffering(error.response.headers);
-                }
                 const diagnostic = await captureSafeUpstreamErrorDiagnostic(error);
                 finishRequestAttempt(attempt, {
                     status: 'error',
@@ -801,7 +796,6 @@ export class CodexApiService {
 
                 const upstreamStartedAt = performance.now();
                 const response = await axios.request(axiosRequestConfig);
-                attempt.codexSafetyBuffering = parseCodexSafetyBuffering(response.headers);
                 this.observeTurnStateFromResponse(response?.headers, fingerprintState);
                 const runtimeRequest = requestContext.get('runtimeRequest');
                 runtimeRequest?.recordStage?.('upstreamFirstByteMs', performance.now() - upstreamStartedAt);
@@ -813,7 +807,6 @@ export class CodexApiService {
                     if (event?.response && typeof event.response === 'object') {
                         responseSnapshot = { ...event.response };
                         if (event.response.model) {
-                            attempt.upstreamResponseModel = event.response.model;
                             requestContext.get('runtimeRequest')?.setMetadata?.({ upstreamResponseModel: event.response.model });
                             fingerprintState.context.upstreamResponseModel = event.response.model;
                         }
@@ -843,9 +836,6 @@ export class CodexApiService {
                 });
                 return;
             } catch (error) {
-                if (!attempt.codexSafetyBuffering && error.response) {
-                    attempt.codexSafetyBuffering = parseCodexSafetyBuffering(error.response.headers);
-                }
                 const diagnostic = await captureSafeUpstreamErrorDiagnostic(error);
                 finishRequestAttempt(attempt, {
                     status: 'error',
