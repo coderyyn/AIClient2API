@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from 'fs';
-import axios from 'axios';
 import { getRequestBody } from '../utils/common.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
-import { getProxyPoolsFilePath, normalizeProxyPools } from '../utils/proxy-pool-store.js';
-import { parseProxyUrl } from '../utils/proxy-utils.js';
+import { getProxyPoolsFilePath, normalizeProxyPools, proxyRouteHash, proxyGeoIsVerified } from '../utils/proxy-pool-store.js';
+import { refreshProxyGeo } from '../utils/proxy-geo.js';
 
 function getProviderPoolsFilePath(currentConfig = {}) {
     return currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
@@ -84,29 +83,37 @@ export async function handleGetProxyPools(req, res, currentConfig) {
 export async function handleSaveProxyPools(req, res, currentConfig) {
     const body = await getRequestBody(req);
     const filePath = getProxyPoolsFilePath(currentConfig);
-
     try {
-        return await withFileLock(filePath, async () => {
-            const previous = existsSync(filePath)
-                ? normalizeProxyPools(JSON.parse(readFileSync(filePath, 'utf8')))
-                : [];
-            const proxies = normalizeProxyPools(body?.proxies || body);
-            const changedProxyIds = diffProxyIds(previous, proxies);
-
+        const detect = [];
+        let invalidatedAdapters = 0;
+        await withFileLock(filePath, async () => {
+            const previous = existsSync(filePath) ? normalizeProxyPools(JSON.parse(readFileSync(filePath, 'utf8'))) : [];
+            const proxies = normalizeProxyPools(body?.proxies || body).map(entry => {
+                const old = previous.find(item => item.id === entry.id);
+                delete entry.geo; // Only persisted server results are trusted.
+                if (old && proxyRouteHash(old) === proxyRouteHash(entry)) {
+                    if (old.geo) entry.geo = old.geo;
+                } else {
+                    entry.geo = { status: 'unverified', routeHash: proxyRouteHash(entry) };
+                    if (old?.geo?.status === 'verified') entry.geo.lastSuccess = old.geo;
+                    if (entry.enabled) detect.push(entry);
+                }
+                return entry;
+            });
             await atomicWriteFile(filePath, JSON.stringify(proxies, null, 2), { encoding: 'utf-8', mode: 0o600 });
-            const invalidatedAdapters = invalidateAdaptersForProxyIds(currentConfig, changedProxyIds);
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                proxies,
-                invalidatedAdapters
-            }));
-            return true;
+            invalidatedAdapters = invalidateAdaptersForProxyIds(currentConfig, diffProxyIds(previous, proxies));
         });
+        // Bounded concurrency, no network calls inside the write lock.
+        for (let i = 0; i < detect.length; i += 3) {
+            await Promise.all(detect.slice(i, i + 3).map(entry => refreshProxyGeo(currentConfig, entry)));
+        }
+        const proxies = normalizeProxyPools(JSON.parse(readFileSync(filePath, 'utf8')));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, proxies, invalidatedAdapters }));
+        return true;
     } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
+        res.end(JSON.stringify({ error: { message: 'Proxy pool save failed' } }));
         return true;
     }
 }
@@ -114,69 +121,28 @@ export async function handleSaveProxyPools(req, res, currentConfig) {
 export async function handleTestProxyPool(req, res, currentConfig) {
     const body = await getRequestBody(req);
     const proxyId = String(body?.proxyId || '').trim();
-
     try {
         const filePath = getProxyPoolsFilePath(currentConfig);
-        const proxies = existsSync(filePath)
-            ? normalizeProxyPools(JSON.parse(readFileSync(filePath, 'utf8')))
-            : [];
+        const proxies = existsSync(filePath) ? normalizeProxyPools(JSON.parse(readFileSync(filePath, 'utf8'))) : [];
         const proxy = proxies.find(entry => entry.id === proxyId);
-
-        if (!proxyId || !proxy) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, error: { message: 'Proxy not found' } }));
+        if (!proxy || !proxy.enabled) {
+            res.writeHead(proxy ? 400 : 404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, proxyId, error: { message: proxy ? 'Proxy is disabled' : 'Proxy not found' } }));
             return true;
         }
-
-        if (proxy.enabled === false) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, proxyId, name: proxy.name, error: { message: 'Proxy is disabled' } }));
-            return true;
-        }
-
-        const axiosConfig = {
-            timeout: 15000,
-            proxy: false,
-            headers: {
-                Accept: 'application/json'
-            }
-        };
-        const selectedProxyConfig = parseProxyUrl(proxy.url);
-        if (!selectedProxyConfig) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                ok: false,
-                proxyId,
-                name: proxy.name,
-                error: { message: 'Proxy URL is invalid or unsupported' }
-            }));
-            return true;
-        }
-        axiosConfig.httpAgent = selectedProxyConfig.httpAgent;
-        axiosConfig.httpsAgent = selectedProxyConfig.httpsAgent;
-
-        const response = await axios.get('https://api.ipify.org?format=json', axiosConfig);
-        const ip = String(response?.data?.ip || '').trim();
-        const expectedIp = proxy.expectedIp || '';
-
+        const updated = await refreshProxyGeo(currentConfig, proxy);
+        const geo = updated?.geo;
+        invalidateAdaptersForProxyIds(currentConfig, new Set([proxyId]));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            ok: Boolean(ip),
-            proxyId: proxy.id,
-            name: proxy.name,
-            ip,
-            expectedIp,
-            matched: expectedIp ? ip === expectedIp : null
-        }));
+        res.end(JSON.stringify({ ok: proxyGeoIsVerified(updated), proxyId, name: proxy.name,
+            ip: geo?.ip || '', expectedIp: proxy.expectedIp || '',
+            matched: proxy.expectedIp && geo?.ip ? geo.ip === proxy.expectedIp : null,
+            geo, bindable: proxyGeoIsVerified(updated),
+            ...(!updated ? { error: { code: 'PROXY_CHANGED', message: 'Proxy changed during detection; retry' } } : {}) }));
         return true;
     } catch (error) {
-        logger.warn('[Proxy Pool] Proxy test failed:', error.message);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            ok: false,
-            proxyId,
-            error: { message: error.message }
-        }));
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, proxyId, error: { message: 'Proxy detection failed' } }));
         return true;
     }
 }

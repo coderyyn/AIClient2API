@@ -1,3 +1,4 @@
+import { proxyRouteHash } from '../src/utils/proxy-pool-store.js';
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import fs from 'fs';
 import os from 'os';
@@ -64,6 +65,12 @@ describe('Codex auto-link config scan', () => {
     test('applies selected proxy defaults when linking the current Codex credential', async () => {
         const config = { providerPools: {} };
         const credPath = path.join(tempDir, 'configs', 'codex', 'codex-account.json');
+
+    const geoProxy = { id: 'pool-47-77-230-19', url: 'http://127.0.0.1:7890', enabled: true };
+    fs.writeFileSync(path.join(tempDir, 'configs', 'proxy-pools.json'), JSON.stringify([{ ...geoProxy, geo: {
+        status: 'verified', ip: '203.0.113.1', countryCode: 'US', timezone: 'America/Los_Angeles', routeHash: proxyRouteHash(geoProxy)
+    } }]));
+
 
         await autoLinkProviderConfigs(config, {
             onlyCurrentCred: true,

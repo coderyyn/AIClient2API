@@ -1,3 +1,4 @@
+import { proxyRouteHash } from '../src/utils/proxy-pool-store.js';
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -111,7 +112,7 @@ function createMockCallbackServer(onListen = callback => callback()) {
 describe('Codex OAuth proxy selection validation', () => {
     test('accepts direct access and enabled proxy nodes', () => {
         const proxyPoolsPath = writeProxyPools([
-            { id: 'proxy-enabled', url: 'http://127.0.0.1:7890', enabled: true }
+            { id: 'proxy-enabled', url: 'http://127.0.0.1:7890', enabled: true, geo: { status: 'verified', ip: '203.0.113.1', countryCode: 'US', timezone: 'America/Los_Angeles', routeHash: proxyRouteHash({url:'http://127.0.0.1:7890'}) } }
         ]);
 
         expect(assertCodexOAuthProxyAvailable({ PROXY_POOLS_FILE_PATH: proxyPoolsPath }, '')).toBeNull();

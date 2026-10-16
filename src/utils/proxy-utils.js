@@ -10,7 +10,7 @@ import { HttpProxyAgent } from 'http-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { getTLSSidecar } from './tls-sidecar.js';
 import { NETWORK } from './constants.js';
-import { resolveProxyPoolEntry } from './proxy-pool-store.js';
+import { resolveProxyPoolEntry, assertVerifiedCodexProxy } from './proxy-pool-store.js';
 
 // 代理 Agent 缓存，避免重复创建 Agent 导致连接池失效和内存泄漏
 const agentCache = new Map();
@@ -136,6 +136,7 @@ export function parseProxyUrl(proxyUrl) {
  * @returns {boolean} 是否启用代理
  */
 export function isProxyEnabledForProvider(config, providerType) {
+    if (providerType?.startsWith('openai-codex-oauth') && config?.PROXY_ID) return true;
     if (getNodeProxyUrlFromBinding(config, providerType)) {
         return true;
     }
@@ -176,8 +177,10 @@ export function getProxyConfigForProvider(config, providerType) {
         return null;
     }
 
-    const boundProxyUrl = getNodeProxyUrlFromBinding(config, providerType);
-    const proxyPoolEntry = boundProxyUrl ? null : resolveProxyPoolEntry(config);
+    const strictCodex = providerType?.startsWith('openai-codex-oauth') && config.PROXY_ID;
+    const snapshot = strictCodex ? assertVerifiedCodexProxy(config) : null;
+    const boundProxyUrl = snapshot ? snapshot.url : getNodeProxyUrlFromBinding(config, providerType);
+    const proxyPoolEntry = snapshot || (boundProxyUrl ? null : resolveProxyPoolEntry(config));
     const proxyUrl = boundProxyUrl || proxyPoolEntry?.url || config.PROXY_URL;
     const proxyConfig = parseProxyUrl(proxyUrl);
     if (!proxyConfig) {
@@ -281,7 +284,9 @@ export function configureTLSSidecar(axiosConfig, config, providerType, defaultBa
     const sidecar = getTLSSidecar();
     if (sidecar.isReady() && isTLSSidecarEnabledForProvider(config, providerType)) {
         // 优先使用 IP 绑定的代理，其次使用 Sidecar 专用的代理，最后使用全局代理
-        const boundProxyUrl = getNodeProxyUrlFromBinding(config, providerType);
+        const strictCodex = providerType?.startsWith('openai-codex-oauth') && config.PROXY_ID;
+        const snapshot = strictCodex ? assertVerifiedCodexProxy(config) : null;
+        const boundProxyUrl = snapshot ? snapshot.url : getNodeProxyUrlFromBinding(config, providerType);
         const proxyUrl = boundProxyUrl || config.TLS_SIDECAR_PROXY_URL || config.PROXY_URL || null;
         
         // 处理相对路径

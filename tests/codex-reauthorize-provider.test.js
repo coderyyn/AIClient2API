@@ -1,3 +1,4 @@
+import { proxyRouteHash } from '../src/utils/proxy-pool-store.js';
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import fs from 'fs';
 import os from 'os';
@@ -37,6 +38,12 @@ beforeEach(() => {
     process.chdir(tempDir);
     fs.mkdirSync(path.join(tempDir, 'configs'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'configs', 'codex'), { recursive: true });
+
+    const geoProxy = { id: 'proxy-new', url: 'http://127.0.0.1:7890', enabled: true };
+    fs.writeFileSync(path.join(tempDir, 'configs', 'proxy-pools.json'), JSON.stringify([{ ...geoProxy, geo: {
+        status: 'verified', ip: '203.0.113.1', countryCode: 'US', timezone: 'America/Los_Angeles', routeHash: proxyRouteHash(geoProxy)
+    } }]));
+
     atomicWriteFile.mockImplementation((filePath, data, encoding) => fs.promises.writeFile(filePath, data, encoding));
 });
 

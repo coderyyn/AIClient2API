@@ -34,6 +34,7 @@ jest.mock('axios', () => ({
 import { serviceInstances } from '../src/providers/adapter.js';
 import axios from 'axios';
 import { parseProxyUrl } from '../src/utils/proxy-utils.js';
+import { proxyRouteHash } from '../src/utils/proxy-pool-store.js';
 import {
     handleGetProxyPools,
     handleSaveProxyPools,
@@ -92,6 +93,31 @@ function makeRes() {
 }
 
 describe('proxy pool API', () => {
+    test('does not trust posted geo and a failed auto-detection still saves the proxy', async () => {
+        const config = makeTempConfig();
+        axios.get.mockRejectedValue(new Error('no network'));
+        const res = makeRes();
+        await handleSaveProxyPools(reqWithBody({ proxies: [{ id: 'p', url: 'http://127.0.0.1:7890', geo: { status: 'verified', timezone: 'UTC', countryCode: 'US' } }] }), res, config);
+        expect(res.statusCode).toBe(200);
+        expect(res.json().proxies[0].geo).toMatchObject({ status: 'error', errorCode: 'PROXY_GEO_LOOKUP_FAILED' });
+    });
+
+    test('metadata edits keep server geo without probing; address changes invalidate it', async () => {
+        const config = makeTempConfig();
+        const entry = { id: 'p', url: 'http://127.0.0.1:7890', expectedIp: '' };
+        const geo = { status: 'verified', ip: '203.0.113.10', countryCode: 'US', timezone: 'America/Los_Angeles', routeHash: proxyRouteHash(entry) };
+        writeFileSync(config.PROXY_POOLS_FILE_PATH, JSON.stringify([{ ...entry, geo }]));
+        const res = makeRes();
+        await handleSaveProxyPools(reqWithBody({ proxies: [{ ...entry, name: 'renamed', geo: { status: 'verified', timezone: 'Asia/Tokyo' } }] }), res, config);
+        expect(axios.get).not.toHaveBeenCalled();
+        expect(res.json().proxies[0].geo.timezone).toBe('America/Los_Angeles');
+        axios.get.mockRejectedValue(new Error('offline'));
+        const changed = makeRes();
+        await handleSaveProxyPools(reqWithBody({ proxies: [{ ...entry, url: 'http://127.0.0.1:7891' }] }), changed, config);
+        expect(changed.json().proxies[0].geo.status).toBe('error');
+        expect(changed.json().proxies[0].geo.lastSuccess.timezone).toBe('America/Los_Angeles');
+    });
+
     test('returns an empty list when proxy pool file does not exist', async () => {
         const currentConfig = makeTempConfig();
         rmSync(currentConfig.PROXY_POOLS_FILE_PATH, { force: true });
@@ -122,7 +148,7 @@ describe('proxy pool API', () => {
 
         expect(res.statusCode).toBe(200);
         expect(res.json().success).toBe(true);
-        expect(JSON.parse(readFileSync(currentConfig.PROXY_POOLS_FILE_PATH, 'utf8'))).toEqual([
+        expect(JSON.parse(readFileSync(currentConfig.PROXY_POOLS_FILE_PATH, 'utf8')).map(({geo, ...entry}) => entry)).toEqual([
             { id: 'res-ip-1', name: '住宅1', url: 'socks5h://127.0.0.1:11001', enabled: true, expectedIp: '154.64.234.213', note: 'bind' }
         ]);
         expect(serviceInstances['openai-codex-oauthcodex-a']).toBeUndefined();
@@ -143,7 +169,7 @@ describe('proxy pool API', () => {
         currentConfig.ipNodeProxy = {
             getProxyUrl: jest.fn(() => boundProxyUrl)
         };
-        axios.get.mockResolvedValue({ data: { ip: '203.0.113.20' } });
+        axios.get.mockResolvedValue({ data: { ip: '203.0.113.20', country_code: 'US', country: 'United States', timezone: 'America/Los_Angeles' } });
         const res = makeRes();
 
         await handleTestProxyPool(reqWithBody({ proxyId: 'selected-node' }), res, currentConfig);

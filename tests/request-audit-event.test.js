@@ -3,6 +3,14 @@ import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
 import { getPricingDiagnostics, resetPricingDiagnostics } from '../src/plugins/api-potluck/cost-estimator.js';
 
 describe('request audit event', () => {
+  test('records only bounded proxy time context metadata without raw prompts', () => {
+    const event = buildRequestAuditEvent({
+      requestId: 'proxy-time-audit', model: 'gpt-6.1-sol',
+      runtime: { metadata: { proxyTimeContext: { action: 'added', proxyId: 'synthetic-proxy', timezone: 'America/Los_Angeles', date: '2026-10-15', rawPrompt: 'must not be persisted' } } }
+    });
+    expect(event.runtime.proxyTimeContext).toEqual({ action: 'added', proxyId: 'synthetic-proxy', timezone: 'America/Los_Angeles', date: '2026-10-15' });
+    expect(JSON.stringify(event)).not.toContain('must not be persisted');
+  });
   test('prices usage with the final billing model instead of the upstream self-reported model', () => {
     const event = buildRequestAuditEvent({
       requestId: 'req-cost',
@@ -22,7 +30,8 @@ describe('request audit event', () => {
       usd: expect.any(Number), actualUsd: expect.any(Number), estimatedUsd: 0,
       missingPriceTokens: 0, pricingVersion: expect.any(String), priceMultiplier: 2.5
     });
-    expect(event.cost.usd).toBeCloseTo(0.018875, 8);
+    // 900 uncached input * $4 + 100 cached * $0.40 + 100 output * $20, per million; fast multiplier 2.5.
+    expect(event.cost.usd).toBeCloseTo(0.0141, 8);
   });
 
   test('prices an overridden Codex request by the reported model and flags a downgrade', () => {

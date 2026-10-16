@@ -931,7 +931,8 @@ async function loadCodexAuthProxyChoices(initialProxyId = '') {
         const name = proxy.name || proxyId;
         const expectedIp = proxy.expectedIp ? ` / ${proxy.expectedIp}` : '';
         const disabledSuffix = proxy.enabled === false ? ` - ${t('oauth.codex.proxyDisabled')}` : '';
-        const label = `${name} (${proxyId}${expectedIp})${disabledSuffix}`;
+        const geoLabel = proxy.geo?.status === 'verified' ? ` / ${proxy.geo.countryCode || ''} / ${proxy.geo.timezone || ''}` : ' / 地区时区未验证';
+        const label = `${name} (${proxyId}${expectedIp})${geoLabel}${disabledSuffix}`;
         return `<option value="${escapeHtml(proxyId)}" data-proxy-name="${escapeHtml(name)}" data-expected-ip="${escapeHtml(proxy.expectedIp || '')}" ${disabled} ${selected}>${escapeHtml(label)}</option>`;
     }).join('');
 

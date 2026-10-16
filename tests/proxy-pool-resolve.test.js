@@ -1,3 +1,4 @@
+import { proxyRouteHash } from '../src/utils/proxy-pool-store.js';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -40,7 +41,7 @@ function writeProxyPools(pools) {
 describe('provider proxy pool resolution', () => {
     test('uses enabled proxy pool entry selected by provider PROXY_ID', () => {
         const proxyPoolsPath = writeProxyPools([
-            { id: 'res-ip-1', name: '住宅号池1', url: 'socks5h://127.0.0.1:11001', enabled: true }
+            { id: 'res-ip-1', name: '住宅号池1', url: 'socks5h://127.0.0.1:11001', enabled: true, geo: { status: 'verified', ip: '203.0.113.1', countryCode: 'US', timezone: 'America/Los_Angeles', routeHash: proxyRouteHash({url:'socks5h://127.0.0.1:11001'}) } }
         ]);
 
         const result = configureAxiosProxy({ timeout: 1000 }, {
@@ -55,21 +56,15 @@ describe('provider proxy pool resolution', () => {
         expect(result.httpsAgent).toBeDefined();
     });
 
-    test('ignores disabled selected proxy pool entry without legacy fail-closed mode', () => {
+    test('rejects disabled selected Codex proxies instead of falling back', () => {
         const proxyPoolsPath = writeProxyPools([
             { id: 'res-ip-1', name: '住宅号池1', url: 'socks5h://127.0.0.1:11001', enabled: false }
         ]);
 
-        const result = configureAxiosProxy({ timeout: 1000 }, {
-            uuid: 'codex-node-1',
-            PROXY_ID: 'res-ip-1',
-            PROXY_REQUIRED: true,
+        expect(() => configureAxiosProxy({ timeout: 1000 }, {
+            uuid: 'codex-node-1', PROXY_ID: 'res-ip-1',
             PROXY_POOLS_FILE_PATH: proxyPoolsPath
-        }, 'openai-codex-oauth');
-
-        expect(result.proxy).toBe(false);
-        expect(result.httpAgent).toBeUndefined();
-        expect(result.httpsAgent).toBeUndefined();
+        }, 'openai-codex-oauth')).toThrow('代理尚未取得有效国家和时区');
     });
 
     test('does not fall back to legacy provider PROXY_URL when PROXY_ID is not configured', () => {

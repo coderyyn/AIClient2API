@@ -9,7 +9,7 @@ import { broadcastEvent } from '../services/ui-manager.js';
 import { autoLinkProviderConfigs, replaceProviderCredentialPath } from '../services/service-manager.js';
 import { CONFIG } from '../core/config-manager.js';
 import { configureAxiosProxy, parseProxyUrl } from '../utils/proxy-utils.js';
-import { resolveProxyPoolEntry } from '../utils/proxy-pool-store.js';
+import { resolveProxyPoolEntry, assertVerifiedCodexProxy } from '../utils/proxy-pool-store.js';
 import { attachCodexSubscriptionWindow, buildCodexRedirectUri } from '../utils/codex-utils.js';
 import { generateCodexCallbackPage } from './codex-oauth-response-page.js';
 
@@ -1071,6 +1071,7 @@ export function assertCodexOAuthProxyAvailable(config = {}, proxyId = '') {
         throw new Error(`Selected proxy node is unavailable: ${normalizedProxyId}`);
     }
 
+    assertVerifiedCodexProxy(config, normalizedProxyId);
     return proxyEntry;
 }
 

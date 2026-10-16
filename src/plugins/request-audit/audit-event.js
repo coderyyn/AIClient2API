@@ -161,6 +161,10 @@ function normalizeRuntime(runtime = {}) {
     const outputBytes = Number.isFinite(Number(runtime.outputBytes)) && Number(runtime.outputBytes) >= 0 ? Number(runtime.outputBytes) : null;
     const backpressureMs = Number.isFinite(Number(runtime.backpressureMs)) && Number(runtime.backpressureMs) >= 0 ? Number(runtime.backpressureMs) : null;
     const metadata = runtime.metadata && typeof runtime.metadata === 'object' ? runtime.metadata : {};
+    const timeContext = metadata.proxyTimeContext;
+    const proxyTimeContext = timeContext && ['added', 'replaced', 'disabled', 'unbound', 'rejected'].includes(timeContext.action)
+        ? Object.fromEntries(['action', 'proxyId', 'timezone', 'date', 'code'].filter(key => typeof timeContext[key] === 'string' && timeContext[key].length <= 128).map(key => [key, timeContext[key]]))
+        : null;
     const readBytes = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
     const requestBody = {
         contentLength: readBytes(metadata.requestBodyContentLength),
@@ -168,8 +172,8 @@ function normalizeRuntime(runtime = {}) {
         complete: typeof metadata.requestBodyComplete === 'boolean' ? metadata.requestBodyComplete : null
     };
     const hasRequestBody = requestBody.contentLength !== null || requestBody.receivedBytes !== null || requestBody.complete !== null;
-    if (!workerId && !requestKind && outputBytes === null && backpressureMs === null && !Object.keys(stages).length && !hasRequestBody) return undefined;
-    return { workerId, requestKind, outputBytes, backpressureMs, stages, ...(hasRequestBody ? { requestBody } : {}) };
+    if (!workerId && !requestKind && outputBytes === null && backpressureMs === null && !Object.keys(stages).length && !hasRequestBody && !proxyTimeContext) return undefined;
+    return { workerId, requestKind, outputBytes, backpressureMs, stages, ...(hasRequestBody ? { requestBody } : {}), ...(proxyTimeContext ? { proxyTimeContext } : {}) };
 }
 
 function normalizeAttempts(context = {}) {

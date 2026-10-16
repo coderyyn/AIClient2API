@@ -822,6 +822,44 @@ async function showProxyPoolManager() {
     });
 }
 
+function renderProxyGeo(proxy) {
+    const geo = proxy.geo || {};
+    const valid = geo.status === 'verified';
+    const location = [geo.country || geo.countryCode, geo.region, geo.city].filter(Boolean).join(' / ');
+    return `<div class="config-item proxy-geo-info" style="grid-column:1/-1" role="status">
+        <strong>出口地区与时区</strong>
+        <div>出口 IP：${escapeHtml(geo.ip || '未检测')} · 地区：${escapeHtml(location || '未知')} · 时区：${escapeHtml(geo.timezone || '未知')}</div>
+        <div>检测时间：${escapeHtml(geo.checkedAt ? new Date(geo.checkedAt).toLocaleString() : '尚未检测')} · ${valid ? '可绑定' : '不可绑定（Codex）'}${geo.errorCode ? ' · ' + escapeHtml(geo.errorCode) : ''}</div>
+        ${geo.lastSuccess ? `<div>上次有效结果：${escapeHtml([geo.lastSuccess.country, geo.lastSuccess.city, geo.lastSuccess.timezone].filter(Boolean).join(' / '))}（当前不可用）</div>` : ''}
+        <small>地区为出口 IP 数据库识别结果；国家与有效时区齐全后才能绑定 Codex。</small>
+        <button type="button" class="btn btn-secondary" onclick="window.refreshProxyGeoRow(this)">重新检测</button>
+    </div>`;
+}
+
+async function refreshProxyGeoRow(button) {
+    const row = button.closest('.proxy-pool-row');
+    const proxyId = row?.querySelector('[data-proxy-field="id"]')?.value;
+    const url = row?.querySelector('[data-proxy-field="url"]')?.value;
+    const saved = cachedProxyPools.find(proxy => proxy.id === proxyId);
+    if (!saved || saved.url !== url || saved.expectedIp !== (row.querySelector('[data-proxy-field="expectedIp"]')?.value || '')) {
+        showToast('提示', '请先保存新增或修改的代理，保存时会自动检测。', 'info');
+        return;
+    }
+    button.disabled = true;
+    button.textContent = '检测中…';
+    try {
+        const result = await window.apiClient.post('/proxy-pools/test', { proxyId });
+        if (result.geo) saved.geo = result.geo;
+        const info = row.querySelector('.proxy-geo-info');
+        if (info) info.outerHTML = renderProxyGeo(saved);
+    } catch {
+        button.disabled = false;
+        button.textContent = '重新检测';
+        showToast('错误', '检测失败，请重试。', 'error');
+    }
+}
+window.refreshProxyGeoRow = refreshProxyGeoRow;
+
 function renderProxyPoolRow(proxy = {}) {
     const enabled = proxy.enabled !== false;
     const proxyId = proxy.id || '';
@@ -860,6 +898,7 @@ function renderProxyPoolRow(proxy = {}) {
                     <i class="fas fa-trash"></i> ${escapeHtml(t('modal.provider.delete'))}
                 </button>
             </div>
+            ${renderProxyGeo(proxy)}
             <div class="proxy-pool-assignment-slot" data-proxy-assignment-id="${escapeHtml(proxyId)}">
                 ${renderProxyPoolAssignments(proxyId, proxyPoolProviderFilter)}
             </div>
@@ -888,8 +927,12 @@ async function saveProxyPools() {
     try {
         const response = await window.apiClient.post('/proxy-pools', { proxies });
         cachedProxyPools = Array.isArray(response?.proxies) ? response.proxies : proxies;
-        showToast(t('common.success'), t('modal.proxyPool.saveSuccess'), 'success');
-        document.querySelector('.proxy-pool-modal')?.remove();
+        const unverified = cachedProxyPools.filter(proxy => proxy.enabled !== false && proxy.geo?.status !== 'verified').length;
+        showToast(unverified ? '代理已保存' : t('common.success'), unverified ? `${unverified} 个代理尚未验证地区时区，不能新增 Codex 绑定。可点击重新检测。` : t('modal.proxyPool.saveSuccess'), unverified ? 'warning' : 'success');
+        if (unverified) {
+            const list = document.querySelector('.proxy-pool-modal .proxy-pool-list');
+            if (list) list.innerHTML = cachedProxyPools.map(renderProxyPoolRow).join('');
+        } else document.querySelector('.proxy-pool-modal')?.remove();
         if (currentProviderType) {
             await refreshProviderConfig(currentProviderType);
         }

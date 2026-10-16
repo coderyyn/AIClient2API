@@ -1,3 +1,5 @@
+import { assertVerifiedCodexProxy, CODEX_PROXY_SNAPSHOT } from '../../utils/proxy-pool-store.js';
+import { rewriteProxyTimeContext } from './codex-proxy-time-context.js';
 import { atomicWriteFile } from '../../utils/file-lock.js';
 import axios from 'axios';
 import { parseCodexSafetyBuffering } from './codex-safety-buffering.js';
@@ -383,10 +385,13 @@ export class CodexApiService {
         this.startCacheCleanup();
 
         this.fingerprintRequestState = new WeakMap();
+        this.timeContextProxyStates = new WeakMap();
     }
 
     _applySidecar(axiosConfig) {
-        return configureTLSSidecar(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API, this.baseUrl);
+        const snapshot = this.timeContextProxyStates.get(axiosConfig.data);
+        const config = snapshot ? { ...this.config, [CODEX_PROXY_SNAPSHOT]: snapshot } : this.config;
+        return configureTLSSidecar(axiosConfig, config, config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API, this.baseUrl);
     }
 
     resolveFingerprintState(requestBody) {
@@ -1113,7 +1118,21 @@ export class CodexApiService {
 
         // 凭据级改写到 5.6 系列时，5.6 无 max 档位，降为 xhigh
         const remapApplied = !isImageModel && resolveCodexModelRemap(upstreamModel, this.config) !== null;
-        const cleanedBody = sanitizeCodexModelParameters(effectiveUpstreamModel, {...requestBody});
+        let cleanedBody = sanitizeCodexModelParameters(effectiveUpstreamModel, {...requestBody});
+        let timeProxy = null;
+        let timeAudit = { action: 'unbound' };
+        if (this.config.PROXY_ID) {
+            try {
+                timeProxy = assertVerifiedCodexProxy(this.config);
+                const rewritten = rewriteProxyTimeContext(cleanedBody, timeProxy.geo.timezone);
+                cleanedBody = rewritten.body;
+                timeAudit = { ...rewritten.audit, proxyId: timeProxy.id };
+            } catch (error) {
+                requestContext.get('runtimeRequest')?.setMetadata?.({ proxyTimeContext: { action: 'rejected', code: error.code || 'PROXY_TIME_CONTEXT_FAILED' } });
+                throw error;
+            }
+        }
+        requestContext.get('runtimeRequest')?.setMetadata?.({ proxyTimeContext: timeAudit });
         delete cleanedBody[CODEX_FINGERPRINT_CONTEXT_KEY];
         delete cleanedBody.metadata;
         delete cleanedBody.previous_response_id;
@@ -1295,6 +1314,7 @@ export class CodexApiService {
             }
         }
 
+        if (timeProxy) this.timeContextProxyStates.set(result, timeProxy);
         return result;
     }
 

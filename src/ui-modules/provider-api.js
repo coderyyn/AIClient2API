@@ -1,3 +1,4 @@
+import { assertCodexProxyBinding } from '../utils/proxy-pool-store.js';
 import { withCredentialLifecycleLock, buildArchiveUpdate } from '../utils/provider-archive.js';
 import { getCredentialArchiveBindings } from '../plugins/api-potluck/key-manager.js';
 import { existsSync, readFileSync } from 'fs';
@@ -501,6 +502,8 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
             return true;
         }
 
+        assertCodexProxyBinding(currentConfig, providerType, providerConfig);
+
         // Generate UUID if not provided
         if (!providerConfig.uuid) {
             providerConfig.uuid = generateUUID();
@@ -578,8 +581,8 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         }));
         return true;
     } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
+        res.writeHead(error.status || 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: error.code, message: error.message } }));
         return true;
     }
 }
@@ -660,6 +663,7 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
             lastErrorTime: existingProvider.lastErrorTime
         };
 
+        assertCodexProxyBinding(currentConfig, providerType, updatedProvider, existingProvider);
         providerPools[providerType][providerIndex] = updatedProvider;
 
         // Save to file
@@ -689,8 +693,8 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         }));
         return true;
     } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
+        res.writeHead(error.status || 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: error.code, message: error.message } }));
         return true;
     }
 }

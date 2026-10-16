@@ -1,3 +1,4 @@
+import { assertCodexProxyBinding, assertVerifiedCodexProxy } from '../utils/proxy-pool-store.js';
 ﻿import { getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import {
@@ -919,6 +920,7 @@ export async function replaceProviderCredentialPath(config, options = {}) {
             }
         }
 
+        assertCodexProxyBinding(config, providerType, nextProvider, providers[providerIndex]);
         updatedProvider = applyCodexIdentityToProvider(nextProvider, codexIdentity);
 
         providerPools[providerType][providerIndex] = updatedProvider;
@@ -1107,6 +1109,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
                     lastErrorMessage: null,
                     ...pickProviderDefaults(providerDefaults)
                 }, codexIdentity);
+                assertCodexProxyBinding(config, providerType, updatedProvider, existingProvider);
                 config.providerPools[providerType][existingIdentityIndex] = updatedProvider;
                 logger.info(`[Auto-Link] Updated existing Codex provider by account identity: ${updatedProvider.uuid}`);
                 return {
@@ -1136,6 +1139,7 @@ async function linkSingleCredential(config, credPath, providerDefaults = {}) {
         }
         
         // 娣诲姞鍒伴厤缃?
+        assertCodexProxyBinding(config, providerType, newProvider);
         config.providerPools[providerType].push(newProvider);
         
         logger.info(`[Auto-Link] Successfully linked credential: ${relativePath} to ${displayName}`);
@@ -1477,6 +1481,13 @@ async function getApiServiceInternal(config, requestedModel = null, options = {}
         throw new Error(`[API Service] Auto-routing failed: Model name must include a provider prefix (e.g., 'provider:model'). Received: '${actualModelName}'`);
     }
     recordProviderFilterStages(providerFilterStartedAt);
+    if (config.MODEL_PROVIDER?.startsWith('openai-codex-oauth') && serviceConfig.PROXY_ID) {
+        try { assertVerifiedCodexProxy(serviceConfig); }
+        catch (error) {
+            requestContext.get('runtimeRequest')?.setMetadata?.({ proxyTimeContext: { action: 'rejected', code: error.code } });
+            throw error;
+        }
+    }
     await ensureCodexIdentityForServiceConfig(serviceConfig, config.MODEL_PROVIDER);
     return getServiceAdapter(serviceConfig);
 }
@@ -1770,6 +1781,13 @@ async function getApiServiceWithFallbackInternal(config, requestedModel = null, 
         });
     }
     
+    if (serviceConfig.MODEL_PROVIDER?.startsWith('openai-codex-oauth') && serviceConfig.PROXY_ID) {
+        try { assertVerifiedCodexProxy(serviceConfig); }
+        catch (error) {
+            requestContext.get('runtimeRequest')?.setMetadata?.({ proxyTimeContext: { action: 'rejected', code: error.code } });
+            throw error;
+        }
+    }
     const service = getServiceAdapter(serviceConfig);
     if (config._codexRouting) {
         config._codexRouting.hotShardApplied = selectionDiagnostics.hotShardApplied === true;
