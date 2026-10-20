@@ -138,4 +138,37 @@ describe('Antigravity usage formatting', () => {
         ]));
         expect(formatted.items.some(item => item.id === 'gemini-3-flash')).toBe(true);
     });
+
+    test('keeps Gemini 4 Argon separate, skips disabled buckets and treats a missing fraction as fully used', () => {
+        const formatted = formatAntigravityUsage({
+            tierId: 'Antigravity Ultra',
+            account: 'user@example.com',
+            models: {},
+            quotaGroups: [
+                {
+                    displayName: 'Gemini Models',
+                    buckets: [
+                        { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.5, resetTime: '2026-10-27T00:00:00Z' },
+                        { bucketId: 'gemini-5h', window: '5h', resetTime: '2026-10-20T05:00:00Z' }
+                    ]
+                },
+                {
+                    displayName: 'Gemini 4 Argon',
+                    buckets: [
+                        { bucketId: 'gemini-argon-wtu-weekly', window: 'weekly', remainingFraction: 0.8, resetTime: '2026-10-27T00:00:00Z' },
+                        { bucketId: 'gemini-argon-disabled', window: '5h', disabled: true, remainingFraction: 1 }
+                    ]
+                }
+            ]
+        });
+
+        const byId = Object.fromEntries(formatted.items
+            .filter(item => item.source === 'retrieveUserQuotaSummary')
+            .map(item => [item.bucketId, item]));
+
+        expect(Object.keys(byId).sort()).toEqual(['gemini-5h', 'gemini-argon-wtu-weekly', 'gemini-weekly']);
+        expect(byId['gemini-argon-wtu-weekly'].label).toBe('Gemini 4 Argon · Weekly Limit');
+        expect(byId['gemini-5h']).toMatchObject({ label: 'Gemini · 5h Limit', percent: 100, remainingPercent: 0 });
+        expect(formatted.summary).toMatchObject({ label: 'Gemini · Weekly Limit', usedPercent: 50 });
+    });
 });

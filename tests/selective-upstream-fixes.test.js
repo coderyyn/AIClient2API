@@ -41,14 +41,25 @@ describe('selective upstream compatibility fixes', () => {
         });
     });
 
-    test('uses the upstream Antigravity 2.8.1 user agent', () => {
+    test('defaults to the Antigravity Hub user agent at or above the 2.23.0 floor', () => {
         const service = new AntigravityApiService({
             MODEL_PROVIDER: 'gemini-antigravity',
             ANTIGRAVITY_BASE_URL: 'http://127.0.0.1:1',
             PROJECT_ID: 'test-project'
         });
 
-        expect(service.userAgent).toBe('antigravity/2.8.1 darwin/arm64');
+        expect(service.userAgent).toBe('antigravity/hub/2.23.0 darwin/arm64');
+    });
+
+    test('lets ANTIGRAVITY_USER_AGENT override the default user agent', () => {
+        const service = new AntigravityApiService({
+            MODEL_PROVIDER: 'gemini-antigravity',
+            ANTIGRAVITY_BASE_URL: 'http://127.0.0.1:1',
+            ANTIGRAVITY_USER_AGENT: 'antigravity/cli/1.3.1 (aidev_client; os_type=darwin)',
+            PROJECT_ID: 'test-project'
+        });
+
+        expect(service.userAgent).toBe('antigravity/cli/1.3.1 (aidev_client; os_type=darwin)');
     });
 
     test('filters SSE comments and normalizes prefixes in Grok Web and Codex parsers', () => {

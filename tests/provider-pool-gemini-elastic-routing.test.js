@@ -93,7 +93,8 @@ describe('Antigravity elastic queue and model fallback', () => {
             'gemini-3.1-flash-lite',
             'gemini-2.5-flash',
             'gemini-3.5-flash-lite',
-            'gemini-3-flash'
+            'gemini-3-flash',
+            'gemini-3.8-flash-low'
         ]);
     });
 
@@ -104,7 +105,7 @@ describe('Antigravity elastic queue and model fallback', () => {
         ])).toEqual([firstFallback, liteFallback, thirdFallback]);
     });
 
-    test('stops the chain at gemini-3-flash and never falls into 3.8 effort tiers', () => {
+    test('ends the chain at gemini-3.8-flash-low and never falls into other 3.8 effort tiers', () => {
         const configured = [
             'gemini-2.5-flash-lite',
             'gemini-3.1-flash-lite',
@@ -121,7 +122,7 @@ describe('Antigravity elastic queue and model fallback', () => {
             'gemini-3.8-flash-medium',
             'gemini-3.8-flash-high'
         ];
-        expect(getAntigravityElasticFallbackModels('gemini-3-flash', configured)).toEqual([]);
+        expect(getAntigravityElasticFallbackModels('gemini-3-flash', configured)).toEqual(['gemini-3.8-flash-low']);
         expect(getAntigravityElasticFallbackModels('gemini-3.8-flash-low', configured)).toEqual([]);
         expect(getAntigravityElasticFallbackModels('gemini-3.8-flash-medium', configured)).toEqual([]);
         expect(getAntigravityElasticFallbackModels('gemini-3.8-flash-high', configured)).toEqual([]);
@@ -151,14 +152,14 @@ describe('Antigravity elastic queue and model fallback', () => {
     test('only falls forward to later priced models when the requested model is in the middle', () => {
         const configured = [firstFallback, secondFallback, liteFallback, thirdFallback, fourthFallback, fifthFallback];
         expect(getAntigravityElasticFallbackModels(sourceModel, configured)).toEqual([
-            firstFallback, secondFallback, liteFallback, thirdFallback
+            firstFallback, secondFallback, liteFallback, thirdFallback, fourthFallback
         ]);
         expect(getAntigravityElasticFallbackModels(firstFallback, configured)).toEqual([
-            secondFallback, liteFallback, thirdFallback
+            secondFallback, liteFallback, thirdFallback, fourthFallback
         ]);
-        expect(getAntigravityElasticFallbackModels(secondFallback, configured)).toEqual([liteFallback, thirdFallback]);
-        expect(getAntigravityElasticFallbackModels(liteFallback, configured)).toEqual([thirdFallback]);
-        expect(getAntigravityElasticFallbackModels(thirdFallback, configured)).toEqual([]);
+        expect(getAntigravityElasticFallbackModels(secondFallback, configured)).toEqual([liteFallback, thirdFallback, fourthFallback]);
+        expect(getAntigravityElasticFallbackModels(liteFallback, configured)).toEqual([thirdFallback, fourthFallback]);
+        expect(getAntigravityElasticFallbackModels(thirdFallback, configured)).toEqual([fourthFallback]);
         expect(getAntigravityElasticFallbackModels(fourthFallback, configured)).toEqual([]);
         expect(getAntigravityElasticFallbackModels(fifthFallback, configured)).toEqual([]);
     });

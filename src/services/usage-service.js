@@ -524,13 +524,19 @@ export function formatAntigravityUsage(usageData) {
         for (const group of Array.isArray(usageData.quotaGroups) ? usageData.quotaGroups : []) {
             if (!group || typeof group !== 'object') continue;
             const groupName = group.displayName || group.id || 'Quota group';
-            const conciseGroupName = /gemini/i.test(groupName)
-                ? 'Gemini'
-                : (/claude/i.test(groupName) && /gpt/i.test(groupName) ? 'Claude + GPT' : groupName);
+            // Gemini 4 Argon has its own weekly window; it must not be folded into the shared Gemini group.
+            const conciseGroupName = /argon/i.test(groupName)
+                ? 'Gemini 4 Argon'
+                : /gemini/i.test(groupName)
+                    ? 'Gemini'
+                    : (/claude/i.test(groupName) && /gpt/i.test(groupName) ? 'Claude + GPT' : groupName);
 
             for (const bucket of Array.isArray(group.buckets) ? group.buckets : []) {
-                if (!bucket || typeof bucket !== 'object') continue;
-                const remainingFraction = Number(bucket.remainingFraction);
+                if (!bucket || typeof bucket !== 'object' || bucket.disabled === true) continue;
+                // proto3 JSON omits zero values: a live bucket (it has a reset time) with no fraction is fully used.
+                const remainingFraction = bucket.remainingFraction === undefined && bucket.resetTime
+                    ? 0
+                    : Number(bucket.remainingFraction);
                 if (!Number.isFinite(remainingFraction)) continue;
 
                 const normalizedRemaining = Math.min(1, Math.max(0, remainingFraction));

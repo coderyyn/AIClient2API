@@ -128,4 +128,31 @@ describe('Antigravity authoritative quota summary', () => {
             warnSpy.mockRestore();
         }
     });
+
+    test('keeps querying later hosts when a summary has no Gemini bucket', async () => {
+        const partial = [{ displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 1 }] }];
+        const full = [{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.4 }] }];
+        const request = jest.fn()
+            .mockResolvedValueOnce({ data: { groups: partial } })
+            .mockResolvedValueOnce({ data: { groups: full } });
+        const service = createUsageService(request);
+        service.baseURLs = ['https://daily.example.test', 'https://prod.example.test'];
+
+        await expect(service.fetchQuotaSummaryGroups()).resolves.toEqual(full);
+
+        expect(request.mock.calls.map(call => call[0].url)).toEqual([
+            'https://daily.example.test/v1internal:retrieveUserQuotaSummary',
+            'https://prod.example.test/v1internal:retrieveUserQuotaSummary'
+        ]);
+    });
+
+    test('falls back to the partial summary when no host reports a Gemini bucket', async () => {
+        const partial = [{ displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 1 }] }];
+        const request = jest.fn().mockResolvedValue({ data: { groups: partial } });
+        const service = createUsageService(request);
+        service.baseURLs = ['https://daily.example.test', 'https://prod.example.test'];
+
+        await expect(service.fetchQuotaSummaryGroups()).resolves.toEqual(partial);
+        expect(request).toHaveBeenCalledTimes(2);
+    });
 });

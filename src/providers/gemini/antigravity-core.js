@@ -14,6 +14,7 @@ import open from 'open';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage, isAntigravityTransientCapacityError, normalizeAntigravityCapacityExhaustion } from '../../utils/common.js';
 import { getProviderModels } from '../provider-models.js';
+import { ensureAntigravityVersionUpdater, getAntigravityUserAgent, parseAntigravityUserAgentVersion } from './antigravity-version.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
 import { getRequiredProxyConfigForProvider, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { cleanJsonSchemaProperties } from '../../converters/utils.js';
@@ -34,7 +35,6 @@ const ANTIGRAVITY_BASE_URL_PROD = 'https://cloudcode-pa.googleapis.com';
 const ANTIGRAVITY_API_VERSION = 'v1internal';
 const OAUTH_CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
 const OAUTH_CLIENT_SECRET = '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';
-const DEFAULT_USER_AGENT = 'antigravity/2.9.1 darwin/arm64';
 const REFRESH_SKEW = 3000; // 3000秒（50分钟）提前刷新Token
 
 const ANTIGRAVITY_SYSTEM_PROMPT = `You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**`;
@@ -989,7 +989,8 @@ export class AntigravityApiService {
         this.config = config;
         this.host = config.HOST;
         this.oauthCredsFilePath = config.ANTIGRAVITY_OAUTH_CREDS_FILE_PATH;
-        this.userAgent = config.ANTIGRAVITY_USER_AGENT || DEFAULT_USER_AGENT;
+        this.userAgentOverride = config.ANTIGRAVITY_USER_AGENT || null;
+        if (!this.userAgentOverride) ensureAntigravityVersionUpdater();
         this.projectId = config.PROJECT_ID;
         this.tierId = null;
         this.accountEmail = config.accountEmail || null;
@@ -1342,11 +1343,25 @@ export class AntigravityApiService {
         }
     }
 
+    /**
+     * The identity sent to Cloud Code. Evaluated per request so a version learned
+     * from the Hub manifest applies without recreating the service.
+     */
+    get userAgent() {
+        return this.userAgentOverride || getAntigravityUserAgent();
+    }
+
+    set userAgent(value) {
+        this.userAgentOverride = value || null;
+    }
+
     _getEntitlementCacheIdentity() {
         const token = this.authClient?.credentials?.access_token || '';
         const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 16);
         const revision = this.config?.providerConfigRevision || this.config?.configRevision || '';
-        return [this.uuid || '', this.projectId || '', revision, tokenHash, (this.baseURLs || []).join('|')].join(':');
+        // The client version is part of the identity: Cloud Code returns different
+        // capabilities per version, so a result probed with an older one must not be reused.
+        return [this.uuid || '', this.projectId || '', revision, tokenHash, (this.baseURLs || []).join('|'), parseAntigravityUserAgentVersion(this.userAgent)].join(':');
     }
 
     _getEntitlementCacheTtlMs() {
@@ -1523,7 +1538,7 @@ export class AntigravityApiService {
                 tier_id: baseTier,
                 metadata: {
                     ide_type: 'ANTIGRAVITY',
-                    ide_version: this.userAgent.match(/antigravity\/([^ ]+)/)?.[1] || '',
+                    ide_version: parseAntigravityUserAgentVersion(this.userAgent),
                     ide_name: 'antigravity'
                 },
             };
@@ -1583,7 +1598,7 @@ export class AntigravityApiService {
         const token = this.authClient?.credentials?.access_token || '';
         const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 16);
         const configRevision = this.config?.providerConfigRevision || this.config?.configRevision || '';
-        return [this.uuid || '', this.projectId || '', configRevision, tokenHash, (this.baseURLs || []).join('|')].join(':');
+        return [this.uuid || '', this.projectId || '', configRevision, tokenHash, (this.baseURLs || []).join('|'), parseAntigravityUserAgentVersion(this.userAgent)].join(':');
     }
 
     _getModelProbeCacheTtlMs() {
@@ -2527,6 +2542,9 @@ export class AntigravityApiService {
             ? [preferredBaseURL, ...this.baseURLs.filter(baseURL => baseURL !== preferredBaseURL)]
             : this.baseURLs;
 
+        // Some hosts answer 200 with a partial summary (only the Claude/GPT group).
+        // Such a response is kept as a fallback but the next host is still tried.
+        let partialGroups = null;
         for (const baseURL of orderedBaseURLs) {
             try {
                 const requestOptions = {
@@ -2544,7 +2562,13 @@ export class AntigravityApiService {
                 this._applySidecar(requestOptions);
                 const res = await this.authClient.request(requestOptions);
                 if (Array.isArray(res.data?.groups)) {
-                    return res.data.groups;
+                    const groups = res.data.groups;
+                    const hasGeminiBucket = groups.some(group =>
+                        (Array.isArray(group?.buckets) ? group.buckets : []).some(bucket => String(bucket?.bucketId || '').startsWith('gemini-')));
+                    if (hasGeminiBucket) return groups;
+                    if (!partialGroups && groups.length > 0) partialGroups = groups;
+                    logger.warn(`[Antigravity] Quota summary from ${baseURL} has no Gemini bucket`);
+                    continue;
                 }
                 logger.warn(`[Antigravity] Unexpected quota summary response from ${baseURL}`);
             } catch (error) {
@@ -2552,7 +2576,7 @@ export class AntigravityApiService {
             }
         }
 
-        return null;
+        return partialGroups;
     }
 
 }
