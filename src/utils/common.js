@@ -532,6 +532,51 @@ export function normalizeAntigravityCapacityExhaustion(error, providerType, requ
     return true;
 }
 
+const ANTIGRAVITY_ACCOUNT_DISABLED_COOLDOWN_MS = 30 * 60 * 1000;
+const ANTIGRAVITY_ACCOUNT_DISABLED_PATTERN = /TOS_VIOLATION|violation of Terms of Service|service has been disabled in this account/i;
+
+/**
+ * Google answers every call from an account it banned for a Terms of Service
+ * violation with 403 TOS_VIOLATION, for all models. Unlike other Antigravity
+ * errors this is account-level: on 2026-10-20 banned accounts stayed in rotation
+ * and turned most of the pool's traffic into 503s.
+ */
+export function isAntigravityAccountDisabledError(error) {
+    if (!error) return false;
+    if (error.code === 'ANTIGRAVITY_ACCOUNT_DISABLED') return true;
+    if (Number(getErrorStatusCode(error)) !== 403) return false;
+    const errorText = [
+        error.message,
+        extractReadableErrorText(error.response?.data)
+    ]
+        .filter(Boolean)
+        .join(' ');
+    return ANTIGRAVITY_ACCOUNT_DISABLED_PATTERN.test(errorText);
+}
+
+export function markAntigravityAccountDisabled(error) {
+    error.code = 'ANTIGRAVITY_ACCOUNT_DISABLED';
+    assignNormalizedHttpStatus(error, 403);
+    error.shouldSwitchCredential = true;
+    return error;
+}
+
+/**
+ * Cools the whole account down so later requests stop selecting it. The
+ * cooldown expires on its own, so a misclassified account recovers and a
+ * banned one is retried at most once per window.
+ */
+export function applyAntigravityAccountDisabledCooldown({ error, providerPoolManager, providerType, providerUuid }) {
+    if (providerType !== MODEL_PROVIDER.ANTIGRAVITY || error?.code !== 'ANTIGRAVITY_ACCOUNT_DISABLED') return false;
+    if (!providerPoolManager?.markProviderUnhealthyWithRecoveryTime || !providerUuid) return false;
+    const recoveryTime = new Date(Date.now() + ANTIGRAVITY_ACCOUNT_DISABLED_COOLDOWN_MS);
+    logger.warn(`[Provider Pool] Cooling down ${providerType} (${providerUuid}) until ${recoveryTime.toISOString()}: account disabled by upstream`);
+    providerPoolManager.markProviderUnhealthyWithRecoveryTime(providerType, {
+        uuid: providerUuid
+    }, error.message, recoveryTime);
+    return true;
+}
+
 /**
  * Upstream Antigravity answers a request for a model it does not host with a
  * 404 `Requested entity was not found`. That is a model-level fact, not a
@@ -2533,6 +2578,15 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             credentialMarkedUnhealthy = true;
         }
 
+        if (applyAntigravityAccountDisabledCooldown({
+            error,
+            providerPoolManager,
+            providerType: toProvider,
+            providerUuid: pooluuid
+        })) {
+            credentialMarkedUnhealthy = true;
+        }
+
         if (isDefinitiveProviderAuthFailure(error) && providerPoolManager && pooluuid) {
             logger.info(`[Provider Pool] Marking ${toProvider} (${pooluuid}) immediately unhealthy due to definitive stream auth failure (status: ${status || 'unknown'})`);
             providerPoolManager.markProviderUnhealthyImmediately(toProvider, {
@@ -2585,7 +2639,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         if (shouldSwitchNow) {
             const isCodexTransient = isCodexTransientCredentialError(error);
             const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall
-                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY && error.code === 'MODEL_LIST_UNAVAILABLE');
+                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY
+                    && (error.code === 'MODEL_LIST_UNAVAILABLE' || error.code === 'ANTIGRAVITY_ACCOUNT_DISABLED'));
             if (isAntigravityTransientCapacity) providerPoolManager.recordGeminiSchedulingEvent?.('retryAttempts');
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),
@@ -3053,6 +3108,15 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             credentialMarkedUnhealthy = true;
         }
 
+        if (applyAntigravityAccountDisabledCooldown({
+            error,
+            providerPoolManager,
+            providerType: toProvider,
+            providerUuid: pooluuid
+        })) {
+            credentialMarkedUnhealthy = true;
+        }
+
         if (isDefinitiveProviderAuthFailure(error) && providerPoolManager && pooluuid) {
             logger.info(`[Provider Pool] Marking ${toProvider} (${pooluuid}) immediately unhealthy due to definitive unary auth failure (status: ${status || 'unknown'})`);
             providerPoolManager.markProviderUnhealthyImmediately(toProvider, {
@@ -3105,7 +3169,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         if (shouldSwitchNow) {
             const isCodexTransient = isCodexTransientCredentialError(error);
             const isProviderTransient = isCodexTransient || isAntigravityTransientCapacity || error.isGeminiMalformedFunctionCall
-                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY && error.code === 'MODEL_LIST_UNAVAILABLE');
+                || (toProvider === MODEL_PROVIDER.ANTIGRAVITY
+                    && (error.code === 'MODEL_LIST_UNAVAILABLE' || error.code === 'ANTIGRAVITY_ACCOUNT_DISABLED'));
             if (isAntigravityTransientCapacity) providerPoolManager.recordGeminiSchedulingEvent?.('retryAttempts');
             const failedCredentialUuids = [
                 ...(retryContext?.failedCredentialUuids || []),

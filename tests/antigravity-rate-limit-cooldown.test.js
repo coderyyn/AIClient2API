@@ -312,6 +312,49 @@ describe('Antigravity model discovery credential failover', () => {
     });
 });
 
+describe('Antigravity account disabled by upstream', () => {
+    function accountDisabledError() {
+        return Object.assign(new Error('[Antigravity] Account disabled by upstream (Terms of Service)'), {
+            code: 'ANTIGRAVITY_ACCOUNT_DISABLED', status: 403, statusCode: 403, shouldSwitchCredential: true
+        });
+    }
+
+    test.each(['unary', 'stream'])('%s cools the banned account down and retries on another account', async mode => {
+        mockGetApiServiceWithFallback.mockReset();
+        const response = { candidates: [{ content: { role: 'model', parts: [{ text: 'banned-failover-ok' }] }, finishReason: 'STOP' }] };
+        const first = {
+            generateContent: jest.fn().mockRejectedValue(accountDisabledError()),
+            generateContentStream: jest.fn().mockImplementation(async function* () { throw accountDisabledError(); })
+        };
+        const second = {
+            generateContent: jest.fn().mockResolvedValue(response),
+            generateContentStream: jest.fn().mockImplementation(async function* () { yield response; })
+        };
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: second, uuid: 'banned-healthy', actualModel: 'gemini-2.5-flash-lite',
+            actualProviderType: 'gemini-antigravity', serviceConfig: {}
+        });
+        const pool = createCapacityPoolManager();
+        const res = mode === 'stream' ? new StreamFakeResponse() : new FakeResponse();
+        const handler = mode === 'stream' ? handleStreamRequest : handleUnaryRequest;
+        const startedAt = Date.now();
+        await handler(res, first, 'gemini-2.5-flash-lite', { contents: [] },
+            'gemini', 'gemini-antigravity', 'none', null, pool, 'banned-account', 'Synthetic provider',
+            { CONFIG: { CREDENTIAL_SWITCH_MAX_RETRIES: 1 }, maxRetries: 1 });
+
+        expect(pool.markProviderUnhealthyWithRecoveryTime).toHaveBeenCalledTimes(1);
+        const [type, providerConfig, message, recoveryTime] = pool.markProviderUnhealthyWithRecoveryTime.mock.calls[0];
+        expect(type).toBe('gemini-antigravity');
+        expect(providerConfig).toEqual({ uuid: 'banned-account' });
+        expect(message).toContain('Terms of Service');
+        expect(recoveryTime.getTime()).toBeGreaterThanOrEqual(startedAt + 30 * 60 * 1000);
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledWith(expect.anything(), 'gemini-2.5-flash-lite',
+            expect.objectContaining({ excludeProviderUuids: ['banned-account'] }));
+        expect(res.body).toContain('banned-failover-ok');
+        expect(pool.markProviderUnhealthy).not.toHaveBeenCalled();
+    });
+});
+
 function parseSseErrorType(body) {
     const match = String(body).match(/data: ({.*})/);
     if (!match) return null;

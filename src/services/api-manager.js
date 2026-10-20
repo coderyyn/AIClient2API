@@ -5,6 +5,7 @@ import {
     ENDPOINT_TYPE,
     getRequestBody,
     applyProviderRateLimitCooldown,
+    applyAntigravityAccountDisabledCooldown,
     getProtocolPrefix,
     MODEL_PROTOCOL_PREFIX,
     extractCodexCacheAffinityScope,
@@ -815,6 +816,13 @@ async function handleImageGenerationRequest(req, res, currentConfig, providerPoo
             })) {
                 credentialMarkedUnhealthy = true;
                 cooldownApplied = true;
+            } else if (applyAntigravityAccountDisabledCooldown({
+                error,
+                providerPoolManager,
+                providerType: slotProviderType,
+                providerUuid: slotUuid
+            })) {
+                credentialMarkedUnhealthy = true;
             } else if (!credentialMarkedUnhealthy && !error.skipErrorCount && !isTransientProviderJitterError(error) && slotProviderType !== 'gemini-antigravity') {
                 if (error.response?.status !== 400) {
                     logger.info(`[Provider Pool] Marking ${slotProviderType} as unhealthy due to image generation error (status: ${error.response?.status || 'unknown'})`);

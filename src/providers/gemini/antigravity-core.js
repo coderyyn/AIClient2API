@@ -12,7 +12,7 @@ import * as readline from 'readline';
 import { v4 as uuidv4 } from 'uuid';
 import open from 'open';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
-import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage, isAntigravityTransientCapacityError, normalizeAntigravityCapacityExhaustion } from '../../utils/common.js';
+import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage, isAntigravityTransientCapacityError, normalizeAntigravityCapacityExhaustion, isAntigravityAccountDisabledError, markAntigravityAccountDisabled } from '../../utils/common.js';
 import { getProviderModels } from '../provider-models.js';
 import { ANTIGRAVITY_DEFAULT_USER_AGENT, parseAntigravityUserAgentVersion } from './antigravity-version.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
@@ -979,6 +979,7 @@ export class AntigravityApiService {
 
         this.availableModels = [];
         this._lastModelProbeSucceeded = false;
+        this._lastModelProbeAccountDisabled = false;
         this.isInitialized = false;
         this.initializationPromise = null;
         this.initializationFailure = null;
@@ -1655,6 +1656,7 @@ export class AntigravityApiService {
     async _fetchAvailableModelsOnce() {
         const modelListStartedAt = Date.now();
         logger.info('[Antigravity] Fetching available models...');
+        this._lastModelProbeAccountDisabled = false;
 
         for (const baseURL of this.baseURLs.slice(0, 1)) {
             try {
@@ -1699,6 +1701,7 @@ export class AntigravityApiService {
                 }
             } catch (error) {
                 logger.error(`[Antigravity] Failed to fetch models from ${baseURL}:`, error.message);
+                if (isAntigravityAccountDisabledError(error)) this._lastModelProbeAccountDisabled = true;
             }
         }
 
@@ -1830,6 +1833,10 @@ export class AntigravityApiService {
                 error.shouldSwitchCredential = true;
                 error.skipErrorCount = true;
                 throw error;
+            }
+
+            if (isAntigravityAccountDisabledError(error)) {
+                throw markAntigravityAccountDisabled(error);
             }
 
             if (status === 429) {
@@ -2015,6 +2022,10 @@ export class AntigravityApiService {
                 error.shouldSwitchCredential = true;
                 error.skipErrorCount = true;
                 throw error;
+            }
+
+            if (isAntigravityAccountDisabledError(error)) {
+                throw markAntigravityAccountDisabled(error);
             }
 
             if (status === 429) {
@@ -2314,6 +2325,9 @@ export class AntigravityApiService {
         const hasFetchedAvailableModels = Array.isArray(this.availableModels) && this.availableModels.length > 0;
         const upstreamModel = resolveAntigravityUpstreamModel(selectedModel);
         if (this._lastModelProbeSucceeded === false && !hasFetchedAvailableModels) {
+            if (this._lastModelProbeAccountDisabled) {
+                throw markAntigravityAccountDisabled(new Error('[Antigravity] Account disabled by upstream (Terms of Service)'));
+            }
             const error = new Error('[Antigravity] Cannot verify account model capabilities');
             error.status = 503;
             error.statusCode = 503;
