@@ -14,7 +14,7 @@ import open from 'open';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog, getRetryAfterMs, normalizeProviderErrorMessage, isAntigravityTransientCapacityError, normalizeAntigravityCapacityExhaustion } from '../../utils/common.js';
 import { getProviderModels } from '../provider-models.js';
-import { ensureAntigravityVersionUpdater, getAntigravityUserAgent, parseAntigravityUserAgentVersion } from './antigravity-version.js';
+import { ANTIGRAVITY_DEFAULT_USER_AGENT, parseAntigravityUserAgentVersion } from './antigravity-version.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
 import { getRequiredProxyConfigForProvider, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { cleanJsonSchemaProperties } from '../../converters/utils.js';
@@ -990,7 +990,6 @@ export class AntigravityApiService {
         this.host = config.HOST;
         this.oauthCredsFilePath = config.ANTIGRAVITY_OAUTH_CREDS_FILE_PATH;
         this.userAgentOverride = config.ANTIGRAVITY_USER_AGENT || null;
-        if (!this.userAgentOverride) ensureAntigravityVersionUpdater();
         this.projectId = config.PROJECT_ID;
         this.tierId = null;
         this.accountEmail = config.accountEmail || null;
@@ -1344,11 +1343,10 @@ export class AntigravityApiService {
     }
 
     /**
-     * The identity sent to Cloud Code. Evaluated per request so a version learned
-     * from the Hub manifest applies without recreating the service.
+     * The identity sent to Cloud Code: the ANTIGRAVITY_USER_AGENT override, else the legacy default.
      */
     get userAgent() {
-        return this.userAgentOverride || getAntigravityUserAgent();
+        return this.userAgentOverride || ANTIGRAVITY_DEFAULT_USER_AGENT;
     }
 
     set userAgent(value) {

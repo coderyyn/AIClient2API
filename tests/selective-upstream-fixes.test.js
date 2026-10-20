@@ -41,14 +41,14 @@ describe('selective upstream compatibility fixes', () => {
         });
     });
 
-    test('defaults to the Antigravity Hub user agent at or above the 2.23.0 floor', () => {
+    test('defaults to the legacy Antigravity user agent', () => {
         const service = new AntigravityApiService({
             MODEL_PROVIDER: 'gemini-antigravity',
             ANTIGRAVITY_BASE_URL: 'http://127.0.0.1:1',
             PROJECT_ID: 'test-project'
         });
 
-        expect(service.userAgent).toBe('antigravity/hub/2.23.0 darwin/arm64');
+        expect(service.userAgent).toBe('antigravity/2.9.1 darwin/arm64');
     });
 
     test('lets ANTIGRAVITY_USER_AGENT override the default user agent', () => {
