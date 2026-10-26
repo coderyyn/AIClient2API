@@ -62,7 +62,11 @@ def compatible(old, new, expected_env_changes=None):
                 'LogConfig', 'Memory', 'NanoCpus', 'ExtraHosts', 'Privileged',
                 'CapAdd', 'CapDrop', 'SecurityOpt', 'ReadonlyRootfs', 'Dns',
                 'Ulimits', 'Devices', 'PidMode', 'IpcMode', 'ShmSize', 'Init'):
-        require(old['HostConfig'].get(key) == new['HostConfig'].get(key), 'container setting drift: ' + key)
+        old_value, new_value = old['HostConfig'].get(key), new['HostConfig'].get(key)
+        # Docker represents an unset DNS list as either null or [].
+        if key == 'Dns' and old_value in (None, []) and new_value in (None, []):
+            continue
+        require(old_value == new_value, 'container setting drift: ' + key)
     for key in ('User', 'WorkingDir', 'Entrypoint', 'Cmd'):
         require(old['Config'].get(key) == new['Config'].get(key), 'container command drift: ' + key)
     def env(container):
@@ -180,9 +184,11 @@ class Release:
                 raise RuntimeError('container health or worker topology did not converge before deadline')
             time.sleep(2)
 
-    def wait_for_drain(self, timeout=20, stable_samples=3, max_forced_in_flight=0,
+    def wait_for_drain(self, timeout=20, stable_samples=3, max_forced_in_flight=4,
                        clock=None, wait=None):
         """Only call after new API traffic has been stopped at the edge."""
+        require(isinstance(max_forced_in_flight, int) and 0 <= max_forced_in_flight <= 4,
+                'forced in-flight limit must be 0..4')
         clock = clock or time.monotonic
         wait = wait or time.sleep
         deadline = clock() + timeout
@@ -205,11 +211,11 @@ class Release:
             observed += 1
             if stable >= stable_samples:
                 return {**last, 'forced': False}
+            if 0 < in_flight <= max_forced_in_flight and persistence_stable >= stable_samples:
+                print(f'stage=drain forced=true inFlight={in_flight} '
+                      'backlog=0 spooled=0', flush=True)
+                return {**last, 'forced': True}
             if clock() >= deadline:
-                if (0 < in_flight <= max_forced_in_flight and persistence_stable >= stable_samples):
-                    print(f'stage=drain forced=true inFlight={in_flight} '
-                          'backlog=0 spooled=0', flush=True)
-                    return {**last, 'forced': True}
                 raise RuntimeError('traffic has not drained; active service unchanged: '
                                    f'inFlight={in_flight} backlog={metrics["backlog"]} spooled={metrics["spooled"]}')
             wait(2)
@@ -284,7 +290,7 @@ class Release:
         self.save(phase='prepared')
 
     def cutover(self, writes_paused=False, ingress_paused=False, drain_timeout=None,
-                max_forced_in_flight=0):
+                max_forced_in_flight=4):
         require(self.state['phase'] == 'prepared', 'cutover requires prepared state')
         require(writes_paused, 'pause management/OAuth writes before --writes-paused')
         require(ingress_paused, 'pause new public API requests before --ingress-paused')
@@ -296,8 +302,8 @@ class Release:
         compatible(self.inspect(self.state['oldId']), self.owned(self.state['finalId'], 'final'), self.spec.get('expectedEnvChanges'))
         timeout = self.spec.get('drainTimeoutSeconds', 20) if drain_timeout is None else drain_timeout
         require(isinstance(timeout, int) and 0 <= timeout <= 180, 'drain timeout must be 0..180 seconds')
-        require(isinstance(max_forced_in_flight, int) and 0 <= max_forced_in_flight <= 10,
-                'forced in-flight limit must be 0..10')
+        require(isinstance(max_forced_in_flight, int) and 0 <= max_forced_in_flight <= 4,
+                'forced in-flight limit must be 0..4')
         drain = self.wait_for_drain(timeout=timeout, max_forced_in_flight=max_forced_in_flight)
         self.save(phase='cutover', drainDecision=drain,
                   forcedCutover=drain['forced'],
@@ -428,7 +434,7 @@ class Release:
             write_json(directory / 'state.json', record)
 
     def run(self, phase, apply=False, writes_paused=False, ingress_paused=False, lock=True,
-            drain_timeout=None, max_forced_in_flight=0):
+            drain_timeout=None, max_forced_in_flight=4):
         self.identity()
         self.image()
         if not apply:
@@ -488,7 +494,7 @@ def main():
     parser.add_argument('--writes-paused', action='store_true')
     parser.add_argument('--ingress-paused', action='store_true')
     parser.add_argument('--drain-timeout', type=int)
-    parser.add_argument('--max-forced-in-flight', type=int, default=0)
+    parser.add_argument('--max-forced-in-flight', type=int, choices=range(0, 5), default=4)
     args = parser.parse_args()
     release = Release(args.spec, args.state_dir)
     print(json.dumps(release.run(args.phase, args.apply, args.writes_paused, args.ingress_paused,

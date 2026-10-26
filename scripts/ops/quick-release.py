@@ -27,7 +27,7 @@ def interrupt_as_exception():
 
 
 def advance(release, phase, apply=False, maintenance=False, status_probe=None, drain_timeout=None,
-            max_forced_in_flight=0):
+            max_forced_in_flight=4):
     release.identity()
     release.image()
     if not apply:
@@ -84,7 +84,7 @@ def main():
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--maintenance', action='store_true', help='temporary public API 503 while requests drain')
     parser.add_argument('--drain-timeout', type=int, choices=range(0,181), default=None)
-    parser.add_argument('--max-forced-in-flight', type=int, choices=range(0,11), default=0)
+    parser.add_argument('--max-forced-in-flight', type=int, choices=range(0,5), default=4)
     args = parser.parse_args()
     release = Release(args.spec, args.state_dir)
     print(json.dumps(advance(release, args.phase, args.apply, args.maintenance,

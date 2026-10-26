@@ -4,7 +4,7 @@ param(
     [ValidatePattern('^[a-zA-Z0-9_.:/-]+$')][string]$Image,
     [ValidateSet('Prepare','Deploy')][string]$Mode = 'Prepare',
     [ValidateRange(0,180)][int]$MaxDrainSeconds = 20,
-    [ValidateRange(0,10)][int]$MaxForcedInFlight = 0,
+    [ValidateRange(0,4)][int]$MaxForcedInFlight = 4,
     [switch]$Apply,
     [switch]$Maintenance
 )
@@ -120,7 +120,7 @@ $command = @('python3',"$toolsDir/quick-release.py",'--spec',$record.spec,
     '--state-dir',$record.stateDir,'--phase',$phase,'--apply')
 if ($Mode -eq 'Deploy') { $command += '--maintenance' }
 if ($Mode -eq 'Deploy') { $command += @('--drain-timeout',[string]$MaxDrainSeconds) }
-if ($Mode -eq 'Deploy' -and $MaxForcedInFlight -gt 0) {
+if ($Mode -eq 'Deploy') {
     $command += @('--max-forced-in-flight',[string]$MaxForcedInFlight)
 }
 $result = Invoke-Remote $command

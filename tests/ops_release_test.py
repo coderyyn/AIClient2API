@@ -389,9 +389,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_busy_traffic_prevents_stop_and_keeps_prepared_release(self):
         self.ready()
-        self.active_in_flight = 4
+        self.active_in_flight = 5
         self.r.spec['drainTimeoutSeconds'] = 0
-        with self.assertRaisesRegex(RuntimeError, 'inFlight=4'):
+        with self.assertRaisesRegex(RuntimeError, 'inFlight=5'):
             self.r.run('cutover', True, True, True)
         self.assertEqual(self.r.state['phase'], 'prepared')
         self.assertTrue(self.docker.objects['old']['State']['Running'])
@@ -419,6 +419,53 @@ class ReleaseTests(unittest.TestCase):
             self.r.wait_for_drain(timeout=4, max_forced_in_flight=3,
                                   clock=lambda: now[0], wait=wait)
 
+    def test_default_policy_allows_one_to_four_without_waiting_for_deadline(self):
+        self.ready()
+        for count in range(1, 5):
+            with self.subTest(inFlight=count):
+                self.active_in_flight = count
+                now = [0]
+                result = self.r.wait_for_drain(timeout=180, clock=lambda: now[0],
+                    wait=lambda seconds: now.__setitem__(0, now[0] + seconds))
+                self.assertTrue(result['forced'])
+                self.assertEqual(result['inFlight'], count)
+                self.assertEqual(now[0], 4)
+
+    def test_default_policy_rejects_five_and_strict_mode_rejects_one(self):
+        self.ready()
+        for count, limit in [(5, 4), (1, 0)]:
+            with self.subTest(inFlight=count, limit=limit):
+                self.active_in_flight = count
+                now = [0]
+                with self.assertRaisesRegex(RuntimeError, 'traffic has not drained'):
+                    self.r.wait_for_drain(timeout=4, max_forced_in_flight=limit,
+                        clock=lambda: now[0], wait=lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def test_small_inflight_still_requires_three_zero_persistence_samples(self):
+        self.ready()
+        self.active_in_flight = 4
+        for field in ('backlog', 'spooled'):
+            with self.subTest(field=field):
+                now = [0]
+                value = healthy()
+                value['metrics']['inFlight'] = 4
+                if field == 'backlog': value['persistenceBacklog'] = 1
+                else: value['runtimeHooks']['spooled'] = 1
+                with patch.object(self.r, 'probe', return_value=value):
+                    with self.assertRaisesRegex(RuntimeError, 'traffic has not drained'):
+                        self.r.wait_for_drain(timeout=4, clock=lambda: now[0],
+                            wait=lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def test_unset_dns_representations_are_equivalent_but_real_changes_fail(self):
+        old = {'HostConfig': {'Dns': []}, 'Config': {'Env': ['SYNTHETIC=1']}}
+        new = copy.deepcopy(old)
+        new['HostConfig']['Dns'] = None
+        release.compatible(old, new)
+        release.compatible(new, old)
+        new['HostConfig']['Dns'] = ['1.1.1.1']
+        with self.assertRaisesRegex(ValueError, 'drift: Dns'):
+            release.compatible(old, new)
+
     def test_authorized_force_allows_non_oom_137_and_records_possible_interruptions(self):
         self.ready()
         self.docker.unclean_stop = True
@@ -444,6 +491,28 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'pause new public API'):
             self.r.run('cutover', True, True)
         self.assertTrue(self.docker.objects['old']['State']['Running'])
+
+
+class QuickReleasePolicyTests(unittest.TestCase):
+    def test_cli_defaults_to_four_and_preserves_explicit_zero(self):
+        module_spec = importlib.util.spec_from_file_location('quick_release_policy', OPS / 'quick-release.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        for extra, expected in [([], 4), (['--max-forced-in-flight', '0'], 0)]:
+            with self.subTest(limit=expected):
+                with patch.object(module, 'Release'), patch.object(module, 'advance', return_value={}) as advance:
+                    with patch.object(sys, 'argv', ['quick-release.py', '--spec', 'synthetic.json', '--state-dir', 'synthetic', *extra]), patch('builtins.print'):
+                        module.main()
+                self.assertEqual(advance.call_args.kwargs['max_forced_in_flight'], expected)
+
+    def test_cli_rejects_five_as_a_forced_limit(self):
+        module_spec = importlib.util.spec_from_file_location('quick_release_reject_policy', OPS / 'quick-release.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        with patch.object(sys, 'argv', ['quick-release.py', '--spec', 'synthetic.json', '--state-dir', 'synthetic', '--max-forced-in-flight', '5']):
+            with patch('sys.stderr'), self.assertRaises(SystemExit) as failure:
+                module.main()
+        self.assertEqual(failure.exception.code, 2)
 
 
 if __name__ == '__main__':
