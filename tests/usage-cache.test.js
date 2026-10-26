@@ -192,8 +192,9 @@ describe('usage cache TTL', () => {
         expect(instance.staleUsage).toBe(true);
         expect(instance.lastRefreshError).toBe('401 Unauthorized');
         expect(instance.usage.summary.usedPercent).toBe(42.5);
-        expect(cache.providers['openai-codex-oauth'].successCount).toBe(1);
-        expect(cache.providers['openai-codex-oauth'].errorCount).toBe(0);
+        expect(cache.providers['openai-codex-oauth'].successCount).toBe(0);
+        expect(cache.providers['openai-codex-oauth'].errorCount).toBe(1);
+        expect(cache.providers['openai-codex-oauth'].staleCount).toBe(1);
     });
 
     test('write keeps the last paid plan snapshot when a refresh downgrades PRO to FREE', async () => {

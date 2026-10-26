@@ -48,7 +48,7 @@ export function buildUsageDisplaySnapshot(usageData = {}, now = Date.now()) {
     usageData = normalizeUsageAntigravityCooldowns(usageData, now);
     const providers = {};
     for (const [providerType, providerData] of Object.entries(usageData.providers || {})) {
-        providers[providerType] = {
+        providers[providerType] = recalculateProviderCounts({
             ...providerData,
             lastSuccessfulRefreshAt: providerData?.lastSuccessfulRefreshAt || usageData?.timestamp || null,
             instances: Array.isArray(providerData?.instances)
@@ -58,7 +58,7 @@ export function buildUsageDisplaySnapshot(usageData = {}, now = Date.now()) {
                     return { ...instance, usage: displayUsage };
                 })
                 : providerData?.instances
-        };
+        });
     }
 
     return { ...usageData, providers };
@@ -80,9 +80,14 @@ function getCachedInstancesByUuid(providerCache = {}) {
 
 function recalculateProviderCounts(providerData = {}) {
     const instances = Array.isArray(providerData.instances) ? providerData.instances : [];
-    providerData.totalCount = instances.length;
-    providerData.successCount = instances.filter(inst => inst?.success).length;
-    providerData.errorCount = instances.filter(inst => !inst?.success).length;
+    const activeInstances = instances.filter(inst => !inst?.skipped && !inst?.isDisabled && !inst?.isArchived);
+    providerData.totalCount = instances.filter(inst => !inst?.isArchived).length;
+    providerData.archivedCount = instances.length - providerData.totalCount;
+    providerData.refreshableCount = activeInstances.length;
+    providerData.successCount = activeInstances.filter(inst => inst?.success && !inst?.staleUsage).length;
+    providerData.errorCount = activeInstances.length - providerData.successCount;
+    providerData.staleCount = activeInstances.filter(inst => inst?.staleUsage).length;
+    providerData.skippedCount = instances.length - activeInstances.length;
     return providerData;
 }
 

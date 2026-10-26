@@ -59,6 +59,23 @@ afterEach(() => {
 });
 
 describe('usage display cache', () => {
+    test('counts fresh refreshes separately from stale cards and skipped providers', async () => {
+        const { buildUsageDisplaySnapshot } = await loadUsageCacheModule();
+        const snapshot = buildUsageDisplaySnapshot({ providers: {
+            'gemini-antigravity': { successCount: 5, instances: [
+                { uuid: 'fresh-a', success: true },
+                { uuid: 'fresh-b', success: true },
+                { uuid: 'stale', success: true, staleUsage: true },
+                { uuid: 'disabled', success: true, isDisabled: true },
+                { uuid: 'archived', success: true, isArchived: true }
+            ] }
+        } });
+        expect(snapshot.providers['gemini-antigravity']).toMatchObject({
+            successCount: 2, errorCount: 1, staleCount: 1, refreshableCount: 3,
+            totalCount: 4, archivedCount: 1, skippedCount: 2
+        });
+    });
+
     test('keeps raw data in canonical cache but removes it from the browser snapshot', async () => {
         const usageData = createProductionScaleUsage();
         const { writeUsageCache, readUsageCache, readUsageDisplayCache } = await loadUsageCacheModule();

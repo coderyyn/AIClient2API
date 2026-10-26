@@ -504,6 +504,12 @@ function canUseCodexRateLimitReset(rateLimitResetCredits) {
     return Boolean(rateLimitResetCredits && (rateLimitResetCredits.canReset || getCodexResetAvailableCount(rateLimitResetCredits) > 0));
 }
 
+export function getUsageInstanceDisplayName(instance = {}) {
+    const email = instance.usage?.user?.email;
+    return (instance.staleUsage ? instance.name || instance.codexEmail || email : email || instance.codexEmail || instance.name)
+        || instance.uuid;
+}
+
 function getBaseStatusState(instance) {
     if (instance.isDisabled) {
         return {
@@ -1064,7 +1070,7 @@ function createProviderGroup(providerType, providerData) {
 
     const instances = providerData.instances || [];
     const refreshableInstances = instances.filter(i => !i?.skipped && !i?.isDisabled);
-    const successCount = refreshableInstances.filter(i => i.success).length;
+    const successCount = refreshableInstances.filter(i => i.success && !i.staleUsage).length;
     const successTotal = refreshableInstances.length;
     const refreshedAt = providerData.lastSuccessfulRefreshAt;
     const refreshedDate = refreshedAt ? new Date(refreshedAt) : null;
@@ -1136,7 +1142,7 @@ function createInstanceUsageCard(instance, providerType) {
     const accountUsageSummary = getAccountUsageSummary(providerType, instance);
     const summary = usage.summary || { usedPercent: 0, status: 'normal' };
     const user = usage.user || {};
-    const displayName = user.email || instance.codexEmail || instance.name || instance.uuid;
+    const displayName = getUsageInstanceDisplayName(instance);
     const providerDisplayName = getProviderDisplayName(providerType);
     const rateLimitResetCredits = summary.rateLimitResetCredits
         || (providerType === 'openai-codex-oauth' && summary.resetAvailableCount !== undefined

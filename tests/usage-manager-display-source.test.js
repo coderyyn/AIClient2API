@@ -282,7 +282,7 @@ describe('usage manager display source regressions', () => {
 
     test('provider selection filters base health before Codex quota bucket health', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'src/providers/provider-pool-manager.js'), 'utf8').replace(/\r\n/g, '\n');
-        const baseFilterIndex = source.indexOf('let availableAndHealthyProviders = availableProviders.filter(p =>\n            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh');
+        const baseFilterIndex = source.indexOf('let availableAndHealthyProviders = availableProviders.filter(p =>\n            p.config.isHealthy && !(p.config.isArchived || p.config.isDisabled) && !p.config.needsRefresh');
         const codexFilterIndex = source.search(/availableAndHealthyProviders = this\._filterCodexProvidersByTokenQuota\(providerType, availableAndHealthyProviders, requestedModel(?:, selectionDiagnostics)?\);/);
 
         expect(baseFilterIndex).toBeGreaterThanOrEqual(0);
@@ -310,12 +310,6 @@ describe('usage manager display source regressions', () => {
         expect(usageManagerSource).toContain('data.refreshErrors.length === 0');
         expect(usageManagerSource).toContain('showUsageRefreshErrors(data.refreshErrors)');
     });
-    test('Codex usage cards prefer backend codexEmail before provider display name', () => {
-        const source = fs.readFileSync(path.join(process.cwd(), 'static/app/usage-manager.js'), 'utf8').replace(/\r\n/g, '\n');
-
-        expect(source).toContain('const displayName = user.email || instance.codexEmail || instance.name || instance.uuid;');
-    });
-
     test('usage api normalizes legacy CODEX_EMAIL into codexEmail', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'src/ui-modules/usage-api.js'), 'utf8').replace(/\r\n/g, '\n');
 

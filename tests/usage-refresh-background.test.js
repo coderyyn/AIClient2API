@@ -13,6 +13,7 @@ jest.mock('../src/services/usage-service.js', () => ({
 }));
 
 jest.mock('../src/ui-modules/usage-cache.js', () => ({
+    ...jest.requireActual('../src/ui-modules/usage-cache.js'),
     readUsageCache: jest.fn(),
     readUsageDisplayCache: jest.fn(),
     writeUsageCache: jest.fn(),
@@ -126,5 +127,53 @@ describe('usage refresh request', () => {
         expect(readUsageDisplayCache).toHaveBeenCalledWith({ maxAgeMs: null, allowStale: true });
         expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
         expect(readUsageCache).not.toHaveBeenCalled();
+    });
+
+    test('cached reads remove deleted providers and overlay current identity and recovery state', async () => {
+        const cachedData = {
+            timestamp: '2026-10-20T13:13:01.028Z',
+            providers: {
+                'gemini-antigravity': {
+                    instances: [
+                        { uuid: 'kept', name: 'old name', success: true, scheduledRecoveryTime: '2099-01-01T00:00:00Z', usage: { user: { email: 'old@example.test' } } },
+                        { uuid: 'removed', success: true, usage: {} },
+                        { uuid: 'stale', success: true, staleUsage: true, lastRefreshError: 'network', usage: {} },
+                        { uuid: 'disabled', success: true, usage: {} },
+                        { uuid: 'archived', success: true, usage: {} }
+                    ]
+                }
+            }
+        };
+        readUsageDisplayCache.mockResolvedValue(cachedData);
+        const res = createResponse();
+        await handleGetUsage({ url: '/api/usage', headers: { host: 'localhost' } }, res, {}, {
+            providerPools: {
+                'gemini-antigravity': [
+                    { uuid: 'kept', customName: 'current name', isHealthy: true, scheduledRecoveryTime: null },
+                    { uuid: 'stale', isHealthy: false },
+                    { uuid: 'disabled', isDisabled: true },
+                    { uuid: 'archived', isArchived: true }
+                ]
+            }
+        });
+
+        expect(res.statusCode).toBe(200);
+        const result = JSON.parse(res.body).providers['gemini-antigravity'];
+        expect(result.instances.map(i => i.uuid)).toEqual(['kept', 'stale', 'disabled', 'archived']);
+        expect(result.instances[0]).toMatchObject({ name: 'current name', isHealthy: true, scheduledRecoveryTime: null });
+        expect(result).toMatchObject({ refreshableCount: 2, successCount: 1, errorCount: 1, staleCount: 1 });
+        expect(cachedData.providers['gemini-antigravity'].instances).toHaveLength(5);
+        expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
+    });
+
+    test.each([{}, { 'gemini-antigravity': [] }])('an empty current pool does not resurrect cached cards (%j)', async (providerPools) => {
+        const res = createResponse();
+        await handleGetUsage({ url: '/api/usage', headers: { host: 'localhost' } }, res, {}, {
+            providerPools
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).providers['gemini-antigravity']).toMatchObject({
+            instances: [], successCount: 0, refreshableCount: 0
+        });
     });
 });

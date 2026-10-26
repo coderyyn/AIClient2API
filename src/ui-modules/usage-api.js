@@ -521,8 +521,9 @@ function recalculateProviderUsageCounts(providerData) {
     providerData.totalCount = instances.filter(instance => !instance.isArchived).length;
     providerData.archivedCount = instances.filter(instance => instance.isArchived).length;
     providerData.refreshableCount = activeInstances.length;
-    providerData.successCount = activeInstances.filter(inst => inst.success).length;
-    providerData.errorCount = activeInstances.filter(inst => !inst.success).length;
+    providerData.successCount = activeInstances.filter(inst => inst.success && !inst.staleUsage).length;
+    providerData.errorCount = activeInstances.length - providerData.successCount;
+    providerData.staleCount = activeInstances.filter(inst => inst.staleUsage).length;
     providerData.skippedCount = instances.length - activeInstances.length;
     return providerData;
 }
@@ -867,19 +868,24 @@ function getProviderConfigFilePath(provider, providerType) {
 function enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager) {
     if (!providerData?.instances || !Array.isArray(providerData.instances)) return providerData;
 
+    // A missing type in the live pool means it was removed; do not revive it from disk.
+    const currentProviders = providerPoolManager?.providerPools
+        ? providerPoolManager.providerPools[providerType] || []
+        : currentConfig?.providerPools
+            ? currentConfig.providerPools[providerType] || []
+            : loadProviderList(providerType, currentConfig, providerPoolManager);
     const providersByUuid = new Map(
-        loadProviderList(providerType, currentConfig, providerPoolManager)
+        currentProviders
             .filter(provider => provider?.uuid)
             .map(provider => [provider.uuid, provider])
     );
 
-    providerData.instances = providerData.instances.map(instance => {
+    providerData.instances = providerData.instances.filter(instance => providersByUuid.has(instance?.uuid)).map(instance => {
         const provider = providersByUuid.get(instance?.uuid);
-        if (!provider) return instance;
 
         return {
             ...instance,
-            name: instance.name || getProviderDisplayName(provider, providerType),
+            name: getProviderDisplayName(provider, providerType),
             codexAccountKey: instance.codexAccountKey || provider.codexAccountKey || null,
             codexAccountId: instance.codexAccountId || provider.codexAccountId || null,
             codexEmail: instance.codexEmail || getProviderCodexEmail(provider),
@@ -891,18 +897,22 @@ function enrichProviderDataWithProviderConfig(providerType, providerData, curren
             isArchived: provider.isArchived === true,
             isDisabled: provider.isArchived === true || provider.isDisabled === true,
             needsRefresh: provider.needsRefresh === true,
-            scheduledRecoveryTime: instance.scheduledRecoveryTime || provider.scheduledRecoveryTime || null
+            lastErrorMessage: provider.lastErrorMessage || null,
+            scheduledRecoveryTime: provider.scheduledRecoveryTime || null
         };
     });
 
-    return providerData;
+    return recalculateProviderUsageCounts(providerData);
 }
 
 function enrichUsageResultsWithProviderConfig(results, currentConfig, providerPoolManager) {
     if (!results?.providers) return results;
 
+    results.providers = { ...results.providers };
     for (const [providerType, providerData] of Object.entries(results.providers)) {
-        enrichProviderDataWithProviderConfig(providerType, providerData, currentConfig, providerPoolManager);
+        results.providers[providerType] = enrichProviderDataWithProviderConfig(
+            providerType, { ...providerData }, currentConfig, providerPoolManager
+        );
     }
 
     return results;
@@ -1005,18 +1015,7 @@ async function updateSingleInstanceInCache(providerType, uuid, instanceResult) {
                 providerCache.instances.push(instanceResult);
             }
 
-            let successCount = 0;
-            let errorCount = 0;
-            providerCache.instances.forEach(inst => {
-                if (inst.success) {
-                    successCount++;
-                } else {
-                    errorCount++;
-                }
-            });
-            providerCache.successCount = successCount;
-            providerCache.errorCount = errorCount;
-            providerCache.totalCount = providerCache.instances.length;
+            recalculateProviderUsageCounts(providerCache);
 
             cache.timestamp = new Date().toISOString();
             await writeUsageCacheUnlocked(cache);

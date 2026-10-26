@@ -19,6 +19,14 @@ describe('usage refresh feedback', () => {
         delete globalThis.localStorage;
     });
 
+    test('stale cards use current provider names instead of cached account emails', async () => {
+        const { getUsageInstanceDisplayName } = await import('../static/app/usage-manager.js');
+        const instance = { uuid: 'same-provider', name: 'Current provider', usage: { user: { email: 'old@example.test' } } };
+        expect(getUsageInstanceDisplayName({ ...instance, staleUsage: true })).toBe('Current provider');
+        expect(getUsageInstanceDisplayName(instance)).toBe('old@example.test');
+        expect(getUsageInstanceDisplayName({ uuid: 'fallback' })).toBe('fallback');
+    });
+
     test('waits for the background refresh before reporting completion', async () => {
         const usageManager = await import('../static/app/usage-manager.js');
 
