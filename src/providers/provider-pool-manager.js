@@ -4496,8 +4496,36 @@ export class ProviderPoolManager {
             );
         }
 
+        // A failed acquisition is not the same as an empty credential pool.
+        // Keep rate/capacity evidence until every permitted fallback has failed.
+        let lastQuotaError = null;
+        let lastConcurrencyError = null;
+        let lastRateError = null;
+        const rememberRateError = error => {
+            const concurrency = error?.code === 'PROVIDER_CONCURRENCY_EXHAUSTED'
+                || ['PROVIDER_QUEUE_EXHAUSTED', 'PROVIDER_CONCURRENCY_EXHAUSTED'].includes(error?.details?.reason);
+            const status = Number(error?.status ?? error?.statusCode ?? (Number(error?.code) || 0));
+            if (status !== 429 && !(concurrency && !status)) throw error;
+            if (error.quotaScope) {
+                lastQuotaError = error;
+            } else if (concurrency) {
+                error.status = 429;
+                error.statusCode = 429;
+                error.code = 'PROVIDER_CONCURRENCY_EXHAUSTED';
+                lastConcurrencyError = error;
+            } else {
+                lastRateError = error;
+            }
+        };
+
         if (options.disableProviderFallback === true) {
-            const selectedConfig = await this.acquireSlot(providerType, requestedModel, options);
+            let selectedConfig;
+            try {
+                selectedConfig = await this.acquireSlot(providerType, requestedModel, options);
+            } catch (error) {
+                rememberRateError(error);
+                throw error;
+            }
             return selectedConfig
                 ? {
                     config: selectedConfig,
@@ -4523,8 +4551,6 @@ export class ProviderPoolManager {
         }
         let modelFallbackReason = null;
         const modelFallbackTarget = getCodexModelFallbackTarget(requestedModel, this.globalConfig);
-        let lastQuotaError = null;
-
         for (const currentType of typesToTry) {
             if (triedTypes.has(currentType)) continue;
             triedTypes.add(currentType);
@@ -4556,30 +4582,29 @@ export class ProviderPoolManager {
                     };
                 }
             } catch (err) {
-                if (modelFallbackTarget && (err.status === 429 || err.code === 429)) {
+                rememberRateError(err);
+                if (modelFallbackTarget) {
                     modelFallbackReason = err.message;
                     break;
                 }
-                if (err.status === 429) {
-                    // 如果是因为 429 (并发/队列满)，尝试下一个 Fallback
-                    if (err.quotaScope) lastQuotaError = err;
-                    this._log('info', `Type ${currentType} busy (429), trying next fallback...`);
-                    continue;
-                }
-                throw err; // 其他错误抛出
+                this._log('info', `Type ${currentType} busy (429), trying next fallback...`);
             }
         }
 
         if (modelFallbackTarget) {
-            const selectedConfig = await this.acquireSlot(providerType, modelFallbackTarget, options);
-            if (selectedConfig) {
-                return {
-                    config: selectedConfig,
-                    actualProviderType: providerType,
-                    isFallback: true,
-                    actualModel: modelFallbackTarget,
-                    modelFallbackReason: modelFallbackReason || 'SOURCE_MODEL_UNAVAILABLE'
-                };
+            try {
+                const selectedConfig = await this.acquireSlot(providerType, modelFallbackTarget, options);
+                if (selectedConfig) {
+                    return {
+                        config: selectedConfig,
+                        actualProviderType: providerType,
+                        isFallback: true,
+                        actualModel: modelFallbackTarget,
+                        modelFallbackReason: modelFallbackReason || 'SOURCE_MODEL_UNAVAILABLE'
+                    };
+                }
+            } catch (error) {
+                rememberRateError(error);
             }
         }
 
@@ -4602,6 +4627,7 @@ export class ProviderPoolManager {
                             };
                         }
                     } catch (err) {
+                        rememberRateError(err);
                         // 如果目标类型繁忙，尝试它的 fallback chain
                         const targetFallbackTypes = this.fallbackChain[targetProviderType] || [];
                         for (const fallbackType of targetFallbackTypes) {
@@ -4623,6 +4649,7 @@ export class ProviderPoolManager {
                                     };
                                 }
                              } catch (e) {
+                                 rememberRateError(e);
                                  continue;
                              }
                         }
@@ -4632,6 +4659,8 @@ export class ProviderPoolManager {
         }
 
         if (lastQuotaError) throw lastQuotaError;
+        if (lastConcurrencyError) throw lastConcurrencyError;
+        if (lastRateError) throw lastRateError;
         return null;
     }
 
