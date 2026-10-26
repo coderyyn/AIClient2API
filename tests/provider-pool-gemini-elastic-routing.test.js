@@ -70,6 +70,18 @@ function createCoordinatedManager(providers, coordination, overrides = {}) {
 }
 
 describe('Antigravity elastic queue and model fallback', () => {
+    test('capacity saturation enters the credential queue instead of the model-recovery queue', async () => {
+        const manager = createCoordinatedManager([{ ...provider('a'), concurrencyLimit: 15, queueLimit: 15 }], {});
+        const busy = Object.assign(new Error('busy'), { status: 429, code: 'PROVIDER_CONCURRENCY_EXHAUSTED' });
+        manager.acquireSlot = jest.fn().mockRejectedValueOnce(busy).mockResolvedValueOnce({ uuid: 'a' });
+        await expect(manager._tryAntigravityElasticModel(providerType, sourceModel, {}))
+            .resolves.toMatchObject({ config: { uuid: 'a' }, error: null });
+        expect(manager.acquireSlot).toHaveBeenNthCalledWith(2, providerType, sourceModel,
+            expect.objectContaining({ skipCredentialQueue: false, queueTimeout: 80 }));
+        manager.acquireSlot = jest.fn().mockRejectedValue(busy);
+        await expect(manager._tryAntigravityElasticModel(providerType, sourceModel, {})).rejects.toBe(busy);
+    });
+
     test('uses one total fallback chain instead of same-series chains', () => {
         expect(getAntigravityElasticFallbackModels(
             'gemini-2.5-flash-lite',

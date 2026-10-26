@@ -19,6 +19,7 @@ import { normalizeProviderConfigFields } from '../utils/provider-config-normaliz
 import { normalizeCodexFingerprintProviderConfig } from '../utils/codex-fingerprint-migration.js';
 import { getCodexFingerprintAudit } from '../providers/openai/codex-fingerprint-audit.js';
 import { getProviderUiAvailability } from '../utils/provider-ui-availability.js';
+import { applyNewProviderConcurrencyDefaults } from '../utils/provider-concurrency-defaults.js';
 
 
 
@@ -536,10 +537,10 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         }
         
         // 过滤掉脱敏字段
-        const filteredConfig = normalizeCodexFingerprintProviderConfig(
+        const filteredConfig = applyNewProviderConcurrencyDefaults(providerType, normalizeCodexFingerprintProviderConfig(
             providerType,
             normalizeProviderConfigFields(filterMaskedData(providerConfig))
-        );
+        ));
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];
@@ -560,7 +561,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
             action: 'add',
             filePath: filePath,
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: sanitizeProviderData(filteredConfig),
             timestamp: new Date().toISOString()
         });
 
@@ -568,7 +569,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         broadcastEvent('provider_update', {
             action: 'add',
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: sanitizeProviderData(filteredConfig),
             timestamp: new Date().toISOString()
         });
 
@@ -576,7 +577,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         res.end(JSON.stringify({
             success: true,
             message: 'Provider added successfully',
-            provider: sanitizeProviderData(providerConfig, true),
+            provider: sanitizeProviderData(filteredConfig, true),
             providerType
         }));
         return true;

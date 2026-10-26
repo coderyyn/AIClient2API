@@ -1,6 +1,7 @@
 import { RedisLeaseCoordinator, CoordinationUnavailableError } from '../src/runtime/redis-lease-coordinator.js';
 import requestContext from '../src/utils/context.js';
 import { setProviderLeaseKey } from '../src/runtime/provider-lease-scope.js';
+import { acquireWithProviderQueue } from '../src/runtime/provider-concurrency-queue.js';
 
 class InMemoryRedisExecutor {
     constructor() {
@@ -287,6 +288,68 @@ class InMemoryRedisExecutor {
 }
 
 describe('RedisLeaseCoordinator', () => {
+    test('AGY 15/15 policy bounds active and waiting slots across workers and models', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const first = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const second = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w2' });
+        const candidates = [{ providerType: 'gemini-antigravity', uuid: 'a', concurrencyLimit: 15, queueLimit: 15 }];
+        const active = [], promoted = [];
+        const pending = [];
+        try {
+            for (let i = 0; i < 15; i++) active.push(await first.acquire(candidates));
+            for (let i = 0; i < 15; i++) {
+                const owner = i % 2 ? first : second;
+                pending.push(requestContext.run({ requestId: `waiting-${i}` }, () => acquireWithProviderQueue(owner, candidates,
+                    { requestedModel: i % 2 ? 'gemini-3-flash' : 'gemini-2.5-flash-lite' }, { pollMs: 5, queueTimeout: 2000 })
+                    .then(lease => { promoted.push([owner, lease]); return lease; })));
+            }
+            await new Promise(resolve => setTimeout(resolve, 30));
+            expect(redis.active.get('gemini-antigravity:a')).toBe(15);
+            expect(redis.geminiQueueLeases.size).toBe(15);
+            await expect(acquireWithProviderQueue(second, candidates, { requestedModel: 'gemini-2.5-flash' }))
+                .rejects.toMatchObject({ status: 429, code: 'PROVIDER_CONCURRENCY_EXHAUSTED' });
+            await Promise.all(active.splice(0).map(lease => first.release(lease.leaseId)));
+            await Promise.all(pending);
+            expect(redis.active.get('gemini-antigravity:a')).toBe(15);
+            expect(redis.geminiQueueLeases.size).toBe(0);
+        } finally {
+            await Promise.all(active.map(lease => first.release(lease.leaseId)));
+            await Promise.all(promoted.map(([owner, lease]) => owner.release(lease.leaseId)));
+        }
+        expect(redis.leases.size).toBe(0);
+    });
+
+    test('shares AGY capacity across models and workers and switches to another account', async () => {
+        const redis = new InMemoryRedisExecutor();
+        const first = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w1' });
+        const second = new RedisLeaseCoordinator({ redis, epoch: 'test', workerId: 'w2' });
+        const candidates = [
+            { providerType: 'gemini-antigravity', uuid: 'account-a', concurrencyLimit: 1 },
+            { providerType: 'gemini-antigravity', uuid: 'account-b', concurrencyLimit: 1 }
+        ];
+        const leases = [];
+        try {
+            const a = await first.acquire(candidates, { requestedModel: 'gemini-2.5-flash-lite' });
+            leases.push([first, a]);
+            const b = await second.acquire(candidates, { requestedModel: 'gemini-3-flash' });
+            leases.push([second, b]);
+            expect(a.uuid).not.toBe(b.uuid);
+            expect(redis.active.get(`gemini-antigravity:${a.uuid}`)).toBe(1);
+            expect(redis.active.get(`gemini-antigravity:${b.uuid}`)).toBe(1);
+            await expect(first.acquire(candidates, { requestedModel: 'gemini-2.5-flash' }))
+                .rejects.toMatchObject({ status: 429, code: 'PROVIDER_CONCURRENCY_EXHAUSTED' });
+            await first.release(a.leaseId);
+            leases.shift();
+            const recovered = await second.acquire(candidates, { requestedModel: 'gemini-2.5-flash' });
+            leases.push([second, recovered]);
+            expect(recovered.uuid).toBe(a.uuid);
+        } finally {
+            await Promise.all(leases.map(([owner, lease]) => owner.release(lease.leaseId)));
+        }
+        expect(redis.leases.size).toBe(0);
+        expect(first.renewTimers.size + second.renewTimers.size).toBe(0);
+    });
+
     test('reports saturation at five slots, distinguishes no candidates, and admits after release', async () => {
         const redis = new InMemoryRedisExecutor();
         const coordinator = new RedisLeaseCoordinator({ redis, epoch: 'test' });

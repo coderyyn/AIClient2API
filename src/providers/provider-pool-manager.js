@@ -24,6 +24,7 @@ import {
 import { getCodexQuotaApplicability, normalizeCodexRateLimitWindows } from '../utils/codex-rate-limit.js';
 import requestContext, { accumulateRoutingWait } from '../utils/context.js';
 import { getProviderLeaseScope, registerProviderLease, releaseProviderLease } from '../runtime/provider-lease-scope.js';
+import { acquireWithProviderQueue } from '../runtime/provider-concurrency-queue.js';
 import { SmoothWeightedRoundRobin } from './smooth-weighted-round-robin.js';
 import { performance } from 'node:perf_hooks';
 import { createProviderStateEvent, applyProviderStateEvent, mergeQuotaState } from '../runtime/provider-state-event.js';
@@ -2099,16 +2100,17 @@ export class ProviderPoolManager {
                 providerType: provider.type,
                 uuid: provider.uuid || provider.config?.uuid,
                 concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
+                queueLimit: parseInt(provider.config?.queueLimit || 0),
                 preferred: hasStickyAffinity && index === 0,
                 probeRequired: false
             }));
             const leaseStartedAt = performance.now();
             const lease = hasStickyAffinity
-                ? await this.coordination.acquire(coordinatedCandidates, {
+                ? await this._acquireCoordinatedLease(coordinatedCandidates, {
                     affinityKey: `mixed:${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`,
                     requestedModel
-                })
-                : await this.coordination.acquire(coordinatedCandidates, { requestedModel });
+                }, options)
+                : await this._acquireCoordinatedLease(coordinatedCandidates, { requestedModel }, options);
             const leaseWaitMs = performance.now() - leaseStartedAt;
             requestContext.get('runtimeRequest')?.recordStage?.('redisLeaseMs', leaseWaitMs);
             accumulateRoutingWait('credentialLeaseWaitMs', leaseWaitMs);
@@ -2541,6 +2543,24 @@ export class ProviderPoolManager {
      * @param {string} requestedModel 
      * @param {object} options 
      */
+    async _acquireCoordinatedLease(candidates, leaseOptions, options) {
+        if (!candidates.some(candidate => isAntigravityProviderType(candidate.providerType) && candidate.queueLimit > 0)) {
+            return this.coordination.acquire(candidates, leaseOptions);
+        }
+        return acquireWithProviderQueue(this.coordination, candidates, leaseOptions, {
+            ...options,
+            isEligible: async candidate => {
+                const current = await this._getHealthyProvidersForType(candidate.providerType, leaseOptions.requestedModel, {
+                    ...options, acquireSlot: false
+                });
+                const provider = current.find(item => (item.uuid || item.config?.uuid) === candidate.uuid);
+                if (!provider) return false;
+                candidate.concurrencyLimit = parseInt(provider.config?.concurrencyLimit || 0);
+                return true;
+            }
+        });
+    }
+
     async acquireSlot(providerType, requestedModel = null, options = {}) {
         const leaseScope = getProviderLeaseScope();
         if (this.coordination) {
@@ -2566,19 +2586,20 @@ export class ProviderPoolManager {
                     providerType,
                     uuid: provider.uuid || provider.config?.uuid,
                     concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
+                    queueLimit: parseInt(provider.config?.queueLimit || 0),
                     preferred: hasStickyAffinity && index === 0,
                     probeRequired: false
                 }));
             const leaseStartedAt = performance.now();
             const lease = hasStickyAffinity
-                ? await this.coordination.acquire(candidates, {
+                ? await this._acquireCoordinatedLease(candidates, {
                     affinityKey: `${providerType}:${requestedModel || ''}:${options.stickyProviderKey}`,
                     requestedModel,
                     routedProviderKey: hotShardProvider
                         ? `${providerType}:${hotShardProvider.uuid || hotShardProvider.config?.uuid}`
                         : ''
-                })
-                : await this.coordination.acquire(candidates, { requestedModel });
+                }, options)
+                : await this._acquireCoordinatedLease(candidates, { requestedModel }, options);
             const leaseWaitMs = performance.now() - leaseStartedAt;
             requestContext.get('runtimeRequest')?.recordStage?.('redisLeaseMs', leaseWaitMs);
             accumulateRoutingWait('credentialLeaseWaitMs', leaseWaitMs);
@@ -4130,6 +4151,18 @@ export class ProviderPoolManager {
             });
             return { config, error: null };
         } catch (error) {
+            if (error?.code === 'PROVIDER_CONCURRENCY_EXHAUSTED' && this.coordination
+                && (this.providerStatus[providerType] || []).some(provider =>
+                    !provider.config.isArchived && !provider.config.isDisabled && Number(provider.config.queueLimit) > 0)) {
+                // Credential capacity is shared by all models: reserve its bounded queue,
+                // rather than adding another waiter to the model-recovery/fallback queue.
+                const config = await this.acquireSlot(providerType, model, {
+                    ...options,
+                    skipCredentialQueue: false,
+                    queueTimeout: this._getAntigravityElasticRoutingConfig().maxQueueWaitMs
+                });
+                return { config, error: null };
+            }
             if (error?.status === 429 || error?.code === 429) return { config: null, error };
             throw error;
         }

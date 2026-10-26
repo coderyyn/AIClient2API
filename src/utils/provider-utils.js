@@ -6,6 +6,7 @@
 import * as path from 'path';
 import logger from './logger.js';
 import { promises as fs } from 'fs';
+import { applyNewProviderConcurrencyDefaults } from './provider-concurrency-defaults.js';
 
 /**
  * 提供商目录映射配置
@@ -375,7 +376,9 @@ export function createProviderConfig(options) {
         });
     }
     
-    return newProvider;
+    return applyNewProviderConcurrencyDefaults(
+        credPathKey === 'ANTIGRAVITY_OAUTH_CREDS_FILE_PATH' ? 'gemini-antigravity' : '', newProvider
+    );
 }
 
 /**

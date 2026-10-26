@@ -2221,11 +2221,11 @@ function showAddProviderForm(providerType) {
             </div>
             <div class="form-group">
                 <label><span data-i18n="modal.provider.concurrencyLimit">并发限制</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
-                <input type="number" id="newConcurrencyLimit" placeholder="默认0不限制">
+                <input type="number" id="newConcurrencyLimit" value="${providerType === 'gemini-antigravity' ? '15' : '0'}" placeholder="默认0不限制">
             </div>
             <div class="form-group">
                 <label><span data-i18n="modal.provider.queueLimit">队列限制</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
-                <input type="number" id="newQueueLimit" placeholder="默认0不限制">
+                <input type="number" id="newQueueLimit" value="${providerType === 'gemini-antigravity' ? '15' : '0'}" placeholder="0表示不排队">
             </div>
             <div class="form-group">
                 <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
