@@ -715,6 +715,62 @@ describe('Antigravity model quota cooldown', () => {
         expect(res.body).toContain('antigravity-retry-success');
     });
 
+    test('keeps every exhausted account excluded across consecutive retries of one request', async () => {
+        freezeRandom();
+        mockGetApiServiceWithFallback.mockReset();
+        const firstService = { generateContent: jest.fn().mockRejectedValue(createQuotaError()) };
+        const secondService = { generateContent: jest.fn().mockRejectedValue(createQuotaError()) };
+        const thirdService = { generateContent: jest.fn().mockResolvedValue({ id: 'antigravity-third-success' }) };
+        const route = (service, uuid) => ({
+            service,
+            uuid,
+            actualModel: 'gemini-3.1-flash-image',
+            actualProviderType: 'gemini-antigravity',
+            serviceConfig: {}
+        });
+        mockGetApiServiceWithFallback
+            .mockResolvedValueOnce(route(secondService, 'provider-pro-2'))
+            .mockResolvedValueOnce(route(thirdService, 'provider-pro-3'));
+        const providerPoolManager = {
+            markAntigravityModelQuotaUnhealthy: jest.fn(),
+            markProviderUnhealthyWithRecoveryTime: jest.fn(),
+            markProviderUnhealthy: jest.fn(),
+            markProviderUnhealthyImmediately: jest.fn(),
+            markProviderHealthy: jest.fn(),
+            releaseSlot: jest.fn()
+        };
+        const config = {
+            CREDENTIAL_SWITCH_MAX_RETRIES: 2,
+            RATE_LIMIT_COOLDOWN_ENABLED: true,
+            RATE_LIMIT_COOLDOWN_MS: 30000,
+            ANTIGRAVITY_MODEL_COOLDOWN_MAX_MS: 7 * 24 * 60 * 60 * 1000
+        };
+        const res = new FakeResponse();
+
+        await handleUnaryRequest(
+            res,
+            firstService,
+            'gemini-3.1-flash-image',
+            { contents: [] },
+            'gemini-antigravity',
+            'gemini-antigravity',
+            'none',
+            null,
+            providerPoolManager,
+            'provider-pro-1',
+            'Provider Pro 1',
+            { CONFIG: config, maxRetries: 2 }
+        );
+        restoreRandom();
+
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(2);
+        expect(mockGetApiServiceWithFallback.mock.calls[1][2].excludeProviderUuids)
+            .toEqual(expect.arrayContaining(['provider-pro-1', 'provider-pro-2']));
+        expect(providerPoolManager.markAntigravityModelQuotaUnhealthy).toHaveBeenCalledTimes(2);
+        expect(thirdService.generateContent).toHaveBeenCalledTimes(1);
+        expect(res.body).toContain('antigravity-third-success');
+    });
+
     test('does not re-enter credential selection after all Antigravity models are unavailable', async () => {
         mockGetApiServiceWithFallback.mockReset();
         const terminalError = new Error('All Antigravity models are unavailable');
