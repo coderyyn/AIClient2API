@@ -3,7 +3,8 @@
 ## Branch Scope
 
 - Custom/private work lives on `yyn/customized-branch`.
-- Upstream strategy is soft hard-fork (decided 2026-07-06): do NOT spend effort keeping `origin/main` mergeable. Review the upstream log roughly quarterly and only cherry-pick protocol/security fixes that matter to the Codex-only production deployment. Re-evaluate a one-time merge only if upstream ships a needed major feature (new provider support, Codex protocol change).
+- Upstream strategy is soft hard-fork (decided 2026-07-06): do NOT spend effort keeping `origin/main` mergeable. Review the upstream log roughly quarterly and only cherry-pick protocol/security fixes that matter to the production deployment (Codex + Antigravity Gemini models). Re-evaluate a one-time merge only if upstream ships a needed major feature (new provider support, Codex protocol change).
+- Last upstream review baseline: `origin/main` `d91f950` (2026-10-27). Deliberately skipped then: Gemini 4 Argon (requires the CLI User-Agent, which carries the 2026-10-20 account-ban risk), the static free-tier model whitelist (contradicted by live account catalogs; local gating uses each account's fetched `availableModels`), and the live per-account model-availability UI.
 - Do not push or merge PRs without explicit user approval.
 - Treat request body limit from upstream `main` as baseline. Keep local-only features here: log stats/sanitization, image interface enhancements, provider weight, usage/cache observability, and future private customizations.
 
