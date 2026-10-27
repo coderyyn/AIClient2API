@@ -42,7 +42,7 @@ import requestContext from '../../utils/context.js';
 import { performance } from 'node:perf_hooks';
 import { getCodexOverloadRetryDelayMs, getCodexOverloadRetryMaxAttempts, getCodexRetryDelayMs, shouldRetryCodex429 } from './codex-retry-policy.js';
 import { extractPersistedCodexSubscriptionWindow, mergeCodexSubscriptionWindow } from '../../utils/codex-utils.js';
-import { getCodexModelIds, sanitizeCodexModelParameters, normalizeCodexReasoningEffort, resolveCodexOutboundModel, resolveCodexModelRemap, isCodexGpt6OverrideApplied, isGpt61SolModel } from './codex-model-capabilities.js';
+import { getCodexModelIds, sanitizeCodexModelParameters, normalizeCodexReasoningEffort, resolveCodexOutboundModel, resolveCodexModelRemap, isCodexGpt6OverrideApplied, isGpt61Model } from './codex-model-capabilities.js';
 import {
     CODEX_TURN_STATE_HEADER,
     REUSABLE_CODEX_TURN_STATE_BYTES,
@@ -68,11 +68,14 @@ function defaultCodexUserAgent(version) {
 }
 const CODEX_CLIENT_UA_PATTERN = /^(codex_cli_rs|codex-tui|codex_vscode|codex_exec|Codex Desktop)\/(\d+\.\d+\.\d+\S*)\s/;
 function codexVersionForModel(model, version) {
-    if (!/^gpt-6-(?:sol|luna)$/i.test(model)) return version;
+    // GPT-6.1 Terra 官方要求 Codex CLI 0.159.0+。
+    const minMinor = /^gpt-6\.1-terra$/i.test(model) ? 159
+        : /^gpt-6-(?:sol|luna)$/i.test(model) ? 155 : 0;
+    if (!minMinor) return version;
     const parts = String(version).match(/^(\d+)\.(\d+)\.(\d+)/);
     if (!parts) return CODEX_VERSION;
     const [major, minor] = parts.slice(1).map(Number);
-    return major > 0 || minor >= 155
+    return major > 0 || minor >= minMinor
         ? version
         : CODEX_VERSION;
 }
@@ -1239,7 +1242,7 @@ export class CodexApiService {
                 ...cleanedBody.reasoning,
                 effort: ((effort) => (remapApplied && effort === 'max' ? 'xhigh' : effort))(
                     normalizeCodexReasoningEffort(effectiveUpstreamModel,
-                        isGpt61SolModel(effectiveUpstreamModel)
+                        isGpt61Model(effectiveUpstreamModel)
                             ? (cleanedBody.reasoning?.effort ?? cleanedBody.reasoning_effort)
                             : cleanedBody.reasoning?.effort, isSpeedModel) || defaultReasoningEffort),
                 summary: cleanedBody.reasoning?.summary || 'auto'
@@ -1263,7 +1266,7 @@ export class CodexApiService {
         }
 
         delete result.messages;
-        if (isGpt61SolModel(effectiveUpstreamModel)) delete result.reasoning_effort;
+        if (isGpt61Model(effectiveUpstreamModel)) delete result.reasoning_effort;
 
         if (!["default", "priority", "fast", "ultrafast"].includes(result.service_tier)) {
             delete result.service_tier;

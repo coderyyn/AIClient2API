@@ -2,16 +2,16 @@ import { getProviderModels } from '../provider-models.js';
 
 export const GPT6_ASTRA_MODEL = 'gpt-6-astra';
 export const GPT61_SOL_MODEL = 'gpt-6.1-sol';
-export const CODEX_GPT6_OVERRIDE_MODELS = Object.freeze(['gpt-6-astra', 'gpt-6-sol', GPT61_SOL_MODEL, 'gpt-6-luna']);
+export const GPT61_TERRA_MODEL = 'gpt-6.1-terra';
+export const CODEX_GPT6_OVERRIDE_MODELS = Object.freeze(['gpt-6-astra', 'gpt-6-sol', GPT61_SOL_MODEL, GPT61_TERRA_MODEL, 'gpt-6-luna']);
 const GPT6_SOL_LUNA_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna']);
 
 const GPT6_ASTRA_REASONING_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export function isGpt61SolModel(model) {
-    const normalized = String(model || '').trim().toLowerCase();
-    return normalized === GPT61_SOL_MODEL ||
-        normalized === `${GPT61_SOL_MODEL}-fast` ||
-        normalized === `${GPT61_SOL_MODEL}-ultrafast`;
+// GPT-6.1 family (Sol, Terra): reasoning effort is independent of the speed tier.
+export function isGpt61Model(model) {
+    const base = String(model || '').trim().toLowerCase().replace(/-(?:fast|ultrafast)$/, '');
+    return base === GPT61_SOL_MODEL || base === GPT61_TERRA_MODEL;
 }
 
 export function isGpt6AstraModel(model) {
@@ -55,8 +55,8 @@ export function isCodexGpt6OverrideApplied(model, config = {}) {
 
 export function normalizeCodexReasoningEffort(model, effort, isFast = /-(?:fast|ultrafast)$/i.test(String(model || ''))) {
     const requested = String(effort || '').trim().toLowerCase();
-    // GPT-6.1 Sol speed tiers do not select a reasoning effort.
-    if (isGpt61SolModel(model)) {
+    // GPT-6.1 speed tiers do not select a reasoning effort.
+    if (isGpt61Model(model)) {
         if (requested === 'minimal') return 'low';
         return GPT6_ASTRA_REASONING_LEVELS.has(requested) ? requested : 'medium';
     }
@@ -78,7 +78,7 @@ export function sanitizeCodexModelParameters(model, body = {}) {
     const sanitized = { ...body };
     const isSolOrLuna = GPT6_SOL_LUNA_MODELS.has(String(model || '').trim().toLowerCase());
     const reasoningEffort = String(body.reasoning?.effort || body.reasoning_effort || 'medium').trim().toLowerCase();
-    if (isGpt6AstraModel(model) || isGpt61SolModel(model) || (isSolOrLuna && reasoningEffort !== 'none')) {
+    if (isGpt6AstraModel(model) || isGpt61Model(model) || (isSolOrLuna && reasoningEffort !== 'none')) {
         delete sanitized.temperature;
         delete sanitized.top_p;
         delete sanitized.top_logprobs;
