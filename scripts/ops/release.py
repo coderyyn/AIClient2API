@@ -35,6 +35,12 @@ def checked_args(args):
     return args
 
 
+def spool_residual(config_dir):
+    # Names only: spool files are event WAL records and must not be read here.
+    root = Path(config_dir) / 'runtime-hook-spool'
+    return sorted(path.relative_to(root).as_posix() for path in root.glob('*/*.json'))
+
+
 def runtime_check(value, workers, epoch=None):
     require(value.get('status') == 'healthy', 'runtime is not healthy')
     require(value.get('coordination') == 'redis', 'Redis multi-worker coordination required')
@@ -220,6 +226,20 @@ class Release:
                                    f'inFlight={in_flight} backlog={metrics["backlog"]} spooled={metrics["spooled"]}')
             wait(2)
 
+    def wait_for_spool_replay(self, timeout=60, clock=None, wait=None):
+        """The new writers reuse worker IDs, so they claim the old writer's spool."""
+        clock = clock or time.monotonic
+        wait = wait or time.sleep
+        deadline = clock() + timeout
+        residual = set(self.state.get('oldSpoolResidual') or [])
+        while True:
+            remaining = residual.intersection(spool_residual(self.spec['configDir']))
+            if not remaining:
+                return
+            if clock() >= deadline:
+                raise RuntimeError(f'old writer spool not replayed: {len(remaining)} files remain')
+            wait(2)
+
     def preflight(self):
         require(not self.state, 'preflight already recorded; use its next phase')
         old = self.inspect(self.spec['activeContainer'])
@@ -309,7 +329,7 @@ class Release:
                   forcedCutover=drain['forced'],
                   interruptedRequestsUpperBound=drain['inFlight'] if drain['forced'] else 0)
         # Each mutation is a distinct argv call. Old objects are never deleted here.
-        self.runner(['docker', 'stop', '--time', '120', self.state['candidateId']])
+        self.runner(['docker', 'stop', '--timeout', '120', self.state['candidateId']])
         self.save(cutoverStarted=time.time())
         stop_timeout = '30' if drain['forced'] else '120'
         self.runner(['docker', 'stop', '--timeout', stop_timeout, self.state['oldId']])
@@ -320,6 +340,7 @@ class Release:
         forced_exit = drain['forced'] and stopped['State']['ExitCode'] == 137
         require(stopped['State']['ExitCode'] == 0 or forced_exit,
                 'old shutdown was not clean; restore old service and investigate drain/spool')
+        self.save(oldSpoolResidual=spool_residual(self.spec['configDir']))
         snapshot(self.spec['configDir'], self.spec['configFiles'], self.directory / 'backup')
         self.runner(['docker', 'rename', self.state['oldId'], self.state['rollbackName']])
         self.runner(['docker', 'rename', self.state['finalId'], self.spec['activeContainer']])
@@ -355,8 +376,11 @@ class Release:
         # Mark service validation before compression. A backup error should leave
         # the healthy active service in place and retain all recovery objects.
         self.save(phase='verified', runtimeMetrics=metrics)
+        # A timeout leaves the healthy service in place; rerun verify after review.
+        self.wait_for_spool_replay()
         archive = finalize(self.directory / 'backup')
         report = self.state['report'] | {'productionRuntime': 'passed', 'businessValidation': 'not_run',
+                                        'oldSpoolReplay': 'passed' if self.state.get('oldSpoolResidual') else 'not_needed',
                                         'forcedCutover': bool(self.state.get('forcedCutover')),
                                         'possibleInterruptedRequestsUpperBound': self.state.get('interruptedRequestsUpperBound', 0)}
         self.save(phase='complete', completedAt=time.time(), archive=archive, report=report)
@@ -369,7 +393,7 @@ class Release:
         if self.state.get('finalId'):
             new = self.owned(self.state['finalId'], 'final')
             if new['State']['Running']:
-                self.runner(['docker', 'stop', '--time', '120', new['Id']])
+                self.runner(['docker', 'stop', '--timeout', '120', new['Id']])
             require(not self.inspect(new['Id'])['State']['Running'], 'new writer still running')
             if new['Name'].lstrip('/') == self.spec['activeContainer']:
                 self.runner(['docker', 'rename', new['Id'], self.state['finalName']])

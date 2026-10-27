@@ -84,6 +84,8 @@ class FakeDocker:
         self.calls = []
         self.fail_start = False
         self.unclean_stop = False
+        self.spool_on_stop = None
+        self.config = config
         self.fail_nginx = False
         self.objects = {'old': {'Id': 'old', 'Name': '/aiclient2api', 'Image': 'old-image',
             'State': {'Running': True, 'OOMKilled': False, 'ExitCode': 0, 'Health': {'Status': 'healthy'}},
@@ -133,6 +135,10 @@ class FakeDocker:
             elif args[1] == 'stop':
                 obj['State']['Running'] = False
                 obj['State']['ExitCode'] = 137 if obj['Id'] == 'old' and self.unclean_stop else 0
+                if obj['Id'] == 'old' and self.spool_on_stop:
+                    target = self.config / 'runtime-hook-spool' / self.spool_on_stop
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text('{"fixture":true}')
             else:
                 obj['Name'] = '/' + args[-1]
             return obj['Id']
@@ -477,6 +483,45 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.r.state['oldExit']['exitCode'], 137)
         self.assertTrue(self.r.state['report']['forcedCutover'])
         self.assertEqual(self.r.state['report']['possibleInterruptedRequestsUpperBound'], 1)
+
+    def forced_cutover_with_spool(self):
+        self.ready()
+        self.docker.unclean_stop = True
+        self.docker.spool_on_stop = 'control-1/evt-1.json'
+        with patch.object(self.r, 'wait_for_drain', return_value={'forced': True, 'inFlight': 1,
+                'backlog': 0, 'spooled': 0}):
+            self.r.run('cutover', True, True, True)
+        self.disarm()
+        return self.config / 'runtime-hook-spool' / 'control-1' / 'evt-1.json'
+
+    def test_forced_cutover_completes_after_new_writer_claims_old_spool(self):
+        residual = self.forced_cutover_with_spool()
+        self.assertEqual(self.r.state['oldSpoolResidual'], ['control-1/evt-1.json'])
+        residual.unlink()
+        self.r.run('verify', True)
+        self.assertEqual(self.r.state['phase'], 'complete')
+        self.assertEqual(self.r.state['report']['oldSpoolReplay'], 'passed')
+
+    def test_unreplayed_old_spool_blocks_completion_without_rollback(self):
+        residual = self.forced_cutover_with_spool()
+        original = self.r.wait_for_spool_replay
+        with patch.object(self.r, 'wait_for_spool_replay', lambda: original(timeout=0)):
+            with self.assertRaisesRegex(RuntimeError, 'spool not replayed: 1 files remain'):
+                self.r.run('verify', True)
+        self.assertEqual(self.r.state['phase'], 'verified')
+        self.assertEqual(self.docker.lookup('aiclient2api')['Id'], 'final')
+        self.assertFalse(self.docker.objects['old']['State']['Running'])
+        residual.unlink()
+        self.r.run('verify', True)
+        self.assertEqual(self.r.state['phase'], 'complete')
+
+    def test_clean_stop_without_spool_needs_no_replay(self):
+        self.ready()
+        self.r.run('cutover', True, True, True)
+        self.disarm()
+        self.r.run('verify', True)
+        self.assertEqual(self.r.state['oldSpoolResidual'], [])
+        self.assertEqual(self.r.state['report']['oldSpoolReplay'], 'not_needed')
 
     def test_unclean_stop_without_force_still_rolls_back(self):
         self.ready()
