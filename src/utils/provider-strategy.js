@@ -39,6 +39,14 @@ export class ProviderStrategy {
         throw new Error("Method 'extractResponseText()' must be implemented.");
     }
 
+    /**
+     * Classifies a protocol-native response failure before conversion.
+     * Providers should return a normalized descriptor only for terminal responses that must not
+     * be exposed as successful completions. The common request layer owns retry orchestration.
+     *
+     * @param {object} _response - Protocol-native response or stream chunk.
+     * @returns {{code: string, message?: string, retryable?: boolean, retryCategory?: string, skipErrorCount?: boolean, shouldSwitchCredential?: boolean}|null}
+     */
     classifyResponseFailure(_response) {
         return null;
     }

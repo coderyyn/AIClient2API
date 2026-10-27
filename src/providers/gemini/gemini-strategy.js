@@ -28,6 +28,7 @@ class GeminiStrategy extends ProviderStrategy {
     }
 
     classifyResponseFailure(response) {
+        // Some Gemini transports wrap the protocol response in a `response` field.
         const candidates = response?.candidates || response?.response?.candidates;
         if (!Array.isArray(candidates)) return null;
         return candidates.some(candidate => candidate?.finishReason === 'MALFORMED_FUNCTION_CALL')
