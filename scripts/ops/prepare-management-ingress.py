@@ -34,8 +34,8 @@ map "$request_method:$uri" $aiclient_public_request {
     default 0;
     ~^(GET|HEAD):/(health|potluck-user\.html|app/base\.css|favicon\.ico)/?$ 1;
     ~^(GET|OPTIONS):/api/potluckuser/usage/?$ 1;
-    ~^(GET|POST|HEAD|OPTIONS):/(?:[^/]+/)?v1/(?:chat/completions|responses|messages(?:/count_tokens)?|models|images/(?:generations|edits))/?$ 1;
-    ~^(GET|POST|HEAD|OPTIONS):/(?:[^/]+/)?v1beta/models(?:/[^/]+(?::[^/]+)?)?/?$ 1;
+    ~^(GET|POST|HEAD|OPTIONS):/(?:(?!(?:api|runtime|master|static|app|components)/)[^/]+/)?v1/(?:chat/completions|responses|messages(?:/count_tokens)?|models|images/(?:generations|edits))/?$ 1;
+    ~^(GET|POST|HEAD|OPTIONS):/(?:(?!(?:api|runtime|master|static|app|components)/)[^/]+/)?v1beta/models(?:/[^/]+(?::[^/]+)?)?/?$ 1;
     # Only the existing internal location can serve this subrequest.
     ~^GET:/_edge_auth$ 1;
 }

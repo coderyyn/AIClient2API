@@ -4,7 +4,7 @@ test.each(['/v1/responses', '/openai-codex-oauth/v1/images/edits', '/gemini-anti
     expect(isPublicBusinessPath('POST', path)).toBe(true);
     expect(requiresManagementAuthentication('POST', path)).toBe(false);
 });
-test.each(['/api/potluck/keys', '/api/request-audit', '/runtime/health', '/provider_health', '/api/grok/assets', '/api/new-sensitive-api', '/v1/responses/../../api/config', '/api/%ZZ'])('sensitive or malformed path %s is not public', path => {
+test.each(['/api/potluck/keys', '/api/request-audit', '/runtime/health', '/provider_health', '/api/grok/assets', '/api/new-sensitive-api', '/api/v1/responses', '/runtime/v1/models', '/v1/responses/../../api/config', '/api/%ZZ'])('sensitive or malformed path %s is not public', path => {
     expect(isPublicBusinessPath('GET', path)).toBe(false);
 });
 test('user usage is an exact GET exception, not a management prefix exemption', () => {

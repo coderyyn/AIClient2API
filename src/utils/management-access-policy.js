@@ -14,8 +14,8 @@ export function isPublicBusinessPath(method, rawPath) {
     if (['GET', 'HEAD'].includes(method) && ['/health', '/potluck-user.html', '/app/base.css', '/favicon.ico'].includes(path)) return true;
     if (['GET', 'OPTIONS'].includes(method) && path === '/api/potluckuser/usage') return true;
     return ['GET', 'POST', 'HEAD', 'OPTIONS'].includes(method) && (
-        /^\/(?:[^/]+\/)?v1\/(?:chat\/completions|responses|messages(?:\/count_tokens)?|models|images\/(?:generations|edits))$/.test(path)
-        || /^\/(?:[^/]+\/)?v1beta\/models(?:\/[^/]+(?::[^/]+)?)?$/.test(path)
+        /^\/(?:(?!(?:api|runtime|master|static|app|components)\/)[^/]+\/)?v1\/(?:chat\/completions|responses|messages(?:\/count_tokens)?|models|images\/(?:generations|edits))$/.test(path)
+        || /^\/(?:(?!(?:api|runtime|master|static|app|components)\/)[^/]+\/)?v1beta\/models(?:\/[^/]+(?::[^/]+)?)?$/.test(path)
     );
 }
 
