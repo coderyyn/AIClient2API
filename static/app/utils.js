@@ -167,9 +167,9 @@ function formatUptime(seconds) {
  * @returns {string} 转义后的文本
  */
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    // Used in both text and quoted HTML attributes; DOM textContent does not escape quotes.
+    const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    return String(text ?? '').replace(/[&<>"']/g, char => entities[char]);
 }
 
 /**

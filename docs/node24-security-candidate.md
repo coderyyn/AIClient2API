@@ -40,3 +40,12 @@ synthetic credentials. Production user IDs, file permissions and flags stay unch
 Publish a sanitized report with application commit, dependency versions, digests,
 scan exceptions, runtime convergence and rollback steps. Stop candidates afterward.
 Host SSH/kernel/Docker, Redis authentication and other services remain separate work.
+
+The HTML escape helper now encodes quotes as well as angle brackets and ampersands.
+The quota UI uses it in quoted title/value attributes; textContent-only escaping
+was insufficient for those contexts. Behavior tests execute the real helper and
+quota rendering/collection functions against synthetic attribute-breakout input.
+
+Build the dedicated edge-auth image from the exact application image with
+`docker/Dockerfile.edge-auth`; it inherits the same source and dependency layers
+and supplies the edge server command and its own health probe.

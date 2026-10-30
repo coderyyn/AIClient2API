@@ -1,0 +1,7 @@
+ARG APP_IMAGE
+FROM ${APP_IMAGE}
+ENV EDGE_AUTH_HOST=0.0.0.0 EDGE_AUTH_PORT=18081
+LABEL yyn.deployment_component="edge-auth"
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:18081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "src/edge-auth/server.js"]
