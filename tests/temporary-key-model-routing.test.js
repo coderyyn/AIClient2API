@@ -358,3 +358,60 @@ describe('temporary per-key model routing', () => {
         expect(JSON.stringify(event)).not.toContain(API_KEY);
     });
 });
+
+describe('allKeys temporary route (OpenAI key pool)', () => {
+    const NON_LUNA = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra'];
+    const poolConfig = () => ({
+        temporaryKeyModelRoutes: [{
+            id: 'openai-key-pool-non-luna',
+            enabled: true,
+            allKeys: true,
+            paths: ['/v1/responses', '/v1/chat/completions'],
+            sourceProviderTypes: ['openai-codex-oauth'],
+            models: NON_LUNA,
+            targetProviderType: 'openaiResponses-custom',
+            fallbackToOriginal: true,
+            preserveResponseModel: true
+        }]
+    });
+    const resolve = (model, apiKey = 'any-caller-key', config = poolConfig()) => resolveTemporaryKeyModelRoute({
+        config,
+        apiKey,
+        requestPath: '/v1/responses',
+        model,
+        originalProviderType: 'openai-codex-oauth'
+    });
+
+    test.each(NON_LUNA)('routes %s for any caller key and passes the requested model through', (model) => {
+        const route = resolve(model);
+        expect(route).toMatchObject({
+            id: 'openai-key-pool-non-luna',
+            targetProviderType: 'openaiResponses-custom',
+            targetModel: model,
+            fallbackModel: model,
+            fallbackToOriginal: true
+        });
+    });
+
+    test('routes even when the caller sent no api key', () => {
+        expect(resolve('gpt-6-sol', null)?.targetProviderType).toBe('openaiResponses-custom');
+    });
+
+    test.each(['gpt-6-luna', 'gpt-5.6-luna', 'gpt-image-2', 'gpt-image-2.5'])('does not route %s', (model) => {
+        expect(resolve(model)).toBeNull();
+    });
+
+    test('$requested placeholder is resolved for target and fallback models', () => {
+        const config = poolConfig();
+        Object.assign(config.temporaryKeyModelRoutes[0], { targetModel: '$requested', fallbackModel: '$requested' });
+        expect(resolve('gpt-6-sol', 'k', config)).toMatchObject({ targetModel: 'gpt-6-sol', fallbackModel: 'gpt-6-sol' });
+    });
+
+    test('rules without allKeys still require a matching key hash', () => {
+        const config = poolConfig();
+        delete config.temporaryKeyModelRoutes[0].allKeys;
+        config.temporaryKeyModelRoutes[0].keyHash = hashTemporaryRouteKey('other-key');
+        expect(resolve('gpt-6-sol', 'any-caller-key', config)).toBeNull();
+        expect(resolve('gpt-6-sol', 'other-key', config)?.targetModel).toBe('gpt-6-sol');
+    });
+});

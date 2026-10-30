@@ -1336,6 +1336,12 @@ function isCodexUsageLimitReached(error) {
         message.includes('usage limit has been reached');
 }
 
+function isInsufficientQuotaError(error) {
+    const errorBody = error?.response?.data?.error;
+    return String(errorBody?.code || '').toLowerCase() === 'insufficient_quota'
+        || String(errorBody?.type || '').toLowerCase() === 'insufficient_quota';
+}
+
 export function resolveCodexQuotaBucketForModel(requestedModel = null) {
     const model = String(requestedModel || '').trim();
     if (!model) return null;
@@ -1414,6 +1420,18 @@ export function applyProviderRateLimitCooldown({
                 }
             }
         }
+    }
+
+    if (
+        !isCodexProvider &&
+        providerPoolManager &&
+        providerUuid &&
+        isInsufficientQuotaError(error) &&
+        typeof providerPoolManager.markQuotaExhaustedUntilReset === 'function' &&
+        providerPoolManager.markQuotaExhaustedUntilReset(providerType, { uuid: providerUuid }, 'insufficient_quota - cooldown until monthly quota reset')
+    ) {
+        logger.info(`${loggerPrefix} Quota exhausted for ${providerType} (${providerUuid}); cooling down until its monthly reset`);
+        return true;
     }
 
     if (!rateLimitRecoveryTime || !providerPoolManager || !providerUuid) {
@@ -3793,7 +3811,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         actualUuid = result.uuid || pooluuid;
         actualCustomName = result.serviceConfig?.customName || CONFIG.customName;
         actualAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || actualAccountIdentity;
-        actualAccountEmail = result.serviceConfig?.codexEmail || actualAccountEmail;
+        actualAccountEmail = result.serviceConfig?.codexEmail || result.serviceConfig?.accountEmail || actualAccountEmail;
 
         const responseModelRouting = {
             requestedModel: clientRequestedModel,

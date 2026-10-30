@@ -162,6 +162,12 @@ function resolveTargetBlackout(rule, config, model, now) {
     };
 }
 
+// 省略或 "$requested" 表示沿用客户端请求的模型名，避免为每个模型各写一条规则。
+function resolveRuleModel(configured, requestedModel) {
+    if (!configured || configured === '$requested') return requestedModel ? String(requestedModel) : null;
+    return String(configured);
+}
+
 export function resolveTemporaryKeyModelRoute({
     config,
     apiKey,
@@ -170,7 +176,7 @@ export function resolveTemporaryKeyModelRoute({
     originalProviderType,
     now = new Date()
 }) {
-    if (!apiKey || !requestPath || !model) return null;
+    if (!requestPath || !model) return null;
     const keyHash = hashTemporaryRouteKey(apiKey);
     const rules = Array.isArray(config?.temporaryKeyModelRoutes)
         ? config.temporaryKeyModelRoutes
@@ -178,11 +184,13 @@ export function resolveTemporaryKeyModelRoute({
 
     for (const rule of rules) {
         if (!rule || rule.enabled !== true) continue;
-        if (!safelyEqualHash(rule.keyHash, keyHash)) continue;
+        if (rule.allKeys !== true && (!keyHash || !safelyEqualHash(rule.keyHash, keyHash))) continue;
         if (!matchesConfiguredPath(rule, requestPath)) continue;
         if (!matchesSourceProvider(rule, originalProviderType)) continue;
         if (!matchesConfiguredModel(rule, model)) continue;
-        if (!rule.targetProviderType || !rule.targetModel) continue;
+        if (!rule.targetProviderType) continue;
+        const targetModel = resolveRuleModel(rule.targetModel, model);
+        const fallbackModel = resolveRuleModel(rule.fallbackModel, rule.allKeys === true ? model : null);
 
         const scheduleBypass = resolveTargetBlackout(rule, config, model, now);
         return {
@@ -191,8 +199,8 @@ export function resolveTemporaryKeyModelRoute({
             requestedModel: model,
             originalProviderType,
             targetProviderType: String(rule.targetProviderType),
-            targetModel: String(rule.targetModel),
-            fallbackModel: rule.fallbackModel ? String(rule.fallbackModel) : null,
+            targetModel,
+            fallbackModel,
             fallbackToOriginal: rule.fallbackToOriginal === true,
             preserveResponseModel: rule.preserveResponseModel === true,
             ...(scheduleBypass ? { scheduleBypass } : {})

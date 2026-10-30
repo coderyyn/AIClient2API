@@ -30,6 +30,7 @@ import { performance } from 'node:perf_hooks';
 import { createProviderStateEvent, applyProviderStateEvent, mergeQuotaState } from '../runtime/provider-state-event.js';
 import { matchesModelFamily } from './openai/codex-model-routing.js';
 import { ANTIGRAVITY_ELASTIC_MODEL_ORDER, ANTIGRAVITY_ELASTIC_SOURCE_MODEL } from './antigravity-model-order.js';
+import { getNextQuotaResetTime } from '../utils/quota-reset-time.js';
 import { isTransientProviderJitterError } from '../utils/provider-error-classification.js';
 import { cooldownVersion, versionCooldown, cooldownProbeEligible, normalizeProbeModel } from './antigravity-cooldown-state.js';
 
@@ -206,6 +207,10 @@ function getActiveAntigravityQuotaState(state, now = Date.now()) {
     const recoveryMs = Date.parse(state.scheduledRecoveryTime || '');
     if (Number.isFinite(recoveryMs) && now >= recoveryMs) return null;
     return state;
+}
+
+function getProviderNextQuotaReset(config = {}, now = Date.now()) {
+    return getNextQuotaResetTime(config.quotaResetDay, config.quotaResetTimezone, now);
 }
 
 function getProviderWeight(config = {}) {
@@ -2947,7 +2952,25 @@ export class ProviderPoolManager {
                 this._log('debug', `Selected preferred provider for ${providerType}: ${this._getDisplayName(selected.config)}`);
             }
         }
-        if (!selected && options.routingStrategy === 'image-round-robin') {
+        if (!selected && availableAndHealthyProviders.every(provider => getProviderNextQuotaReset(provider.config, now) !== null)) {
+            // 月度额度 key 池：离下次重置最近的 key 先用，让即将作废的额度优先被消耗
+            selected = [...availableAndHealthyProviders].sort((a, b) => {
+                const resetA = getProviderNextQuotaReset(a.config, now);
+                const resetB = getProviderNextQuotaReset(b.config, now);
+                if (resetA !== resetB) return resetA - resetB;
+
+                const loadA = a.state?.activeCount || 0;
+                const loadB = b.state?.activeCount || 0;
+                if (loadA !== loadB) return loadA - loadB;
+
+                const lastUsedA = a.config.lastUsed ? new Date(a.config.lastUsed).getTime() : 0;
+                const lastUsedB = b.config.lastUsed ? new Date(b.config.lastUsed).getTime() : 0;
+                if (lastUsedA !== lastUsedB) return lastUsedA - lastUsedB;
+
+                return (a.uuid || '').localeCompare(b.uuid || '');
+            })[0];
+            this._log('debug', `Selected provider for ${providerType} by quota reset order: ${this._getDisplayName(selected.config)}`);
+        } else if (!selected && options.routingStrategy === 'image-round-robin') {
             selected = this._selectImageRoundRobinProvider(
                 availableAndHealthyProviders,
                 providerType,
@@ -5301,6 +5324,17 @@ export class ProviderPoolManager {
 
             this._debouncedSave(providerType);
         }
+    }
+
+    /**
+     * 月度额度型 key（配置了 quotaResetDay）耗尽后冷却到下一次重置；未配置重置日时返回 false，由调用方走原有 429 策略。
+     */
+    markQuotaExhaustedUntilReset(providerType, providerConfig, errorMessage = null) {
+        const provider = providerConfig?.uuid ? this._findProvider(providerType, providerConfig.uuid) : null;
+        const resetTime = provider ? getProviderNextQuotaReset(provider.config) : null;
+        if (resetTime === null) return false;
+        this.markProviderUnhealthyWithRecoveryTime(providerType, { uuid: providerConfig.uuid }, errorMessage || 'Quota exhausted until monthly reset', new Date(resetTime));
+        return true;
     }
 
     _orderCoordinatedCandidates(candidates, providerType, requestedModel, options = {}) {
