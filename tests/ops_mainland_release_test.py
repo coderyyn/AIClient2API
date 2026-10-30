@@ -81,8 +81,12 @@ class MainlandReleaseTests(unittest.TestCase):
         self.assertNotIn(release.MARKER, preview)
         self.assertNotIn(release.RULE, preview)
         self.assertEqual(preview.count('server_name example;'), 2)
+        self.assertEqual(release.ensure_maintenance_gate(gated), gated)
+        self.assertEqual(release.ensure_maintenance_gate(original), gated)
         with self.assertRaises(ValueError):
             release.remove_maintenance_gate(original)
+        with self.assertRaises(ValueError):
+            release.ensure_maintenance_gate(gated.replace(release.MARKER, '', 1))
 
     def test_audit_observer_detects_missing_metadata_and_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as directory:

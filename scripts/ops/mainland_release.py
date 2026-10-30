@@ -58,6 +58,13 @@ def remove_maintenance_gate(text):
     return '\n'.join(line for line in text.split('\n') if line.strip() not in (MARKER, RULE))
 
 
+def ensure_maintenance_gate(text):
+    if MARKER in text:
+        remove_maintenance_gate(text)  # Validate both inherited server gates.
+        return text
+    return maintenance_text(text)
+
+
 def render_nginx(site, directives, common, denial_template, log_template):
     if 'mainland-denials.conf' in site:
         require(site.count('include ' + DENIALS + ';') == 2 and
@@ -427,7 +434,7 @@ class Release:
         before = json.loads((self.root / 'nginx-before.private.json').read_text())
         for path, text in before.items():
             if path == SITE:
-                replace_text(path, maintenance_text(text))
+                replace_text(path, ensure_maintenance_gate(text))
             elif text is None:
                 require(digest(path) == self.state['desiredHashes'][path], 'new file changed; do not remove')
                 Path(path).unlink()
