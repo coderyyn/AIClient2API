@@ -31,6 +31,9 @@ NODE_BASE_IMAGE=${NODE_BASE_IMAGE:-node:20-alpine}
 ALPINE_MIRROR=${ALPINE_MIRROR:-mirrors.aliyun.com}
 
 BUILD_ARGS=(--build-arg "HTTP_PROXY=$BUILD_HTTP_PROXY" --build-arg "HTTPS_PROXY=$BUILD_HTTP_PROXY")
+if [ -n "${BUILD_GOPROXY:-}" ]; then
+  BUILD_ARGS+=(--build-arg "GOPROXY=$BUILD_GOPROXY")
+fi
 
 stage_start() { date +%s; }
 stage_done() {

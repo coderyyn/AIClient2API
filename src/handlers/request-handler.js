@@ -1,3 +1,5 @@
+import { requiresManagementAuthentication, isOnlinePluginInstallPath, onlinePluginInstallationEnabled, rejectOnlinePluginInstall } from '../utils/management-access-policy.js';
+import { checkAuth } from '../ui-modules/auth.js';
 import deepmerge from 'deepmerge';
 import logger from '../utils/logger.js';
 import requestContext from '../utils/context.js';
@@ -267,6 +269,15 @@ export function createRequestHandler(config, providerPoolManager) {
                     requestUrl.pathname = path;
                 }
                 const method = req.method;
+                // Must run before OPTIONS, static files, and plugin dispatch.
+                if (isOnlinePluginInstallPath(path) && !onlinePluginInstallationEnabled()) {
+                    rejectOnlinePluginInstall(res); return;
+                }
+                if (requiresManagementAuthentication(method, path) && !(await checkAuth(req))) {
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Administrator login required' } }));
+                    return;
+                }
                 auditLifecycle.setNormalizedPath(path);
                 if (isAuditableModelRequest(method, originalPath)) auditLifecycle.markEligible();
 
@@ -338,7 +349,7 @@ export function createRequestHandler(config, providerPoolManager) {
                         res.end(JSON.stringify({
                             status: 'healthy',
                             timestamp: new Date().toISOString(),
-                            provider: currentConfig.MODEL_PROVIDER
+                            service: 'aiclient2api'
                         }));
                         return true;
                     }

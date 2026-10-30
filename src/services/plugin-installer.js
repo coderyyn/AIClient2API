@@ -1,3 +1,4 @@
+import { onlinePluginInstallationEnabled } from '../utils/management-access-policy.js';
 import axios from 'axios';
 import AdmZip from 'adm-zip';
 import { promises as fs } from 'fs';
@@ -230,6 +231,7 @@ async function _executeInstallFromBuffer(id, zipBuffer) {
  * 下载并安装插件
  */
 export async function installPlugin(pluginInfo) {
+    if (!onlinePluginInstallationEnabled()) throw new Error('PLUGIN_INSTALL_DISABLED');
     const { id, downloadUrl } = pluginInfo;
     validatePluginId(id);
 
@@ -247,6 +249,7 @@ export async function installPlugin(pluginInfo) {
  * 从上传的文件安装插件
  */
 export async function installPluginFromBuffer(pluginId, buffer) {
+    if (!onlinePluginInstallationEnabled()) throw new Error('PLUGIN_INSTALL_DISABLED');
     validatePluginId(pluginId);
 
     try {

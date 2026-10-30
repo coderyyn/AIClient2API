@@ -1,3 +1,4 @@
+jest.mock('../src/ui-modules/auth.js', () => ({ checkAuth: jest.fn(async () => false) }));
 import { EventEmitter } from 'events';
 import requestContext from '../src/utils/context.js';
 import { getProviderLeaseScope, registerProviderLease } from '../src/runtime/provider-lease-scope.js';
