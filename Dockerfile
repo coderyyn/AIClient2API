@@ -89,6 +89,24 @@ COPY package*.json ./
 # 安装失败时不能跳过 lifecycle scripts，否则镜像会构建成功但 control worker 无法启动。
 COPY --from=node-dependencies /app/node_modules ./node_modules
 
+# The official Node image's npm bundles vulnerable transitive dependencies even
+# after updating npm itself. Keep npm 11 for admin update compatibility and replace
+# only its affected, same-major bundle versions with exact registry packages.
+RUN npm_config_proxy="$HTTP_PROXY" npm_config_https_proxy="$HTTPS_PROXY" \
+      npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund \
+    && mkdir -p /tmp/npm-cli-security \
+    && cd /tmp/npm-cli-security \
+    && npm_config_proxy="$HTTP_PROXY" npm_config_https_proxy="$HTTPS_PROXY" \
+       npm pack --silent undici@6.29.1 ip-address@10.7.4 \
+    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address \
+    && mkdir -p /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address \
+    && tar -xzf undici-6.29.1.tgz -C /usr/local/lib/node_modules/npm/node_modules/undici --strip-components=1 \
+    && tar -xzf ip-address-10.7.4.tgz -C /usr/local/lib/node_modules/npm/node_modules/ip-address --strip-components=1 \
+    && cd /app \
+    && rm -rf /tmp/npm-cli-security \
+    && node -e "const a=require('assert/strict'); a.equal(require('/usr/local/lib/node_modules/npm/node_modules/undici/package.json').version,'6.29.1'); a.equal(require('/usr/local/lib/node_modules/npm/node_modules/ip-address/package.json').version,'10.7.4'); a.equal(typeof require('/usr/local/lib/node_modules/npm/node_modules/undici').fetch,'function')" \
+    && npm --version
+
 # 构建代理只用于依赖下载，不得进入运行时环境。
 ENV HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy=""
 

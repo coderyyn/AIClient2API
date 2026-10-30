@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import Database from 'better-sqlite3';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
+
+const npmVersion = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim();
+assert.equal(npmVersion, '11.21.1');
+for (const [name, expected] of [['undici', '6.29.1'], ['ip-address', '10.7.4']]) {
+    assert.equal(JSON.parse(readFileSync(`/usr/local/lib/node_modules/npm/node_modules/${name}/package.json`, 'utf8')).version, expected);
+}
 
 const db = new Database(':memory:');
 db.exec('CREATE TABLE smoke (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
@@ -38,5 +45,5 @@ try {
     child.kill('SIGTERM');
     await exited;
 }
-console.log(JSON.stringify({ status: 'passed', node: process.version, sqliteVersion, sharp: sharp.versions,
+console.log(JSON.stringify({ status: 'passed', node: process.version, npmVersion, sqliteVersion, sharp: sharp.versions,
     scenarios: ['sqlite-memory-read-write', 'png-alpha-resize', 'jpeg-resize', 'svg-render', 'invalid-image-rejection', 'sidecar-start-health-stop'] }));

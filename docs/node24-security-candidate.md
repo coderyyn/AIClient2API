@@ -49,3 +49,10 @@ quota rendering/collection functions against synthetic attribute-breakout input.
 Build the dedicated edge-auth image from the exact application image with
 `docker/Dockerfile.edge-auth`; it inherits the same source and dependency layers
 and supplies the edge server command and its own health probe.
+
+Image scanning also covers the global npm CLI bundled with Node, independently of
+application npm audit. Runtime npm is pinned to 11.21.1; its bundled Undici is
+replaced with 6.29.1 and ip-address with 10.7.4 using exact registry tarballs.
+These same-major corrections retain npm for the existing admin update mechanism.
+Native smoke verifies both bundle versions and that npm itself starts. Scan the
+merged final image rather than assuming an application-only audit covers the CLI.
