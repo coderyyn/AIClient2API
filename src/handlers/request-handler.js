@@ -1,3 +1,4 @@
+import { mainlandRequired, evaluateMainlandPolicy } from '../utils/mainland-country-policy.js';
 import { requiresManagementAuthentication, isOnlinePluginInstallPath, onlinePluginInstallationEnabled, rejectOnlinePluginInstall } from '../utils/management-access-policy.js';
 import { checkAuth } from '../ui-modules/auth.js';
 import deepmerge from '../vendor/deepmerge/index.js';
@@ -166,17 +167,7 @@ export function createRequestHandler(config, providerPoolManager) {
         const initialRequestUrl = new URL(req.url, `http://${req.headers.host}`);
         const originalPath = initialRequestUrl.pathname;
         const edgeLease = validateEdgeAdmissionHeaders(req, req.method, originalPath);
-        if (edgeLease?.statusCode) {
-            res.writeHead(edgeLease.statusCode, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-            res.end(JSON.stringify(edgeLease.body));
-            return;
-        }
-        const validatedEdgeLease = await validateEdgeAdmissionLease(edgeLease);
-        if (validatedEdgeLease?.statusCode) {
-            res.writeHead(validatedEdgeLease.statusCode, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-            res.end(JSON.stringify(validatedEdgeLease.body));
-            return;
-        }
+        const validatedEdgeLease = edgeLease?.statusCode ? edgeLease : await validateEdgeAdmissionLease(edgeLease);
         const workerId = process.env.RUNTIME_WORKER_ID || (process.env.RUNTIME_WORKER_ROLE === 'execution' ? `execution-${process.pid}` : 'standalone');
         const requestKind = /\/images\/(?:generations|edits)/.test(originalPath) ? 'image' : 'model';
         const runtimeRequest = runtimeMetrics.beginRequest({
@@ -191,10 +182,10 @@ export function createRequestHandler(config, providerPoolManager) {
         let edgeLeaseReleased = false;
         let edgeRenewTimer = null;
         const releaseEdgeLeaseOnce = () => {
-            if (edgeLeaseReleased || !edgeLease?.leaseId) return;
+            if (edgeLeaseReleased || !validatedEdgeLease?.leaseId || validatedEdgeLease?.statusCode) return;
             edgeLeaseReleased = true;
             if (edgeRenewTimer) clearInterval(edgeRenewTimer);
-            releaseEdgeAdmissionLease(edgeLease).catch(() => {});
+            releaseEdgeAdmissionLease(validatedEdgeLease).catch(() => {});
         };
         const logOnce = statusCode => {
             if (completionLogged) return;
@@ -233,6 +224,7 @@ export function createRequestHandler(config, providerPoolManager) {
                 currentConfig._monitorRequestId = requestId;
                 currentConfig._originalRequestPath = originalPath;
                 currentConfig._requestAuditLifecycle = true;
+                if(mainlandRequired(currentConfig))currentConfig.REQUEST_AUDIT_NETWORK_METADATA_ENABLED=true;
                 runtimeRequest.setMetadata({ providerType: currentConfig.MODEL_PROVIDER });
                 const auditLifecycle = instrumentResponseForAudit(res, async ({ normalizedPath, response, errorClass }) => {
                     const pluginManager = getPluginManager();
@@ -246,6 +238,8 @@ export function createRequestHandler(config, providerPoolManager) {
                         normalizedPath,
                         ...(auditContext.requestedModel ? { originalRequestBody: { model: auditContext.requestedModel } } : {}),
                         ...network,
+                        potluckKeyHash: auditContext.potluckKeyHash || currentConfig.potluckKeyHash || null,
+                        mainlandPolicy: auditContext.mainlandPolicy || null,
                         response,
                         runtime: runtimeCompletion || finalizeRuntime(response.httpStatus ?? 499),
                         requestAttempts: requestContext.get('requestAudit')?.attempts || [],
@@ -282,6 +276,32 @@ export function createRequestHandler(config, providerPoolManager) {
                 if (isAuditableModelRequest(method, originalPath)) auditLifecycle.markEligible();
 
                 try {
+                    const clientKey = extractApiKey(req.headers, req.url);
+                    const clientBusiness = typeof clientKey === 'string' && clientKey.startsWith('maki_') && (isAuditableModelRequest(method, path) || (method === 'GET' && path === '/api/potluckuser/usage'));
+                    if (clientBusiness) {
+                        auditLifecycle.markEligible();
+                        requestStore.requestAudit.potluckKeyHash = hashKeyId(clientKey);
+                        if (mainlandRequired(currentConfig)) {
+                            const decision = evaluateMainlandPolicy(currentConfig, network.clientIp);
+                            requestStore.requestAudit.mainlandPolicy = { allowed:decision.allowed, code:decision.code, version:decision.version, sha256:decision.sha256 };
+                            if (!decision.allowed) {
+                                requestStore.requestAudit.terminal = { outcome:'geo_rejected', errorClass:decision.code };
+                                res.writeHead(decision.status, { 'content-type':'application/json', 'cache-control':'no-store' });
+                                res.end(JSON.stringify({ error:{ code:decision.code, message:decision.status===503?'地域准入数据暂不可用，请稍后重试。':'客户端 Key 仅允许中国大陆公网 IP 使用，请检查网络或代理出口。',attribution:'IP Geolocation by DB-IP — https://db-ip.com',dataVersion:decision.version } }));
+                                return;
+                            }
+                        }
+                    }
+                    if (network.edgeDeniedStatus) {
+                        if(requestStore.requestAudit.mainlandPolicy)requestStore.requestAudit.mainlandPolicy={...requestStore.requestAudit.mainlandPolicy,allowed:false,code:network.edgeDeniedStatus===503?'EDGE_ADMISSION_UNAVAILABLE':'EDGE_ADMISSION_REJECTED'};
+                        requestStore.requestAudit.terminal={outcome:'admission_rejected',errorClass:'EDGE_ADMISSION_REJECTED'};
+                        res.writeHead(network.edgeDeniedStatus,{'content-type':'application/json','cache-control':'no-store'});
+                        res.end(JSON.stringify({error:{code:'EDGE_ADMISSION_REJECTED',message:'Request rejected at the admission boundary.'}}));return;
+                    }
+                    if (validatedEdgeLease?.statusCode) {
+                        res.writeHead(validatedEdgeLease.statusCode, { 'content-type':'application/json' });
+                        res.end(JSON.stringify(validatedEdgeLease.body));return;
+                    }
                     // Set CORS headers for all requests
                     res.setHeader('Access-Control-Allow-Origin', '*');
                     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');

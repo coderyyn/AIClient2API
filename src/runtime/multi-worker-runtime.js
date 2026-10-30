@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import http from 'http';
 import path from 'path';
 import { fork } from 'child_process';
@@ -696,6 +697,7 @@ export function createKeyConfigAckTracker() {
 
 export function startMultiWorkerRuntime({ env = process.env, args = process.argv.slice(2), logger = console } = {}) {
     const topology = resolveWorkerTopology(env);
+    const networkSecret = randomBytes(32).toString('hex');
     const publicPort = Number(env.RUNTIME_PUBLIC_PORT || 3000);
     const internalBasePort = Number(env.RUNTIME_INTERNAL_BASE_PORT || 3200);
     const epoch = env.RUNTIME_DEPLOYMENT_EPOCH || `local-${Date.now()}`;
@@ -719,6 +721,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             env: {
                 ...env,
                 IS_WORKER_PROCESS: 'true',
+                RUNTIME_NETWORK_SECRET: networkSecret,
                 RUNTIME_WORKER_ROLE: role,
                 RUNTIME_WORKER_ID: id,
                 RUNTIME_DEPLOYMENT_EPOCH: epoch
@@ -883,7 +886,11 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
 
     const buildRuntimeStatus = () => {
         const metrics = aggregateWorkerMetrics(workerMetrics);
-        const topologyReady = ready.size === topology.executionWorkers + 1;
+        const countryWorkers = Object.fromEntries([...workerMetrics].map(([id, snapshot]) => [id, snapshot.mainlandPolicy || { enabled:false }]));
+        const enabledPolicies = Object.values(countryWorkers).filter(x => x.enabled);
+        const requiredCountry = env.MAINLAND_CLIENT_KEYS_ONLY_REQUIRED === 'true' || enabledPolicies.length > 0;
+        const countryReady = !requiredCountry || (enabledPolicies.length === topology.executionWorkers + 1 && enabledPolicies.every(x => x.available && x.sha256 === enabledPolicies[0].sha256));
+        const topologyReady = ready.size === topology.executionWorkers + 1 && countryReady;
         return {
             status: resolveRuntimeHealthStatus({ topologyReady, metrics }),
             epoch,
@@ -892,6 +899,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             readyWorkers: ready.size,
             coordination: 'redis',
             leaseRecovery: 'ready',
+            mainlandPolicy: { required:requiredCountry, ready:countryReady, workers:countryWorkers },
             persistenceBacklog: getPersistenceBacklog(metrics).total,
             persistenceBacklogByLayer: getPersistenceBacklog(metrics),
             providerConfig: providerConfigAcks.snapshot([...workers.values()].filter(worker => worker.role === 'execution').map(worker => worker.id)),
@@ -904,6 +912,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
     };
 
     const proxy = http.createServer(createRuntimeProxyHandler({
+        networkSecret,
         controlTarget: { host: '127.0.0.1', port: controlPort },
         executionTargets,
         isTargetReady: (role, index) => role === 'control'

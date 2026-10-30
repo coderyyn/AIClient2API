@@ -1,5 +1,7 @@
+import { mainlandRequired, evaluateMainlandPolicy, getMainlandPolicyStatus } from '../utils/mainland-country-policy.js';
+import { resolveClientNetwork } from '../utils/client-network.js';
 import http from 'node:http';
-import { EdgeAuthService, loadPoliciesFromFile } from './edge-auth-service.js';
+import { EdgeAuthService, loadPoliciesFromFile, extractApiKey } from './edge-auth-service.js';
 import { RedisRespClient } from '../runtime/redis-resp-client.js';
 
 function redisFromUrl(value) {
@@ -72,7 +74,7 @@ export function createEdgeAuthServer(options = {}) {
     }
 
     const server = http.createServer(async (req, res) => {
-        if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
+        if (req.method === 'GET' && req.url === '/health') {const policy=getMainlandPolicyStatus(options.config || {});return json(res,policy.available?200:503,{ok:policy.available,...(policy.enabled?{mainlandPolicy:policy}:{})});}
         if (req.method === 'POST' && req.url === '/reload') {
             try {
                 const changed = await reloadPolicies();
@@ -100,6 +102,12 @@ export function createEdgeAuthServer(options = {}) {
             return json(res, 200, await service.status(parsed.searchParams.get('keyHash'), parsed.searchParams.get('leaseId')));
         }
         if (req.method !== 'GET' || req.url !== '/authorize') return json(res, 404, { error: 'not_found' });
+        const clientKey=extractApiKey(req.headers,req.headers['x-edge-original-uri'] || '');
+        if(mainlandRequired(options.config || {}) && clientKey?.startsWith('maki_')) {
+            const network=resolveClientNetwork({...req,headers:{'x-real-ip':req.headers['x-edge-client-ip']}},{TRUST_PROXY:true,TRUSTED_PROXY_IPS:options.trustedProxyIps || process.env.EDGE_AUTH_TRUSTED_PROXY_IPS || []},{detailed:true});
+            const decision=evaluateMainlandPolicy(options.config || {},network.clientIp);
+            if(!decision.allowed){res.writeHead(403,{'content-type':'application/json','cache-control':'no-store','x-edge-response-status':String(decision.status)});res.end(JSON.stringify({error:decision.code}));return;}
+        }
         const abortController = new AbortController();
         const abortRequest = () => { if (!res.writableEnded) abortController.abort(); };
         req.once('aborted', abortRequest);

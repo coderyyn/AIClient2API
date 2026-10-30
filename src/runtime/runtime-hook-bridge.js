@@ -136,6 +136,8 @@ function compactMetadata(context = {}) {
         fromProvider: context.fromProvider || null,
         toProvider: context.toProvider || null,
         potluckApiKey: context.potluckApiKey || null,
+        potluckKeyHash: context.potluckKeyHash || null,
+        mainlandPolicy: context.mainlandPolicy ? { allowed:context.mainlandPolicy.allowed === true,code:context.mainlandPolicy.code,version:context.mainlandPolicy.version,sha256:context.mainlandPolicy.sha256 } : undefined,
         potluckKeyData: context.potluckKeyData?.name ? { name: context.potluckKeyData.name } : undefined,
         potluckQuotaReservationId: context.potluckQuotaReservationId || null,
         potluckQuotaMode: context.potluckQuotaMode || null,

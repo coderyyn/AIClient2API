@@ -1,3 +1,4 @@
+import { getMainlandPolicyStatus } from '../utils/mainland-country-policy.js';
 import { monitorEventLoopDelay, performance } from 'perf_hooks';
 import { getHeapStatistics } from 'node:v8';
 
@@ -186,6 +187,7 @@ export class RuntimeMetrics {
         this.eventLoopDelay.reset?.();
         return {
             requests: structuredClone(this.requests),
+            mainlandPolicy: getMainlandPolicyStatus(),
             stages,
             output: { ...this.output },
             inFlight: this.inFlight,

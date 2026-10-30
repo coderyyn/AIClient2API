@@ -1,3 +1,4 @@
+import { resolveClientNetwork } from './client-network.js';
 export { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER } from './constants.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -1882,87 +1883,8 @@ export function formatExpiryLog(tag, expiryDate, nearMinutes) {
     return { message, isNearExpiry };
 }
 
-function normalizeIpAddress(ip) {
-    if (!ip) return null;
-
-    let normalized = String(ip).trim();
-    if (!normalized) return null;
-
-    // Clean up IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1 -> 127.0.0.1)
-    if (normalized.startsWith('::ffff:')) {
-        normalized = normalized.substring('::ffff:'.length);
-    }
-
-    return isIP(normalized) ? normalized : null;
-}
-
-function parseTrustedProxyIps(value) {
-    if (Array.isArray(value)) {
-        return value
-            .flatMap(item => parseTrustedProxyIps(item))
-            .filter(Boolean);
-    }
-
-    if (typeof value !== 'string') {
-        return [];
-    }
-
-    return value
-        .split(',')
-        .map(item => normalizeIpAddress(item))
-        .filter(Boolean);
-}
-
-function isTrustedProxyIp(ip, trustedProxyIps) {
-    const normalizedIp = normalizeIpAddress(ip);
-    if (!normalizedIp) return false;
-
-    return parseTrustedProxyIps(trustedProxyIps).some(trustedIp => trustedIp === normalizedIp);
-}
-
-/**
- * Get client IP address from request.
- *
- * Forwarded headers are client-controlled unless the immediate peer is listed
- * in TRUSTED_PROXY_IPS. The legacy string return mode additionally requires
- * TRUST_PROXY=true so authentication and rate-limit behavior is unchanged.
- * Detailed audit mode trusts headers from an explicitly listed peer even when
- * TRUST_PROXY is false and returns the peer and source alongside the client IP.
- *
- * @param {http.IncomingMessage} req - The HTTP request object.
- * @param {Object} [config] - Optional server configuration.
- * @param {Object} [options] - Set detailed=true for audit network metadata.
- * @returns {string|{clientIp:string,peerIp:string,clientIpSource:string}} Client IP or detailed audit metadata.
- */
 export function getClientIp(req, config = {}, options = {}) {
-    const peerIp = normalizeIpAddress(req.socket?.remoteAddress) || 'unknown';
-    let clientIp = peerIp;
-    let clientIpSource = 'peer';
-
-    const trustedPeer = isTrustedProxyIp(peerIp, config.TRUSTED_PROXY_IPS);
-    const trustForwardedHeaders = trustedPeer && (config?.TRUST_PROXY === true || options?.detailed === true);
-    if (trustForwardedHeaders) {
-        const realIpHeader = req.headers?.['x-real-ip'];
-        const realIpValue = Array.isArray(realIpHeader) ? realIpHeader[0] : realIpHeader;
-        const realIp = normalizeIpAddress(realIpValue);
-        if (realIp) {
-            clientIp = realIp;
-            clientIpSource = 'trusted-x-real-ip';
-        } else {
-            const forwarded = req.headers?.['x-forwarded-for'];
-            const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-            const forwardedIp = normalizeIpAddress(forwardedValue?.split(',')[0]);
-            if (forwardedIp) {
-                clientIp = forwardedIp;
-                clientIpSource = 'trusted-x-forwarded-for';
-            }
-        }
-    }
-
-    if (options?.detailed === true) {
-        return { clientIp, peerIp, clientIpSource };
-    }
-    return clientIp;
+    return resolveClientNetwork(req, config, options);
 }
 
 /**

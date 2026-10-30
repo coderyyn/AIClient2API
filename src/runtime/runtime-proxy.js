@@ -1,7 +1,8 @@
+import { resolveClientNetwork, signNetworkHeaders, readIngressNetworkConfig } from '../utils/client-network.js';
 import http from 'http';
 import { classifyRuntimeRequest } from './worker-topology.js';
 
-export function createRuntimeProxyHandler({ controlTarget, executionTargets, onProxyError, getRuntimeStatus, isTargetReady, onTargetRequest } = {}) {
+export function createRuntimeProxyHandler({ controlTarget, executionTargets, onProxyError, getRuntimeStatus, isTargetReady, onTargetRequest, networkSecret, getNetworkConfig = readIngressNetworkConfig } = {}) {
     let executionIndex = 0;
     return (req, res) => {
         if (req.method === 'GET' && req.url.split('?')[0] === '/runtime/health' && getRuntimeStatus) {
@@ -21,12 +22,19 @@ export function createRuntimeProxyHandler({ controlTarget, executionTargets, onP
             return;
         }
         onTargetRequest?.(role, targetIndex, target);
+        const network = resolveClientNetwork(req, getNetworkConfig(), { detailed: true });
+        const deniedStatus=Number(req.headers['x-edge-denied-status']);
+        if(network.clientIpSource.startsWith('trusted-') && [401,403,429,503].includes(deniedStatus)) network.edgeDeniedStatus=deniedStatus;
+        const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => !name.toLowerCase().startsWith('x-aiclient-network')));
+        headers['x-real-ip'] = network.clientIp;
+        headers['x-forwarded-for'] = network.clientIp;
+        if (networkSecret) Object.assign(headers, signNetworkHeaders(networkSecret, req, network));
         const upstream = http.request({
             host: target.host,
             port: target.port,
             method: req.method,
             path: req.url,
-            headers: { ...req.headers, 'x-aiclient-runtime-role': role },
+            headers: { ...headers, 'x-aiclient-runtime-role': role },
             agent: false
         }, upstreamResponse => {
             res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);

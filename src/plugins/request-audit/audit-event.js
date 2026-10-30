@@ -320,7 +320,8 @@ export function buildRequestAuditEvent(context = {}) {
         network: {
             clientIp: context.clientIp || null,
             peerIp: context.peerIp || null,
-            clientIpSource: context.clientIpSource || null
+            clientIpSource: context.clientIpSource || null,
+            ...(context.mainlandPolicy ? {mainlandPolicy: context.mainlandPolicy} : {})
         },
         potluckKey: {
             ...(context.potluckApiKey

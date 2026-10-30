@@ -1,3 +1,4 @@
+import { configureMainlandPolicy } from '../utils/mainland-country-policy.js';
 import '../core/security-hardening.js';
 import logger from '../utils/logger.js';
 import * as http from 'http';
@@ -510,6 +511,7 @@ function gracefulShutdown(exitCode = 0) {
 async function startServer() {
     // Initialize configuration
     await initializeConfig(process.argv.slice(2), 'configs/config.json');
+    configureMainlandPolicy(CONFIG);
     runtimeMetrics.configure({
         sampleRate: process.env.REQUEST_PERF_SAMPLE_RATE ?? CONFIG.REQUEST_PERF_SAMPLE_RATE,
         slowRequestMs: process.env.REQUEST_PERF_SLOW_MS ?? CONFIG.REQUEST_PERF_SLOW_MS
