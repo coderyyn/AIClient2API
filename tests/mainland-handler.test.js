@@ -70,6 +70,7 @@ describe('mainland rejection before provider and quota dispatch',()=>{
     });
     test.each([401,403,429,503])('trusted edge denial %s is audited without quota or upstream',async status=>{
         expect((await request('114.114.114.114',false,'/v1/responses',status)).statusCode).toBe(status);expect(plugin.executeAuth).not.toHaveBeenCalled();expect(handleAPIRequests).not.toHaveBeenCalled();expect(plugin.executeHook.mock.calls.filter(x=>x[0]==='onRequestCompleted')).toHaveLength(1);
+        expect(plugin.executeHook.mock.calls.find(x=>x[0]==='onRequestCompleted')[1]).toMatchObject({mainlandPolicy:{allowed:true,code:'MAINLAND_CN'},outcome:'admission_rejected'});
     });
     test('user usage cannot bypass country restriction',async()=>{
         expect((await request('8.8.8.8',false,'/api/potluckuser/usage')).statusCode).toBe(403);expect(plugin.executeRoutes).not.toHaveBeenCalled();

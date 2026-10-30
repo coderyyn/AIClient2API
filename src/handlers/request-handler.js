@@ -294,7 +294,8 @@ export function createRequestHandler(config, providerPoolManager) {
                         }
                     }
                     if (network.edgeDeniedStatus) {
-                        if(requestStore.requestAudit.mainlandPolicy)requestStore.requestAudit.mainlandPolicy={...requestStore.requestAudit.mainlandPolicy,allowed:false,code:network.edgeDeniedStatus===503?'EDGE_ADMISSION_UNAVAILABLE':'EDGE_ADMISSION_REJECTED'};
+                        // Preserve the geographic decision. Admission/quota failures
+                        // are independent and belong in terminal outcome/errorClass.
                         requestStore.requestAudit.terminal={outcome:'admission_rejected',errorClass:'EDGE_ADMISSION_REJECTED'};
                         res.writeHead(network.edgeDeniedStatus,{'content-type':'application/json','cache-control':'no-store'});
                         res.end(JSON.stringify({error:{code:'EDGE_ADMISSION_REJECTED',message:'Request rejected at the admission boundary.'}}));return;

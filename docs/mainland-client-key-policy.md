@@ -19,7 +19,7 @@ Run the updater explicitly each month, in the application image with a writable
 operator-only data mount (services mount the directory read-only):
 
 ```
-node scripts/ops/update-mainland-ranges.mjs --month YYYY-MM --output /data/cn-ip-ranges.json --runtime-url http://127.0.0.1:13000/runtime/health --edge-health-url http://127.0.0.1:18081/health
+docker run --rm --network host --cap-drop ALL --security-opt no-new-privileges --mount type=bind,src=/root/aiclient-country-data,dst=/data --entrypoint node aiclient2api:mainland-648cd1d scripts/ops/update-mainland-ranges.mjs --month YYYY-MM --output /data/cn-ip-ranges.json --runtime-url http://127.0.0.1:13000/runtime/health --edge-health-url http://127.0.0.1:18081/health
 ```
 
 When verifying host loopback endpoints from a temporary updater container, use its

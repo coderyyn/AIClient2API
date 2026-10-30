@@ -53,7 +53,11 @@ def key_set(config_dir):
 
 
 def render_nginx(site, directives, common, denial_template, log_template):
-    require('mainland-denials.conf' not in site, 'already rendered')
+    if 'mainland-denials.conf' in site:
+        require(site.count('include ' + DENIALS + ';') == 2 and
+                'error_page 500 = @mainland_edge_500;' in directives and
+                'X-Edge-Denied-Status ""' in common, 'incomplete existing mainland ingress')
+        return {SITE: site, DIRECTIVES: directives, COMMON: common, DENIALS: denial_template, SAFE_LOG: log_template}
     include = 'include /etc/nginx/snippets/edge-auth-location.conf;'
     require(site.count(include) == 2, 'unexpected virtual server topology')
     site = site.replace(include, include + '\n    include ' + DENIALS + ';')
@@ -91,7 +95,7 @@ def payload(old, image, image_config, country_dir, gateway, revision, epoch, edg
                   Labels={**(config.get('Labels') or {}), **(image_config.get('Labels') or {})},
                   Healthcheck=image_config['Healthcheck'])
     config['Hostname'] = ''
-    host['Binds'] = list(host.get('Binds') or []) + [country_dir + ':/app/security:ro']
+    host['Binds'] = list(dict.fromkeys([*(host.get('Binds') or []), country_dir + ':/app/security:ro']))
     host['CapDrop'] = sorted(set((host.get('CapDrop') or []) + ['NET_RAW']))
     host['SecurityOpt'] = sorted(set((host.get('SecurityOpt') or []) + ['no-new-privileges']))
     # Docker inspect-only fields are not create options.
@@ -105,7 +109,7 @@ def payload(old, image, image_config, country_dir, gateway, revision, epoch, edg
 
 def validate_created(old, new, country_dir):
     expected = copy.deepcopy(old['HostConfig'])
-    expected['Binds'] = list(expected.get('Binds') or []) + [country_dir + ':/app/security:ro']
+    expected['Binds'] = list(dict.fromkeys([*(expected.get('Binds') or []), country_dir + ':/app/security:ro']))
     expected['CapDrop'] = list(expected.get('CapDrop') or []) + ['NET_RAW']
     expected['SecurityOpt'] = list(expected.get('SecurityOpt') or []) + ['no-new-privileges']
     for key in ('PortBindings', 'Binds', 'NetworkMode', 'RestartPolicy', 'LogConfig', 'Memory', 'NanoCpus',
@@ -190,7 +194,9 @@ class Release:
                                (source / 'docker/nginx-mainland-denial-locations.conf').read_text(),
                                (source / 'docker/nginx-mainland-safe-log.conf').read_text())
         for path in desired:
-            require(path not in (DENIALS, SAFE_LOG) or not Path(path).exists(), 'new Nginx file already exists')
+            if path in (DENIALS, SAFE_LOG) and Path(path).exists():
+                require('mainland-denials.conf' in Path(SITE).read_text() and Path(path).read_text() == desired[path],
+                        'existing mainland Nginx template changed; inspect before replacing')
             frozen.setdefault(path, digest(path) if Path(path).exists() else None)
         originals = {path: Path(path).read_text() if Path(path).exists() else None for path in desired}
         write_json(self.root / 'nginx-before.private.json', originals)
@@ -257,16 +263,28 @@ class Release:
         replace_text(SITE, gated)
         self.save(phase='maintenance', gateHash=digest(SITE))
         nginx_reload()
+        return self.confirm_gate()
+
+    def confirm_gate(self):
+        require(self.state['phase'] in ('maintenance', 'drained'), 'no maintenance gate')
+        require(digest(SITE) == self.state['gateHash'], 'maintenance gate changed')
         req = urllib.request.Request('http://127.0.0.1/v1/models', headers={'Host': self.spec['host']})
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            raise ValueError('maintenance probe unexpectedly allowed')
-        except urllib.error.HTTPError as exc:
-            require(exc.code == 503, 'maintenance probe not 503')
-        return {'maintenance': True}
+        # Reload is asynchronous: an immediately reused worker may still serve
+        # the old config. Never permit a stop until a fresh probe confirms 503.
+        for _ in range(20):
+            try:
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    status = response.status
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+            if status == 503:
+                self.save(maintenanceVerified=True)
+                return {'maintenance': True, 'verifiedStatus': 503}
+            time.sleep(0.25)
+        raise ValueError('maintenance probe not 503; do not stop old writer')
 
     def drain(self):
-        require(self.state['phase'] == 'maintenance', 'arm first')
+        require(self.state['phase'] in ('maintenance', 'drained') and self.state.get('maintenanceVerified'), 'verify gate first')
         deadline = time.monotonic() + 180
         stable = 0
         while time.monotonic() < deadline:
@@ -282,7 +300,7 @@ class Release:
         raise ValueError('drain timed out; cancel without stopping old containers')
 
     def stop_role(self, role):
-        require(self.state['phase'] in ('drained', 'stopping'), 'drain first')
+        require(self.state['phase'] in ('drained', 'stopping') and self.state.get('maintenanceVerified'), 'drain with verified gate first')
         if role == 'edge-auth':
             require(not inspect(self.state['oldIds']['aiclient2api'])['State']['Running'], 'stop old writer first')
         identifier = self.state['oldIds'][role]
@@ -416,7 +434,7 @@ def main():
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--phase', required=True, choices=['prepare', 'create', 'arm', 'drain', 'stop', 'configure',
                         'rename-old', 'rename-new', 'start', 'verify', 'open', 'preview', 'cancel',
-                        'rollback-gate', 'rollback-ingress'])
+                        'rollback-gate', 'rollback-ingress', 'confirm-gate'])
     parser.add_argument('--role', choices=['aiclient2api', 'edge-auth'])
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()

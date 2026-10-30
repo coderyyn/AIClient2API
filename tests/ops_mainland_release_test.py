@@ -3,8 +3,12 @@ import copy
 import sys
 from pathlib import Path
 import unittest
+import tempfile
+import urllib.error
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/ops'))
 import mainland_release as release
+from mainland_observe import audit_summary
 
 
 class MainlandReleaseTests(unittest.TestCase):
@@ -39,8 +43,55 @@ class MainlandReleaseTests(unittest.TestCase):
         self.assertEqual(result[release.SITE].count('allow 1.2.3.4;'), 2)
         self.assertEqual(result[release.SITE].count('X-Edge-Denied-Status ""'), 2)
         self.assertIn('error_page 500 = @mainland_edge_500;', result[release.DIRECTIVES])
+        again = release.render_nginx(result[release.SITE], result[release.DIRECTIVES], result[release.COMMON], 'denials', 'logs')
+        self.assertEqual(result, again)
         with self.assertRaises(ValueError):
             release.render_nginx(result[release.SITE], '', '', '', '')
+
+    def gate_release(self, directory):
+        target = Path(directory) / 'site.conf'
+        target.write_text('maintenance')
+        r = object.__new__(release.Release)
+        r.state = {'phase': 'maintenance', 'gateHash': release.digest(target)}
+        r.spec = {'host': 'example.test'}
+        r.save = Mock()
+        return r, target
+
+    def test_asynchronous_reload_must_confirm_503_before_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            r, target = self.gate_release(directory)
+            replies = [urllib.error.HTTPError('test', code, '', {}, None) for code in (401, 503)]
+            with patch.object(release, 'SITE', str(target)), patch.object(release.time, 'sleep'), \
+                    patch.object(release.urllib.request, 'urlopen', side_effect=replies):
+                self.assertEqual(r.confirm_gate()['verifiedStatus'], 503)
+            r.save.assert_called_once_with(maintenanceVerified=True)
+
+    def test_unverified_gate_cannot_stop_old_writer(self):
+        r = object.__new__(release.Release)
+        r.state = {'phase': 'drained'}
+        with patch.object(release, 'run') as mutation:
+            with self.assertRaisesRegex(ValueError, 'verified gate'):
+                r.stop_role('aiclient2api')
+            mutation.assert_not_called()
+
+    def test_audit_observer_detects_missing_metadata_and_duplicate_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'request-audit'
+            root.mkdir()
+            event = {'timestamp': '2026-10-30T10:00:00Z', 'requestId': 'synthetic',
+                     'potluckKey': {'present': True, 'hash': 'sha256:' + 'a' * 16},
+                     'network': {'clientIp': '114.114.114.114', 'peerIp': '172.21.0.1',
+                                 'clientIpSource': 'trusted-x-real-ip', 'mainlandPolicy': {'code': 'MAINLAND_CN'}}}
+            path = root / 'audit-2026-10-30.jsonl'
+            path.write_text(release.json.dumps(event) + '\n')
+            result = audit_summary(directory, 0)
+            self.assertEqual(result['events'], 1)
+            self.assertEqual(result['malformed'], [])
+            event['network']['clientIp'] = None
+            path.write_text((release.json.dumps(event) + '\n') * 2)
+            result = audit_summary(directory, 0)
+            self.assertEqual(result['malformed'], ['synthetic'])
+            self.assertEqual(result['duplicates'], 1)
 
 
 if __name__ == '__main__':
