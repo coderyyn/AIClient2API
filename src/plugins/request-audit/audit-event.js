@@ -328,7 +328,9 @@ export function buildRequestAuditEvent(context = {}) {
                 ? maskPotluckKey(context.potluckApiKey)
                 : {
                     present: Boolean(context.potluckKeyHash),
-                    hash: context.potluckKeyHash || null,
+                    // Runtime hooks carry the edge coordinator's 32-hex identity.
+                    // Persist the same audit fingerprint as maskPotluckKey().
+                    hash: context.potluckKeyHash ? `sha256:${String(context.potluckKeyHash).replace(/^sha256:/, '').slice(0, 16)}` : null,
                     prefix: null
                 }),
             name: context.potluckKeyData?.name || null

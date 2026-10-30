@@ -164,6 +164,7 @@ export function createRequestHandler(config, providerPoolManager) {
     return async function requestHandler(req, res) {
         const network = getClientIp(req, config, { detailed: true });
         const requestId = generateRequestId();
+        res.setHeader('X-Request-ID', requestId);
         const initialRequestUrl = new URL(req.url, `http://${req.headers.host}`);
         const originalPath = initialRequestUrl.pathname;
         const edgeLease = validateEdgeAdmissionHeaders(req, req.method, originalPath);

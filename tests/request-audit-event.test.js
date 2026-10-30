@@ -1,8 +1,17 @@
-import { buildRequestAuditEvent } from '../src/plugins/request-audit/audit-event.js';
+import { buildRequestAuditEvent, hashSecret } from '../src/plugins/request-audit/audit-event.js';
+import { hashKeyId } from '../src/edge-auth/edge-auth-service.js';
 import { buildAuditSummary } from '../src/plugins/request-audit/api-routes.js';
 import { getPricingDiagnostics, resetPricingDiagnostics } from '../src/plugins/api-potluck/cost-estimator.js';
 
 describe('request audit event', () => {
+  test('rejected and authenticated requests use the same key fingerprint', () => {
+    const key = 'maki_synthetic_fingerprint';
+    const allowed = buildRequestAuditEvent({ potluckApiKey: key });
+    const rejected = buildRequestAuditEvent({ potluckKeyHash: hashKeyId(key) });
+    expect(rejected.potluckKey.hash).toBe(allowed.potluckKey.hash);
+    expect(rejected.potluckKey.hash).toBe(hashSecret(key));
+    expect(JSON.stringify(rejected)).not.toContain(key);
+  });
   test('records only bounded proxy time context metadata without raw prompts', () => {
     const event = buildRequestAuditEvent({
       requestId: 'proxy-time-audit', model: 'gpt-6.1-sol',
