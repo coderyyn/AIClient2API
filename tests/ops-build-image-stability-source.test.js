@@ -35,9 +35,9 @@ describe('stable image build operations', () => {
         const script = read('scripts/ops/build-base-image.sh');
         const dockerfile = read('docker/Dockerfile.build-base');
 
-        expect(script).toContain('aiclient2api:node20-alpine-build-base');
+        expect(script).toContain('aiclient2api:node24-alpine-build-base');
         expect(script).toContain('docker build --progress=plain');
-        expect(dockerfile).toContain('ARG NODE_BASE_IMAGE=node:20-alpine');
+        expect(dockerfile).toContain('ARG NODE_BASE_IMAGE=node:24-alpine3.24');
         expect(dockerfile).toContain('FROM ${NODE_BASE_IMAGE}');
         expect(dockerfile).toContain('python3 make g++');
         expect(dockerfile).toContain('git tar procps');

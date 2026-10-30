@@ -1,0 +1,15 @@
+ARG NODE_BUILD_IMAGE=node:24-alpine3.24
+FROM ${NODE_BUILD_IMAGE}
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALPINE_MIRROR=mirrors.aliyun.com
+WORKDIR /app
+RUN sed -i "s#dl-cdn.alpinelinux.org#$ALPINE_MIRROR#g" /etc/apk/repositories \
+    && apk upgrade --no-cache \
+    && apk add --no-cache python3 make g++ git
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm_config_proxy="$HTTP_PROXY" npm_config_https_proxy="$HTTPS_PROXY" npm ci
+COPY . .
+ENV HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy=""
+CMD ["node", "node_modules/jest/bin/jest.js", "tests/provider-pool-", "tests/antigravity-", "tests/runtime-", "tests/management-", "tests/safe-config-merge.test.js", "tests/quota-reset-time.test.js", "tests/temporary-key-model-routing.test.js", "tests/request-handler-provider-leases.test.js", "--runInBand", "--silent"]

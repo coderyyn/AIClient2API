@@ -27,10 +27,11 @@ IMAGE_TAG=${2:-aiclient2api:customized-branch-$SHORT_COMMIT-$(date +%Y%m%d)}
 BUILD_HTTP_PROXY=${BUILD_HTTP_PROXY-http://192.168.4.242:7890}
 BUILD_RETRIES=${BUILD_RETRIES:-2}
 BUILD_RETRY_DELAY_SEC=${BUILD_RETRY_DELAY_SEC:-5}
-NODE_BASE_IMAGE=${NODE_BASE_IMAGE:-node:20-alpine}
+NODE_BASE_IMAGE=${NODE_BASE_IMAGE:-node:24-alpine3.24}
 ALPINE_MIRROR=${ALPINE_MIRROR:-mirrors.aliyun.com}
+GO_BUILD_IMAGE=${GO_BUILD_IMAGE:-golang:1.26-alpine3.24}
 
-BUILD_ARGS=(--build-arg "HTTP_PROXY=$BUILD_HTTP_PROXY" --build-arg "HTTPS_PROXY=$BUILD_HTTP_PROXY")
+BUILD_ARGS=(--build-arg "HTTP_PROXY=$BUILD_HTTP_PROXY" --build-arg "HTTPS_PROXY=$BUILD_HTTP_PROXY" --build-arg "GO_BUILD_IMAGE=$GO_BUILD_IMAGE")
 if [ -n "${BUILD_GOPROXY:-}" ]; then
   BUILD_ARGS+=(--build-arg "GOPROXY=$BUILD_GOPROXY")
 fi
@@ -93,7 +94,7 @@ base_started=$(stage_start)
 PARENT_ID=$(docker image inspect --format '{{.Id}}' "$NODE_BASE_IMAGE")
 PLATFORM=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$NODE_BASE_IMAGE")
 BASE_KEY=$( { printf '%s\n' "$PARENT_ID" "$PLATFORM" "$ALPINE_MIRROR"; cat "$SOURCE_DIR/docker/Dockerfile.build-base"; } | sha256sum | cut -c1-20)
-NODE_BUILD_IMAGE="aiclient2api:node20-alpine-build-base-$BASE_KEY"
+NODE_BUILD_IMAGE="aiclient2api:node24-alpine-build-base-$BASE_KEY"
 if ! docker image inspect "$NODE_BUILD_IMAGE" >/dev/null 2>&1; then
   (cd "$SOURCE_DIR" && NODE_BASE_IMAGE="$NODE_BASE_IMAGE" BUILD_HTTP_PROXY="$BUILD_HTTP_PROXY" \
     sh scripts/ops/build-base-image.sh "$NODE_BUILD_IMAGE")

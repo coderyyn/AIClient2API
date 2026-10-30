@@ -1,4 +1,4 @@
-ARG NODE_BASE_IMAGE=node:20-alpine
+ARG NODE_BASE_IMAGE=node:24-alpine3.24
 FROM ${NODE_BASE_IMAGE}
 
 ARG BUILD_HTTP_PROXY
@@ -10,4 +10,4 @@ RUN sed -i "s#dl-cdn.alpinelinux.org#$ALPINE_MIRROR#g" /etc/apk/repositories \
        apk add --no-cache git tar procps python3 make g++
 
 LABEL org.opencontainers.image.title="AIClient-2-API Node build base"
-LABEL yyn.base_role="node20-alpine-build-base"
+LABEL yyn.base_role="node24-alpine-build-base"

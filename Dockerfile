@@ -1,6 +1,7 @@
 # 可选内部 Node 基础镜像；默认保持官方镜像兼容。
-ARG NODE_BASE_IMAGE=node:20-alpine
-ARG NODE_BUILD_IMAGE=node:20-alpine
+ARG NODE_BASE_IMAGE=node:24-alpine3.24
+ARG NODE_BUILD_IMAGE=node:24-alpine3.24
+ARG GO_BUILD_IMAGE=golang:1.26-alpine3.24
 
 # Stable native dependency stage. An internal build base supplies the toolchain;
 # the official image remains a supported cold-build fallback.
@@ -14,6 +15,7 @@ RUN missing=""; \
     for pair in python3:python3 make:make g++:g++; do \
       command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"; \
     done; \
+    apk upgrade --no-cache || exit 1; \
     if [ -n "$missing" ]; then apk add --no-cache $missing; fi
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -22,7 +24,7 @@ RUN --mount=type=cache,target=/root/.npm \
     && node -e "import('sharp').then(() => console.log('sharp runtime ok'))"
 
 # ── Stage 1: 编译 Go TLS sidecar ──
-FROM golang:1.22-alpine AS sidecar-builder
+FROM ${GO_BUILD_IMAGE} AS sidecar-builder
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -51,7 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # ── Stage 2: Node.js 应用 ──
 # 使用官方Node.js运行时作为基础镜像
-# 选择20-alpine版本以满足undici包的要求（需要Node.js >=20.18.1）
+# Node 24 LTS / Alpine 3.24; native modules are rebuilt for this runtime.
 FROM ${NODE_BASE_IMAGE}
 
 ARG ALPINE_MIRROR=mirrors.aliyun.com
@@ -70,6 +72,7 @@ RUN missing=""; \
     command -v tar >/dev/null 2>&1 || missing="$missing tar"; \
     command -v git >/dev/null 2>&1 || missing="$missing git"; \
     command -v ps >/dev/null 2>&1 || missing="$missing procps"; \
+    apk upgrade --no-cache || exit 1; \
     if [ -n "$missing" ]; then apk add --no-cache $missing; fi
 
 # 设置工作目录

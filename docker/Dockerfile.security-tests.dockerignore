@@ -1,0 +1,12 @@
+node_modules
+.git
+.idea
+.plans
+.env
+.env.*
+coverage
+npm-debug.log
+configs
+outputs
+logs
+tmp
