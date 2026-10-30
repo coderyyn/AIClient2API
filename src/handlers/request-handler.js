@@ -76,8 +76,10 @@ function isAuditableModelRequest(method, path) {
     if (method === 'GET') return route === '/v1/models' || route === '/v1beta/models';
     if (method !== 'POST') return false;
     if (/^\/v1\/(?:chat\/completions|responses|messages|images\/(?:generations|edits))$/.test(route)) return true;
-    if (/^\/v1\/messages\/count_tokens$/.test(route)) return true;
-    return /^\/v1beta\/models\/.+?:(?:generateContent|streamGenerateContent)$/.test(route);
+    // Match the actual dispatchers, which accept embedded Gemini paths and
+    // count_tokens suffixes. Every accepted model route must cross this gate.
+    if (route.includes('/count_tokens')) return true;
+    return /\/v1beta\/models\/.+?:(?:generateContent|streamGenerateContent)/.test(route);
 }
 
 function isEdgeAdmissionProtectedRequest(method, path) {

@@ -85,4 +85,8 @@ describe('mainland rejection before provider and quota dispatch',()=>{
         expect(plugin.executeAuth).not.toHaveBeenCalled();expect(plugin.executeRoutes).not.toHaveBeenCalled();expect(handleAPIRequests).not.toHaveBeenCalled();
         expect(plugin.executeHook.mock.calls.find(x=>x[0]==='onRequestCompleted')[1]).toMatchObject({potluckKeyHash:expect.any(String),mainlandPolicy:{allowed:false}});
     });
+    test.each(['/v1beta/models/gemini:generateContent/suffix','/nested/path/v1beta/models/gemini:streamGenerateContent','/other/count_tokens'])('all paths recognized by existing model dispatchers are gated: %s',async url=>{
+        expect((await request('8.8.8.8',false,url)).statusCode).toBe(403);
+        expect(plugin.executeAuth).not.toHaveBeenCalled();expect(plugin.executeRoutes).not.toHaveBeenCalled();expect(handleAPIRequests).not.toHaveBeenCalled();
+    });
 });
