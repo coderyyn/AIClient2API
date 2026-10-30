@@ -48,9 +48,9 @@ describe('mainland rejection before provider and quota dispatch',()=>{
         handleAPIRequests.mockImplementation(async(_m,_p,_q,res)=>{res.writeHead(200);res.end();return true;});
     });
     afterEach(()=>fs.rmSync(dir,{recursive:true}));
-    async function request(clientIp,missing=false,url='/v1/responses',forcedStatus=null){
+    async function request(clientIp,missing=false,url='/v1/responses',forcedStatus=null,headers=null){
         getClientIp.mockReturnValue({clientIp,peerIp:'172.21.0.1',clientIpSource:'trusted-x-real-ip',...(forcedStatus?{edgeDeniedStatus:forcedStatus}:{})});
-        const req=new EventEmitter();Object.assign(req,{method:url.includes('potluckuser')?'GET':'POST',url,headers:{host:'localhost',authorization:'Bearer maki_synthetic'},socket:{remoteAddress:'127.0.0.1'}});
+        const req=new EventEmitter();Object.assign(req,{method:url.includes('potluckuser')?'GET':'POST',url,headers:{host:'localhost',...(headers || {authorization:'Bearer maki_synthetic'})},socket:{remoteAddress:'127.0.0.1'}});
         const res=new Response();await createRequestHandler({MODEL_PROVIDER:'openai-codex-oauth',UI_ENABLED:true,MAINLAND_CLIENT_KEYS_ONLY:true,MAINLAND_COUNTRY_FILE_PATH:missing?file+'.missing':file,REQUEST_AUDIT_NETWORK_METADATA_ENABLED:true},null)(req,res);
         await new Promise(r=>setImmediate(r));return res;
     }
@@ -74,5 +74,15 @@ describe('mainland rejection before provider and quota dispatch',()=>{
     });
     test('user usage cannot bypass country restriction',async()=>{
         expect((await request('8.8.8.8',false,'/api/potluckuser/usage')).statusCode).toBe(403);expect(plugin.executeRoutes).not.toHaveBeenCalled();
+    });
+    test.each([
+        ['/v1/responses',{authorization:'Bearer ordinary','x-api-key':'maki_synthetic'}],
+        ['/v1/responses',{'x-api-key':'ordinary','x-goog-api-key':'maki_synthetic'}],
+        ['/v1/responses?key=maki_synthetic',{authorization:'Bearer ordinary'}],
+        ['/api/potluckuser/usage',{authorization:'Bearer ordinary','x-api-key':'maki_synthetic'}]
+    ])('mixed credentials cannot hide the authenticated client key on %s',async(url,headers)=>{
+        expect((await request('8.8.8.8',false,url,null,headers)).statusCode).toBe(403);
+        expect(plugin.executeAuth).not.toHaveBeenCalled();expect(plugin.executeRoutes).not.toHaveBeenCalled();expect(handleAPIRequests).not.toHaveBeenCalled();
+        expect(plugin.executeHook.mock.calls.find(x=>x[0]==='onRequestCompleted')[1]).toMatchObject({potluckKeyHash:expect.any(String),mainlandPolicy:{allowed:false}});
     });
 });

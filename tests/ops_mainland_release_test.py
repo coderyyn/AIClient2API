@@ -74,6 +74,16 @@ class MainlandReleaseTests(unittest.TestCase):
                 r.stop_role('aiclient2api')
             mutation.assert_not_called()
 
+    def test_inherited_maintenance_is_only_removed_from_valid_preview(self):
+        original = 'server {\n    server_name example;\n}\n' * 2
+        gated = release.maintenance_text(original)
+        preview = release.remove_maintenance_gate(gated)
+        self.assertNotIn(release.MARKER, preview)
+        self.assertNotIn(release.RULE, preview)
+        self.assertEqual(preview.count('server_name example;'), 2)
+        with self.assertRaises(ValueError):
+            release.remove_maintenance_gate(original)
+
     def test_audit_observer_detects_missing_metadata_and_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'request-audit'

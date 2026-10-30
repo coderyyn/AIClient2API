@@ -21,6 +21,7 @@ import { instrumentResponseForAudit } from '../utils/request-audit-lifecycle.js'
 import { runtimeMetrics } from '../runtime/runtime-metrics.js';
 import { formatSuccessLog } from '../runtime/success-log.js';
 import { extractApiKey, hashKeyId } from '../edge-auth/edge-auth-service.js';
+import { extractPotluckKey } from '../plugins/api-potluck/middleware.js';
 import { getProviderLeaseScope, closeProviderLeaseScope } from '../runtime/provider-lease-scope.js';
 
 /**
@@ -277,7 +278,9 @@ export function createRequestHandler(config, providerPoolManager) {
                 if (isAuditableModelRequest(method, originalPath)) auditLifecycle.markEligible();
 
                 try {
-                    const clientKey = extractApiKey(req.headers, req.url);
+                    // Match the credential actually consumed by Potluck. A different
+                    // non-client Bearer must not hide a client key in another header.
+                    const clientKey = extractPotluckKey(req, initialRequestUrl) || extractApiKey(req.headers, req.url);
                     const clientBusiness = typeof clientKey === 'string' && clientKey.startsWith('maki_') && (isAuditableModelRequest(method, path) || (method === 'GET' && path === '/api/potluckuser/usage'));
                     if (clientBusiness) {
                         auditLifecycle.markEligible();

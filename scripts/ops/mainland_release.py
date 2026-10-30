@@ -19,7 +19,7 @@ import urllib.error
 
 from release_backup import digest, snapshot, write_json
 from release import runtime_check
-from release_maintenance import maintenance_text
+from release_maintenance import maintenance_text, MARKER, RULE
 
 SITE = '/etc/nginx/conf.d/beeintel-3000.conf'
 DIRECTIVES = '/etc/nginx/snippets/edge-auth-api-directives.conf'
@@ -50,6 +50,12 @@ def http_json(url):
 def key_set(config_dir):
     keys = json.loads((Path(config_dir) / 'api-potluck-keys.json').read_text())['keys']
     return {'count': len(keys), 'sha256': hashlib.sha256('\n'.join(sorted(keys)).encode()).hexdigest()}
+
+
+def remove_maintenance_gate(text):
+    require(text.count(MARKER) == 2 and text.count(RULE) == 2,
+            'expected verified inherited maintenance gate')
+    return '\n'.join(line for line in text.split('\n') if line.strip() not in (MARKER, RULE))
 
 
 def render_nginx(site, directives, common, denial_template, log_template):
@@ -190,7 +196,10 @@ class Release:
         nginx = run(['nginx', '-T'])
         for path in re.findall(r'^# configuration file ([^:]+):$', nginx, re.M):
             frozen[path] = digest(path)
-        desired = render_nginx(Path(SITE).read_text(), Path(DIRECTIVES).read_text(), Path(COMMON).read_text(),
+        site_text = Path(SITE).read_text()
+        if self.spec.get('inheritMaintenance'):
+            site_text = remove_maintenance_gate(site_text)
+        desired = render_nginx(site_text, Path(DIRECTIVES).read_text(), Path(COMMON).read_text(),
                                (source / 'docker/nginx-mainland-denial-locations.conf').read_text(),
                                (source / 'docker/nginx-mainland-safe-log.conf').read_text())
         for path in desired:
@@ -259,8 +268,11 @@ class Release:
         require(digest(Path(self.spec['configDir']) / 'config.json') == self.state['configHash'], 'configuration changed')
         for role, identifier in self.state['oldIds'].items():
             require(inspect(role)['Id'] == identifier and inspect(role)['State']['Running'], 'old identity changed')
-        gated = maintenance_text(Path(SITE).read_text())
-        replace_text(SITE, gated)
+        original = Path(SITE).read_text()
+        if self.spec.get('inheritMaintenance'):
+            require(original.count(MARKER) == 2 and original.count(RULE) == 2, 'inherited gate changed')
+        else:
+            replace_text(SITE, maintenance_text(original))
         self.save(phase='maintenance', gateHash=digest(SITE))
         nginx_reload()
         return self.confirm_gate()
