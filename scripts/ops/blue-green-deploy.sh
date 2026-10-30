@@ -194,9 +194,9 @@ prepare_candidate() {
     # The container healthcheck flips before the HTTP surface is warm, so a
     # single 5s probe here reported a false failure on a candidate that was fine.
     probe=0
-    until curl -fsS --max-time 10 "http://127.0.0.1:${CANDIDATE_PORT}/api/health" >/dev/null; do
+    until curl -fsS --max-time 10 "http://127.0.0.1:${CANDIDATE_PORT}/health" >/dev/null; do
       probe=$((probe + 1))
-      [ "$probe" -lt 12 ] || { echo "candidate did not answer /api/health" >&2; exit 1; }
+      [ "$probe" -lt 12 ] || { echo "candidate did not answer /health" >&2; exit 1; }
       sleep 5
     done
     runtime_health=$(curl -fsS --max-time 5 "http://127.0.0.1:${CANDIDATE_PORT}/runtime/health")

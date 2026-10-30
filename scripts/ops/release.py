@@ -180,7 +180,7 @@ class Release:
                 require(obj['State'].get('Running') and not obj['State'].get('OOMKilled'), 'container not running or OOM')
                 require(obj['State'].get('Health', {}).get('Status') == 'healthy', 'Docker health not ready')
                 require(obj.get('RestartCount', 0) == 0, 'container restarted')
-                self.probe(url + '/api/health')
+                self.probe(url + '/health')
                 value = self.probe(url + '/runtime/health')
                 metrics = runtime_check(value, self.spec['executionWorkers'], epoch)
                 return metrics
@@ -369,8 +369,8 @@ class Release:
         revision = self.runner(['docker', 'exec', self.state['finalId'], 'cat', '/app/REVISION'])
         require(revision == self.spec['revision'], 'active source revision mismatch')
         metrics = self.health(self.state['finalId'], self.spec['activeUrl'], self.state['epoch'])
-        self.probe(self.spec['publicUrl'] + '/api/health')
-        runtime_check(self.probe(self.spec['publicUrl'] + '/runtime/health'), self.spec['executionWorkers'], self.state['epoch'])
+        self.probe(self.spec['publicUrl'] + '/health')
+        # Detailed runtime health is intentionally private; self.health checked it locally.
         require(digest(self.spec['nginxConfig']) == self.state['nginxHash'], 'Nginx config changed')
         self.runner(['nginx', '-t'])
         # Mark service validation before compression. A backup error should leave
