@@ -219,6 +219,8 @@ function getFieldLabel(key) {
         'concurrencyLimit': t('modal.provider.concurrencyLimit') + ' ' + t('config.optional'),
         'queueLimit': t('modal.provider.queueLimit') + ' ' + t('config.optional'),
         'providerWeight': (t('modal.provider.providerWeight') || '节点权重') + ' ' + t('config.optional'),
+        'accountEmail': t('modal.provider.accountEmail') + ' ' + t('config.optional'),
+        'quotaResetDay': t('modal.provider.quotaResetDay') + ' ' + t('config.optional'),
         'codexGeneralMax5hPercent': t('modal.provider.codexGeneralMax5hPercent') + ' ' + t('config.optional'),
         'codexGeneralMaxWeeklyPercent': t('modal.provider.codexGeneralMaxWeeklyPercent') + ' ' + t('config.optional'),
         'codexFingerprintMode': t('modal.provider.codexFingerprintMode'),

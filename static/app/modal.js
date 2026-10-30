@@ -4,6 +4,7 @@ import { escapeHtml, showToast, getFieldLabel, getProviderTypeFields } from './u
 import { handleProviderPasswordToggle } from './event-handlers.js';
 import { t } from './i18n.js';
 
+const API_KEY_QUOTA_PROVIDERS = new Set(['openai-custom', 'openaiResponses-custom']);
 const MANAGED_MODEL_LIST_PROVIDERS = new Set(['openai-custom', 'openaiResponses-custom', 'claude-custom', 'atlascloud']);
 
 // 分页配置
@@ -46,6 +47,10 @@ function usesManagedModelList(providerType = '') {
 
 function getProviderBaseFields(providerType) {
     const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
+    // API Key 型供应商：记录关联邮箱与每月额度重置日，号池按重置日优先使用最近重置的 key
+    if (API_KEY_QUOTA_PROVIDERS.has(providerType)) {
+        baseFields.push('accountEmail', 'quotaResetDay');
+    }
     return baseFields;
 }
 
@@ -125,6 +130,20 @@ function buildProxyPoolIndex() {
 
 function getProviderDisplayName(provider = {}) {
     return provider.customName || provider.codexEmail || provider.email || provider.uuid || 'unknown';
+}
+
+function renderProviderQuotaChips(provider = {}) {
+    const email = String(provider.accountEmail || '').trim();
+    const resetDay = Number(provider.quotaResetDay);
+    const chips = [];
+    if (email) {
+        chips.push(`<span class="provider-meta-chip" title="${escapeHtml(email)}"><i class="fas fa-envelope"></i><span>${escapeHtml(email)}</span></span>`);
+    }
+    if (Number.isInteger(resetDay) && resetDay >= 1 && resetDay <= 31) {
+        const label = escapeHtml(t('modal.provider.quotaResetDayChip', { day: resetDay }));
+        chips.push(`<span class="provider-meta-chip" title="${label}"><i class="fas fa-calendar-day"></i><span>${label}</span></span>`);
+    }
+    return chips.join('');
 }
 
 function getProxyPoolProviderLabel(providerType = '') {
@@ -402,6 +421,11 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
             value = parseInt(value || '0', 10);
         } else if (key === 'providerWeight') {
             value = Number(value || '1');
+        } else if (key === 'quotaResetDay') {
+            const day = parseInt(value, 10);
+            value = Number.isInteger(day) && day >= 1 && day <= 31 ? day : null;
+        } else if (key === 'accountEmail') {
+            value = String(value || '').trim();
         } else if (CODEX_QUOTA_PERCENT_FIELDS.has(key)) {
             value = Number(value || '0');
         } else if (key === 'PROXY_REQUIRED') {
@@ -1385,6 +1409,7 @@ function renderProviderDetailList(providers) {
                             ${escapeHtml(provider.customName || provider.uuid)}
                         </div>
                         <div class="provider-meta-chips">
+                            ${renderProviderQuotaChips(provider)}
                             <span class="provider-meta-chip health-status" title="${t('modal.provider.healthCheckLabel')}: ${healthText}">
                                 <i class="${healthIcon}"></i>
                                 <span ${provider.isArchived ? '' : `data-i18n="${healthI18nKey}"`}>${healthText}</span>
@@ -1445,6 +1470,7 @@ function renderProviderCardList(providers) {
                     ${isRefreshing ? `<span class="card-refresh-label" data-i18n="providers.status.needsRefresh">${t('providers.status.needsRefresh')}</span>` : ''}
                 </div>
                 <div class="card-body">
+                    ${renderProviderQuotaChips(provider) ? `<div class="provider-meta-chips">${renderProviderQuotaChips(provider)}</div>` : ''}
                     ${proxyBadgeHtml}
                     ${provider.isArchived ? renderProviderArchiveTime(provider) : ''}
                 </div>
@@ -1544,12 +1570,14 @@ function renderProviderConfig(provider) {
     baseFields.forEach(fieldKey => {
         const displayLabel = getFieldLabel(fieldKey);
         const value = provider[fieldKey];
-        const displayValue = (value !== undefined && value !== null) ? value : '';
+        const displayValue = (value !== undefined && value !== null)
+            ? (fieldKey === 'accountEmail' ? escapeHtml(String(value)) : value)
+            : '';
         
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
-        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : '')))));
-        const inputType = fieldDef.type || (fieldKey === 'providerWeight' ? 'number' : 'text');
+        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : (fieldKey === 'accountEmail' ? 'name@example.com' : (fieldKey === 'quotaResetDay' ? '1-31，如 14 表示每月14号重置' : '')))))));
+        const inputType = fieldDef.type || ((fieldKey === 'providerWeight' || fieldKey === 'quotaResetDay') ? 'number' : 'text');
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
