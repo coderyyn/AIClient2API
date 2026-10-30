@@ -5,7 +5,7 @@ import {
     ProviderPoolManager,
     getCodexModelFallbackTarget
 } from '../providers/provider-pool-manager.js';
-import deepmerge from 'deepmerge';
+import deepmerge from '../vendor/deepmerge/index.js';
 import crypto from 'crypto';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';

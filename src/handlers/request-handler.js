@@ -1,6 +1,6 @@
 import { requiresManagementAuthentication, isOnlinePluginInstallPath, onlinePluginInstallationEnabled, rejectOnlinePluginInstall } from '../utils/management-access-policy.js';
 import { checkAuth } from '../ui-modules/auth.js';
-import deepmerge from 'deepmerge';
+import deepmerge from '../vendor/deepmerge/index.js';
 import logger from '../utils/logger.js';
 import requestContext from '../utils/context.js';
 import { handleError, getClientIp, getRequestBody } from '../utils/common.js';
