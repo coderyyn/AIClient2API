@@ -27,6 +27,9 @@ def validate_references(config_dir, files):
         if isinstance(value, dict):
             for key, item in value.items():
                 if key.endswith('_FILE_PATH') and isinstance(item, str) and item:
+                    # Independently checksummed, read-only release data; never a credential.
+                    if key == 'MAINLAND_COUNTRY_FILE_PATH' and item == '/app/security/cn-ip-ranges.json':
+                        continue
                     relative = item.replace('\\', '/')
                     if relative.startswith('/app/configs/'):
                         relative = relative[len('/app/configs/'):]
