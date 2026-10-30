@@ -119,6 +119,11 @@ export async function loadPlugins() {
     
     try {
         const response = await apiRequest('/api/plugins');
+        const installationEnabled = response?.installationEnabled === true;
+        document.querySelectorAll('[data-tab="market"], #marketTab, #triggerUploadBtn').forEach(el => {
+            el.hidden = !installationEnabled;
+            if (!installationEnabled) el.style.display = 'none';
+        });
         
         if (response && response.plugins) {
             pluginsList = response.plugins;

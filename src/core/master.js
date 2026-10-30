@@ -344,7 +344,7 @@ function createMasterServer() {
         res.end(JSON.stringify({ error: 'Not Found' }));
     });
 
-    server.listen(config.masterPort, () => {
+    server.listen(config.masterPort, '127.0.0.1', () => {
         logger.info(`[Master] Management server listening on port ${config.masterPort}`);
         logger.info(`[Master] Available endpoints:`);
         logger.info(`  GET  /master/status  - Get master and worker status`);

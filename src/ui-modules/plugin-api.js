@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import { getRequestBody } from '../utils/common.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { fetchMarketPlugins, installPlugin, installPluginFromBuffer } from '../services/plugin-installer.js';
+import { onlinePluginInstallationEnabled, rejectOnlinePluginInstall } from '../utils/management-access-policy.js';
 import multer from 'multer';
 import path from 'path';
 
@@ -28,7 +29,7 @@ export async function handleGetPlugins(req, res) {
         const pluginManager = getPluginManager();
         const plugins = pluginManager.getPluginList();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ plugins }));
+        res.end(JSON.stringify({ plugins, installationEnabled: onlinePluginInstallationEnabled() }));
         return true;
     } catch (error) {
         logger.error('[UI API] Failed to get plugins:', error);
@@ -46,6 +47,7 @@ export async function handleGetPlugins(req, res) {
  * 上传并安装插件
  */
 export async function handleUploadPlugin(req, res) {
+    if (!onlinePluginInstallationEnabled()) return rejectOnlinePluginInstall(res);
     return new Promise((resolve) => {
         pluginUpload.single('file')(req, res, async (err) => {
             if (err) {
@@ -114,6 +116,7 @@ export async function handleGetMarketPlugins(req, res) {
  * 安装插件
  */
 export async function handleInstallPlugin(req, res) {
+    if (!onlinePluginInstallationEnabled()) return rejectOnlinePluginInstall(res);
     try {
         const body = await getRequestBody(req);
         const { plugin } = body;
