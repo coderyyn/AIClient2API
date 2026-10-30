@@ -48,13 +48,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY tls-sidecar/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go mod tidy \
-    && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o tls-sidecar .
+    go mod verify \
+    && CGO_ENABLED=0 GOOS=linux go build -mod=readonly -ldflags="-s -w" -o tls-sidecar .
 
 # ── Stage 2: Node.js 应用 ──
 # 使用官方Node.js运行时作为基础镜像
 # Node 24 LTS / Alpine 3.24; native modules are rebuilt for this runtime.
 FROM ${NODE_BASE_IMAGE}
+
+ARG NODE_BASE_IMAGE
+ARG GO_BUILD_IMAGE
+LABEL yyn.runtime_base=$NODE_BASE_IMAGE yyn.go_build_base=$GO_BUILD_IMAGE
 
 ARG ALPINE_MIRROR=mirrors.aliyun.com
 

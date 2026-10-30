@@ -333,12 +333,12 @@ func dialUTLS(ctx context.Context, network, addr string, proxyURL string) (*utls
 		return nil, fmt.Errorf("tcp dial failed: %w", err)
 	}
 
-	// uTLS 握手 — 使用 Chrome 最新自动指纹
+	// Preserve the previous uTLS 1.6.7 Chrome Auto profile (Chrome 120) across dependency updates.
 	// 403 错误通过保持标头小写和清理转发标头来解决
 	tlsConn := utls.UClient(rawConn, &utls.Config{
 		ServerName: host,
 		NextProtos: []string{"h2", "http/1.1"},
-	}, utls.HelloChrome_Auto)
+	}, utls.HelloChrome_120)
 
 	// 握手超时
 	if deadline, ok := ctx.Deadline(); ok {
