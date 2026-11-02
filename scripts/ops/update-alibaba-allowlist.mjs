@@ -65,18 +65,19 @@ async function download(){
     return responses;
 }
 function loopback(url){const u=new URL(url);if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.username||u.password)throw coded('invalid_health_url');return u;}
-export async function verifyConvergence(data,runtimeUrl,edgeUrl){
+export async function verifyConvergence(data,runtimeUrl,edgeUrl,{timeoutMs=30000}={}){
     loopback(runtimeUrl);loopback(edgeUrl);
-    for(let attempt=0;attempt<30;attempt++){
+    const deadline=Date.now()+timeoutMs;
+    while(Date.now()<deadline){
         try{
-            const get=async u=>{const r=await fetch(u,{signal:AbortSignal.timeout(700)});if(!r.ok)throw coded('health_failed');return r.json();};
+            const get=async u=>{const r=await fetch(u,{signal:AbortSignal.timeout(Math.max(1,Math.min(700,deadline-Date.now())))});if(!r.ok)throw coded('health_failed');return r.json();};
             const [runtime,edge]=await Promise.all([get(runtimeUrl),get(edgeUrl)]);
             const workers=Object.values(runtime.mainlandPolicy?.workers||{});
             if(workers.length===runtime.controlWorkers+runtime.executionWorkers&&workers.length>0&&runtime.mainlandPolicy.ready&&
                 workers.every(w=>w.alibabaAllowlist?.enabled&&w.alibabaAllowlist.available&&!w.alibabaAllowlist.lastError&&w.alibabaAllowlist.sha256===data.sha256)&&
                 edge.mainlandPolicy?.alibabaAllowlist?.sha256===data.sha256&&edge.mainlandPolicy.alibabaAllowlist.available&&!edge.mainlandPolicy.alibabaAllowlist.lastError)return true;
         }catch{}
-        await new Promise(r=>setTimeout(r,1000));
+        const remaining=deadline-Date.now();if(remaining>0)await new Promise(r=>setTimeout(r,Math.min(1000,remaining)));
     }
     return false;
 }

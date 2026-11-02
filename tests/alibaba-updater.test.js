@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { compileResponses, updateAllowlist, compareManifests, sourceQueryUrl } from '../scripts/ops/update-alibaba-allowlist.mjs';
+import http from 'node:http';
+import { compileResponses, updateAllowlist, compareManifests, sourceQueryUrl, verifyConvergence } from '../scripts/ops/update-alibaba-allowlist.mjs';
 
 const now=()=>new Date().toISOString();
 function responses(){const end=now();return [37963,45102,134963].map((asn,i)=>({status:'ok',data:{resource:String(asn),query_endtime:end,prefixes:[{prefix:`47.${80+i}.0.0/24`,timelines:[{starttime:'2026-01-01T00:00:00Z',endtime:end}]},{prefix:`2400:32${10+i}::/48`,timelines:[{starttime:'2026-01-01T00:00:00Z',endtime:end}]},{prefix:'8.8.8.0/24',timelines:[{starttime:'2026-01-01T00:00:00Z',endtime:'2026-01-02T00:00:00Z'}]}]}}));}
@@ -60,5 +61,11 @@ describe('Alibaba updater transaction',()=>{
     test('restore previous needs no download and validates convergence',async()=>{
         const old=compileResponses(responses(),['47.76.45.103']);await fs.writeFile(output+'.previous',JSON.stringify(old));await fs.writeFile(output,JSON.stringify(compileResponses(responses(),[])));
         const result=await updateAllowlist({output,apply:true,restorePrevious:true},{download:async()=>{throw Error('must not download');},verify:async()=>true});expect(result.applied).toBe(true);expect(JSON.parse(await fs.readFile(output,'utf8')).sha256).toBe(old.sha256);
+    });
+    test('checks all live worker and edge hashes against a bounded deadline',async()=>{
+        const data=compileResponses(responses(),[]);const policy={enabled:true,available:true,sha256:data.sha256};let edgeHash='wrong';
+        const server=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.url==='/edge'?{mainlandPolicy:{alibabaAllowlist:{...policy,sha256:edgeHash}}}:{controlWorkers:1,executionWorkers:1,mainlandPolicy:{ready:true,workers:{control:{alibabaAllowlist:policy},execution:{alibabaAllowlist:policy}}}}));});
+        await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
+        try{expect(await verifyConvergence(data,base+'/runtime',base+'/edge',{timeoutMs:50})).toBe(false);edgeHash=data.sha256;expect(await verifyConvergence(data,base+'/runtime',base+'/edge',{timeoutMs:500})).toBe(true);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
     });
 });
