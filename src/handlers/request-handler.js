@@ -289,7 +289,7 @@ export function createRequestHandler(config, providerPoolManager) {
                         requestStore.requestAudit.potluckKeyHash = hashKeyId(clientKey);
                         if (mainlandRequired(currentConfig)) {
                             const decision = evaluateMainlandPolicy(currentConfig, network.clientIp);
-                            requestStore.requestAudit.mainlandPolicy = { allowed:decision.allowed, code:decision.code, version:decision.version, sha256:decision.sha256 };
+                            requestStore.requestAudit.mainlandPolicy = { allowed:decision.allowed, code:decision.code, version:decision.version, sha256:decision.sha256, ...(decision.allowlistSha256?{allowlistSha256:decision.allowlistSha256,asn:decision.asn}: {}) };
                             if (!decision.allowed) {
                                 requestStore.requestAudit.terminal = { outcome:'geo_rejected', errorClass:decision.code };
                                 res.writeHead(decision.status, { 'content-type':'application/json', 'cache-control':'no-store' });

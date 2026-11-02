@@ -92,7 +92,7 @@ proxy_intercept_errors off;
     return {SITE: site, DIRECTIVES: directives, COMMON: common, DENIALS: denial_template, SAFE_LOG: log_template}
 
 
-def payload(old, image, image_config, country_dir, gateway, revision, epoch, edge=False):
+def payload(old, image, image_config, country_dir, gateway, revision, epoch, edge=False, alibaba=False):
     config = copy.deepcopy(old['Config'])
     host = copy.deepcopy(old['HostConfig'])
     env = dict(s.split('=', 1) for s in config['Env'])
@@ -101,6 +101,8 @@ def payload(old, image, image_config, country_dir, gateway, revision, epoch, edg
         env['NODE_VERSION'] = base_env['NODE_VERSION']
     env.update(MAINLAND_CLIENT_KEYS_ONLY_REQUIRED='true', MAINLAND_COUNTRY_FILE=COUNTRY,
                YYN_EXPECTED_REVISION=revision, RUNTIME_DEPLOYMENT_EPOCH=epoch)
+    if alibaba:
+        env.update(ALIBABA_ALLOWLIST_ENABLED='true', ALIBABA_ALLOWLIST_FILE='/app/security/alibaba-allowlist.json')
     if edge:
         env['EDGE_AUTH_TRUSTED_PROXY_IPS'] = gateway
         config['Cmd'] = ['node', 'src/edge-auth/server.js']
@@ -233,7 +235,7 @@ class Release:
         image_config = inspect(image)['Config']
         require(image_config['Labels']['yyn.base_commit'] == self.spec['revision'], 'image revision mismatch')
         value = payload(old, image, image_config, self.spec['countryDir'], self.spec['gateway'],
-                        self.spec['revision'], self.spec['epoch'], role == 'edge-auth')
+                        self.spec['revision'], self.spec['epoch'], role == 'edge-auth', self.spec.get('alibabaAllowlist', False))
         name = role + '-mainland-next'
         identifier = create(name, value)
         new = inspect(identifier)
@@ -341,6 +343,8 @@ class Release:
         config = json.loads(config_path.read_text())
         config.update(MAINLAND_CLIENT_KEYS_ONLY=True, REQUEST_AUDIT_NETWORK_METADATA_ENABLED=True,
                       MAINLAND_COUNTRY_FILE_PATH=COUNTRY)
+        if self.spec.get('alibabaAllowlist'):
+            config.update(ALIBABA_ALLOWLIST_ENABLED=True, ALIBABA_ALLOWLIST_FILE='/app/security/alibaba-allowlist.json')
         proxies = config.get('TRUSTED_PROXY_IPS', [])
         require(isinstance(proxies, list), 'unexpected trusted proxy format')
         config['TRUSTED_PROXY_IPS'] = list(dict.fromkeys([*proxies, self.spec['gateway']]))
@@ -386,6 +390,12 @@ class Release:
         # Worker status shape is reported verbatim in the private verification evidence.
         require(len(geo['workers']) == 4 and all(w.get('sha256') == self.spec['countrySha']
                 for w in geo['workers'].values()), 'worker policy mismatch')
+        if self.spec.get('alibabaAllowlist'):
+            policies = [edge, *geo['workers'].values()]
+            require(all(p.get('alibabaAllowlist', {}).get('enabled') and
+                        p['alibabaAllowlist'].get('available') and not p['alibabaAllowlist'].get('lastError') and
+                        p['alibabaAllowlist'].get('sha256') == self.spec['alibabaSha'] for p in policies),
+                    'Alibaba allowlist not converged')
         for role, identifier in self.state['newIds'].items():
             actual = inspect(role)
             require(actual['Id'] == identifier and actual['State']['Running'] and not actual['State']['OOMKilled']

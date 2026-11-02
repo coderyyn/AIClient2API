@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { Address4, Address6 } from 'ip-address';
 import { normalizeClientIp } from './client-network.js';
+import { AlibabaAllowlist } from './alibaba-allowlist.js';
+import { publicIp } from './public-ip.js';
 
 const blocked = new BlockList();
 for (const [ip, bits] of [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.168.0.0',16],['198.18.0.0',15],['224.0.0.0',4],['240.0.0.0',4]]) blocked.addSubnet(ip,bits,'ipv4');
@@ -60,10 +62,25 @@ export class MainlandCountryPolicy {
         return { allowed:false,status:403,code:'CLIENT_IP_NOT_MAINLAND',...status };
     }
 }
-const singleton=new MainlandCountryPolicy();let configured={};
+const singleton=new MainlandCountryPolicy();const alibaba=new AlibabaAllowlist();let configured={};
 export function configureMainlandPolicy(config) { configured=config;return getMainlandPolicyStatus(); }
 export function mainlandRequired(config=configured) { return process.env.MAINLAND_CLIENT_KEYS_ONLY_REQUIRED==='true' || config.MAINLAND_CLIENT_KEYS_ONLY===true; }
 function file(config=configured) { return process.env.MAINLAND_COUNTRY_FILE || config.MAINLAND_COUNTRY_FILE_PATH || 'configs/security/cn-ip-ranges.json'; }
-export function getMainlandPolicyStatus(config=configured) { return mainlandRequired(config) ? {enabled:true,...singleton.refresh(file(config))} : {enabled:false,available:true,sha256:null,version:null}; }
-export function evaluateMainlandPolicy(config,ip) { singleton.refresh(file(config));return singleton.evaluate(ip); }
+function alibabaEnabled(config){return process.env.ALIBABA_ALLOWLIST_ENABLED==='true'||config.ALIBABA_ALLOWLIST_ENABLED===true;}
+function alibabaFile(config){return process.env.ALIBABA_ALLOWLIST_FILE||config.ALIBABA_ALLOWLIST_FILE||'configs/security/alibaba-allowlist.json';}
+export function getMainlandPolicyStatus(config=configured) {
+    if(!mainlandRequired(config))return {enabled:false,available:true,sha256:null,version:null};
+    return {enabled:true,...singleton.refresh(file(config)),alibabaAllowlist:alibabaEnabled(config)?alibaba.refresh(alibabaFile(config)):{enabled:false,available:true,sha256:null}};
+}
+export function evaluateMainlandPolicy(config,ip) {
+    singleton.refresh(file(config));
+    if(!publicIp(ip))return {...singleton.status(),allowed:false,status:403,code:'CLIENT_IP_UNVERIFIABLE'};
+    let match=null;
+    if(alibabaEnabled(config)){alibaba.refresh(alibabaFile(config));match=alibaba.match(ip);if(match?.code==='EXPLICIT_IP_ALLOWLIST')return {...singleton.status(),...match,allowed:true,status:200};}
+    const decision=singleton.evaluate(ip);
+    if(decision.allowed)return decision;
+    if(match)return {...decision,...match,allowed:true,status:200};
+    if(alibabaEnabled(config)&&!alibaba.status().available)return {...decision,allowed:false,status:503,code:'ALIBABA_ALLOWLIST_UNAVAILABLE'};
+    return decision;
+}
 const poll=setInterval(()=>{if(mainlandRequired())getMainlandPolicyStatus();},1000);poll.unref?.();

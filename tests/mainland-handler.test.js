@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { compileRanges } from '../scripts/ops/update-mainland-ranges.mjs';
+import { manifestHash } from '../src/utils/alibaba-allowlist.js';
 import { getClientIp } from '../src/utils/common.js';
 import { getPluginManager } from '../src/core/plugin-manager.js';
 jest.mock('../src/ui-modules/auth.js', () => ({ checkAuth: jest.fn(async () => false) }));
@@ -48,10 +49,10 @@ describe('mainland rejection before provider and quota dispatch',()=>{
         handleAPIRequests.mockImplementation(async(_m,_p,_q,res)=>{res.writeHead(200);res.end();return true;});
     });
     afterEach(()=>fs.rmSync(dir,{recursive:true}));
-    async function request(clientIp,missing=false,url='/v1/responses',forcedStatus=null,headers=null){
+    async function request(clientIp,missing=false,url='/v1/responses',forcedStatus=null,headers=null,extraConfig={}){
         getClientIp.mockReturnValue({clientIp,peerIp:'172.21.0.1',clientIpSource:'trusted-x-real-ip',...(forcedStatus?{edgeDeniedStatus:forcedStatus}:{})});
         const req=new EventEmitter();Object.assign(req,{method:url.includes('potluckuser')?'GET':'POST',url,headers:{host:'localhost',...(headers || {authorization:'Bearer maki_synthetic'})},socket:{remoteAddress:'127.0.0.1'}});
-        const res=new Response();await createRequestHandler({MODEL_PROVIDER:'openai-codex-oauth',UI_ENABLED:true,MAINLAND_CLIENT_KEYS_ONLY:true,MAINLAND_COUNTRY_FILE_PATH:missing?file+'.missing':file,REQUEST_AUDIT_NETWORK_METADATA_ENABLED:true},null)(req,res);
+        const res=new Response();await createRequestHandler({MODEL_PROVIDER:'openai-codex-oauth',UI_ENABLED:true,MAINLAND_CLIENT_KEYS_ONLY:true,MAINLAND_COUNTRY_FILE_PATH:missing?file+'.missing':file,REQUEST_AUDIT_NETWORK_METADATA_ENABLED:true,...extraConfig},null)(req,res);
         await new Promise(r=>setImmediate(r));return res;
     }
     test.each(['8.8.8.8','127.0.0.1','invalid'])('rejects %s without entering plugin authentication/quota or upstream',async ip=>{
@@ -67,6 +68,12 @@ describe('mainland rejection before provider and quota dispatch',()=>{
     test('CN request retains normal authentication and dispatch',async()=>{
         expect((await request('114.114.114.114')).statusCode).toBe(200);expect(plugin.executeAuth).toHaveBeenCalledTimes(1);expect(handleAPIRequests).toHaveBeenCalledTimes(1);
         expect(plugin.executeHook.mock.calls.find(x=>x[0]==='onRequestCompleted')[1]).toMatchObject({clientIp:'114.114.114.114',mainlandPolicy:{allowed:true,code:'MAINLAND_CN'}});
+    });
+    test.each([['47.80.0.1','ALIBABA_CLOUD_ALLOWLIST',37963],['47.76.45.103','EXPLICIT_IP_ALLOWLIST',null]])('audits %s cloud/explicit reason and preserves key authentication',async(ip,code,asn)=>{
+        const d={schemaVersion:1,kind:'alibaba-cloud',asns:[37963,45102,134963],generatedAt:new Date().toISOString(),sources:[37963,45102,134963].map((a,i)=>({asn:a,source:`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS${a}`,queryEndTime:new Date().toISOString(),prefixes:[`47.${80+i}.0.0/24`]})),explicitIps:['47.76.45.103']};d.sha256=manifestHash(d);const allow=path.join(dir,'alibaba.json');fs.writeFileSync(allow,JSON.stringify(d));
+        const extra={ALIBABA_ALLOWLIST_ENABLED:true,ALIBABA_ALLOWLIST_FILE:allow};
+        expect((await request(ip,false,'/v1/responses',null,null,extra)).statusCode).toBe(200);expect(plugin.executeAuth).toHaveBeenCalledTimes(1);
+        expect(plugin.executeHook.mock.calls.find(x=>x[0]==='onRequestCompleted')[1].mainlandPolicy).toMatchObject({allowed:true,code,asn,allowlistSha256:d.sha256});
     });
     test.each([401,403,429,503])('trusted edge denial %s is audited without quota or upstream',async status=>{
         expect((await request('114.114.114.114',false,'/v1/responses',status)).statusCode).toBe(status);expect(plugin.executeAuth).not.toHaveBeenCalled();expect(handleAPIRequests).not.toHaveBeenCalled();expect(plugin.executeHook.mock.calls.filter(x=>x[0]==='onRequestCompleted')).toHaveLength(1);

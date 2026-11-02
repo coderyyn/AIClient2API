@@ -1,5 +1,8 @@
 # Mainland client-key policy
 
+Optional, independently updated Alibaba Cloud exceptions are documented in
+[Alibaba Cloud allowlist](alibaba-cloud-allowlist.md); they never modify CN data.
+
 Client `maki_` keys on model and own-usage routes are admitted only when the verified
 public source IP belongs to the compiled CN ranges. Key values are not rotated.
 Management tokens, management IP allowlists, static resources and minimal health

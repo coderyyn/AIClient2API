@@ -229,6 +229,8 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         TRUSTED_PROXY_IPS: ['127.0.0.1', '::1'], // 允许提供 x-forwarded-for 的反向代理 IP 列表
         MAINLAND_CLIENT_KEYS_ONLY: false,
         MAINLAND_COUNTRY_FILE_PATH: 'configs/security/cn-ip-ranges.json',
+        ALIBABA_ALLOWLIST_ENABLED: false,
+        ALIBABA_ALLOWLIST_FILE: 'configs/security/alibaba-allowlist.json',
         REQUEST_AUDIT_NETWORK_METADATA_ENABLED: false, // 是否将请求网络元数据写入审计事件
         GPT_REQUEST_AUDIT_DB_PATH: 'configs/request-audit/gpt-requests.sqlite',
         GPT_REQUEST_AUDIT_RETENTION_DAYS: 7,

@@ -890,6 +890,8 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
         const enabledPolicies = Object.values(countryWorkers).filter(x => x.enabled);
         const requiredCountry = env.MAINLAND_CLIENT_KEYS_ONLY_REQUIRED === 'true' || enabledPolicies.length > 0;
         const countryReady = !requiredCountry || (enabledPolicies.length === topology.executionWorkers + 1 && enabledPolicies.every(x => x.available && x.sha256 === enabledPolicies[0].sha256));
+        const cloudPolicies=enabledPolicies.map(p=>p.alibabaAllowlist).filter(p=>p?.enabled);
+        const alibabaAllowlistReady=cloudPolicies.length===0||(cloudPolicies.length===topology.executionWorkers+1&&cloudPolicies.every(p=>p.available&&!p.lastError&&p.sha256===cloudPolicies[0].sha256));
         const topologyReady = ready.size === topology.executionWorkers + 1 && countryReady;
         return {
             status: resolveRuntimeHealthStatus({ topologyReady, metrics }),
@@ -899,7 +901,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             readyWorkers: ready.size,
             coordination: 'redis',
             leaseRecovery: 'ready',
-            mainlandPolicy: { required:requiredCountry, ready:countryReady, workers:countryWorkers },
+            mainlandPolicy: { required:requiredCountry, ready:countryReady, alibabaAllowlistReady, workers:countryWorkers },
             persistenceBacklog: getPersistenceBacklog(metrics).total,
             persistenceBacklogByLayer: getPersistenceBacklog(metrics),
             providerConfig: providerConfigAcks.snapshot([...workers.values()].filter(worker => worker.role === 'execution').map(worker => worker.id)),

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Alibaba Cloud allowlist refresh (Asia/Shanghai)
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 Asia/Shanghai
+RandomizedDelaySec=10m
+Persistent=true
+Unit=alibaba-allowlist-update.service
+
+[Install]
+WantedBy=timers.target

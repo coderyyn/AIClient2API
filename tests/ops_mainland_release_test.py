@@ -48,6 +48,16 @@ class MainlandReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.render_nginx(result[release.SITE], '', '', '', '')
 
+    def test_alibaba_is_explicitly_opt_in_and_uses_shared_readonly_mount(self):
+        old = self.old()
+        image = {'Env': [], 'Healthcheck': {'Test': ['CMD', 'node']}}
+        base = release.payload(old, 'new', image, '/root/country', '172.21.0.1', 'revision', 'epoch')
+        self.assertNotIn('ALIBABA_ALLOWLIST_ENABLED=true', base['Env'])
+        enabled = release.payload(old, 'new', image, '/root/country', '172.21.0.1', 'revision', 'epoch', alibaba=True)
+        self.assertIn('ALIBABA_ALLOWLIST_ENABLED=true', enabled['Env'])
+        self.assertIn('ALIBABA_ALLOWLIST_FILE=/app/security/alibaba-allowlist.json', enabled['Env'])
+        self.assertIn('/root/country:/app/security:ro', enabled['HostConfig']['Binds'])
+
     def gate_release(self, directory):
         target = Path(directory) / 'site.conf'
         target.write_text('maintenance')
