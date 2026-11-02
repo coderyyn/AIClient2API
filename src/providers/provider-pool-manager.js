@@ -2104,6 +2104,7 @@ export class ProviderPoolManager {
             const coordinatedCandidates = ordered.map((provider, index) => ({
                 providerType: provider.type,
                 uuid: provider.uuid || provider.config?.uuid,
+                rpmLimit: provider.config?.rpmLimit ?? 0,
                 concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
                 queueLimit: parseInt(provider.config?.queueLimit || 0),
                 preferred: hasStickyAffinity && index === 0,
@@ -2590,7 +2591,8 @@ export class ProviderPoolManager {
             const candidates = ordered.map((provider, index) => ({
                     providerType,
                     uuid: provider.uuid || provider.config?.uuid,
-                    concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
+                    rpmLimit: provider.config?.rpmLimit ?? 0,
+                concurrencyLimit: parseInt(provider.config?.concurrencyLimit || 0),
                     queueLimit: parseInt(provider.config?.queueLimit || 0),
                     preferred: hasStickyAffinity && index === 0,
                     probeRequired: false
@@ -6204,6 +6206,7 @@ export class ProviderPoolManager {
                     // Perform actual health check based on provider type
                     const healthResult = await this._checkProviderHealth(providerType, providerConfig);
                     
+                    if (healthResult?.skipped) continue;
                     if (healthResult === null) {
                         this._log('debug', `Health check for ${this._getDisplayName(providerConfig)} (${providerType}) skipped: Check not implemented.`);
                         this.resetProviderCounters(providerType, providerConfig);
@@ -6317,6 +6320,7 @@ export class ProviderPoolManager {
                 // Perform health check (health check is based on providerTypes configuration, not per-provider checkHealth flag)
                 const result = await this._checkProviderHealth(providerType, provider.config);
                 const checkDuration = Date.now() - providerCheckStart;
+                if (result?.skipped) { skippedCount++; continue; }
                 
                 if (!result.success) {
                     // Provider is unhealthy
@@ -6546,6 +6550,10 @@ export class ProviderPoolManager {
                 return { success: true, modelName, errorMessage: null };
             } catch (error) {
                 if (timeoutId) clearTimeout(timeoutId);
+                if (error?.origin === 'local_provider_rpm') return {
+                    success: false, skipped: true, modelName, errorCode: error.code,
+                    errorMessage: error.message, retryAfterMs: error.retryAfterMs
+                };
                 lastError = error;
                 if (error?.code === 'HEALTH_CHECK_TIMEOUT') break;
             }

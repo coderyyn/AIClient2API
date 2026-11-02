@@ -1,4 +1,6 @@
+import requestContext from '../utils/context.js';
 import { createHash, randomUUID } from 'crypto';
+import { providerRpmState, createProviderRpmError } from './provider-rpm.js';
 import { providerLeaseOwner } from './provider-lease-scope.js';
 
 export class CoordinationUnavailableError extends Error {
@@ -422,6 +424,11 @@ return 1
 `;
 
 const RECOVER_WORKER_LEASES_SCRIPT = `
+-- Warm the independent RPM recovery guard at runtime startup. Never reset an
+-- existing guard/window when workers restart or concurrency leases recover.
+local rpm_time = redis.call('TIME')
+local rpm_now = tonumber(rpm_time[1]) * 1000 + math.floor(tonumber(rpm_time[2]) / 1000)
+redis.call('SET', KEYS[1] .. ':provider-rpm:epoch', rpm_now + 60000, 'NX')
 local worker_key = KEYS[1] .. ':recovery:workers'
 local boot_key = KEYS[1] .. ':recovery:boot'
 local boot_id = redis.call('GET', boot_key)
@@ -644,6 +651,7 @@ function normalizeCandidate(candidate, priority) {
         providerType,
         uuid,
         key: `${providerType}:${uuid}`,
+        rpmLimit: candidate.rpmLimit ?? 0,
         concurrencyLimit: Number.isFinite(concurrencyLimit) && concurrencyLimit > 0 ? concurrencyLimit : 0,
         preferred: candidate.preferred === true,
         probeRequired: candidate.probeRequired === true,
@@ -760,7 +768,22 @@ export class RedisLeaseCoordinator {
         await this._checkRedisMemoryPressure();
         if (!this.bootId || !this.ready || this.recovering) await this.synchronize();
         if (!this.ready || this.recovering) throw new CoordinationUnavailableError('Runtime coordination is recovering');
-        const normalized = (candidates || []).map(normalizeCandidate).filter(item => item.providerType && item.uuid);
+        let normalized = (candidates || []).map(normalizeCandidate).filter(item => item.providerType && item.uuid);
+        const rpmStates = await Promise.all(normalized.map(candidate =>
+            providerRpmState(this, candidate.providerType, candidate.uuid, candidate.rpmLimit)));
+        const blocked = rpmStates.filter(state => !state.allowed);
+        const audit = requestContext.get('requestAudit');
+        if (audit) rpmStates.forEach((state, index) => {
+            if (state.allowed) return;
+            audit.providerRpmRejections ||= [];
+            audit.providerRpmRejections.push({ providerType: normalized[index].providerType,
+                providerUuid: normalized[index].uuid, code: 'PROVIDER_RPM_LIMIT_EXCEEDED',
+                phase: 'selection', limit: state.limit, used: state.used, retryAfterMs: state.retryAfterMs });
+        });
+        normalized = normalized.filter((candidate, index) => rpmStates[index].allowed);
+        if (!normalized.length && blocked.length) {
+            throw createProviderRpmError(blocked.sort((a, b) => a.retryAfterMs - b.retryAfterMs)[0]);
+        }
         if (requestedModel) {
             for (const candidate of normalized) {
                 candidate.cooldownHash = hashAffinityKey(`${candidate.providerType}:${candidate.uuid}:${requestedModel}`);

@@ -1,3 +1,4 @@
+import { providerRpmState, CODEX_RPM_PROVIDER } from '../runtime/provider-rpm.js';
 import { assertCodexProxyBinding } from '../utils/proxy-pool-store.js';
 import { withCredentialLifecycleLock, buildArchiveUpdate } from '../utils/provider-archive.js';
 import { getCredentialArchiveBindings } from '../plugins/api-potluck/key-manager.js';
@@ -180,6 +181,9 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
             checkModelName
         });
 
+        if (healthResult?.skipped) return { uuid: providerConfig.uuid, success: false,
+            skipped: true, healthy: providerConfig.isHealthy, code: healthResult.errorCode,
+            message: healthResult.errorMessage, retryAfterMs: healthResult.retryAfterMs };
         if (healthResult.success) {
             if (!healthResult.reused) {
                 providerPoolManager.markProviderHealthCheckSucceeded(providerType, providerConfig, healthResult.modelName);
@@ -239,6 +243,16 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
 /**
  * 获取所有提供商的状态（包括支持的类型和号池组）
  */
+async function getProviderRpmStatus(manager, type, provider) {
+    if (type !== CODEX_RPM_PROVIDER) return {};
+    try {
+        return { rpm: await providerRpmState(manager?.coordination, type, provider.uuid, provider.rpmLimit ?? 0) };
+    } catch (error) {
+        return { rpm: { limit: provider.rpmLimit ?? 0, used: null, available: false,
+            error: error.code || 'COORDINATION_UNAVAILABLE', nextAvailableAt: null } };
+    }
+}
+
 export async function handleGetProviders(req, res, currentConfig, providerPoolManager) {
     // 1. 获取支持的基础提供商类型
     const registeredProviders = getRegisteredProviders();
@@ -248,12 +262,13 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
     const providerStatus = {};
     if (providerPoolManager) {
         for (const [type, providers] of Object.entries(providerPoolManager.providerStatus)) {
-            providerStatus[type] = providers.map(p => ({
+            providerStatus[type] = await Promise.all(providers.map(async p => ({
                 ...p.config,
+                ...await getProviderRpmStatus(providerPoolManager, type, p.config),
                 ...getProviderUiAvailability(p.config),
                 activeRequests: p.state?.activeCount || 0,
                 waitingRequests: p.state?.waitingCount || 0
-            }));
+            })));
         }
     }
     
@@ -320,10 +335,11 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
             ? (globalThis.providerConfigSyncStatus?.currentRevision >= providerPoolManager.providerConfigRevision
                 && globalThis.providerConfigSyncStatus?.pendingWorkerCount === 0 ? 'applied' : 'pending')
             : 'applied',
-        providers: providers.map(p => ({
+        providers: await Promise.all(providers.map(async p => ({
             ...sanitizeProviderData(p, true),
+            ...await getProviderRpmStatus(providerPoolManager, providerType, p),
             ...getProviderUiAvailability(p)
-        })), // 详情页也进行打码，确保即便点击显示也是脱敏数据
+        }))), // 详情页也进行打码，确保即便点击显示也是脱敏数据
         totalCount: providers.filter(p => !p.isArchived).length,
         archivedCount: providers.filter(p => p.isArchived).length,
         healthyCount: providers.filter(p => !p.isArchived && p.isHealthy && !p.isDisabled).length
@@ -1218,6 +1234,11 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
 
              try {
                 const healthResult = await providerPoolManager._checkProviderHealth(providerType, providerConfig);
+                if (healthResult?.skipped) {
+                    results.push({ uuid: providerConfig.uuid, success: false, skipped: true,
+                        code: healthResult.errorCode, message: healthResult.errorMessage });
+                    continue;
+                }
                 
                 if (healthResult.success) {
                     if (!healthResult.reused) {

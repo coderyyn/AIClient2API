@@ -2,6 +2,7 @@ import { assertVerifiedCodexProxy, CODEX_PROXY_SNAPSHOT } from '../../utils/prox
 import { rewriteProxyTimeContext } from './codex-proxy-time-context.js';
 import { atomicWriteFile } from '../../utils/file-lock.js';
 import axios from 'axios';
+import { providerRpmState, createProviderRpmError } from '../../runtime/provider-rpm.js';
 import logger from '../../utils/logger.js';
 import crypto from 'crypto';
 import {promises as fs} from 'fs';
@@ -390,6 +391,22 @@ export class CodexApiService {
         this.timeContextProxyStates = new WeakMap();
     }
 
+    async consumeProviderRpm() {
+        const manager = getProviderPoolManager();
+        const type = this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API;
+        // Read live config even for an in-flight retry using an older adapter.
+        const live = manager?.providerStatus?.[type]?.find(p => p.config?.uuid === this.config.uuid)?.config;
+        const state = await providerRpmState(manager?.coordination, type, this.config.uuid,
+            live?.rpmLimit ?? this.config.rpmLimit ?? 0, true);
+        if (!state.allowed) {
+            requestContext.get('runtimeRequest')?.setMetadata?.({
+                providerRpmLimit: state.limit, providerRpmUsed: state.used,
+                providerRpmRetryAfterMs: state.retryAfterMs, providerRpmReason: 'PROVIDER_RPM_LIMIT_EXCEEDED'
+            });
+            throw createProviderRpmError(state);
+        }
+    }
+
     _applySidecar(axiosConfig) {
         const snapshot = this.timeContextProxyStates.get(axiosConfig.data);
         const config = snapshot ? { ...this.config, [CODEX_PROXY_SNAPSHOT]: snapshot } : this.config;
@@ -599,6 +616,7 @@ export class CodexApiService {
         let rateLimitRetryCount = 0;
         let rejectedFieldRetryCount = 0;
         while (true) {
+            await this.consumeProviderRpm();
             const attempt = beginRequestAttempt(requestBody, {
                 providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
                 providerUuid: this.config.uuid || null,
@@ -763,6 +781,7 @@ export class CodexApiService {
         let rateLimitRetryCount = 0;
         let rejectedFieldRetryCount = 0;
         while (true) {
+            await this.consumeProviderRpm();
             const attempt = beginRequestAttempt(requestBody, {
                 providerType: this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API,
                 providerUuid: this.config.uuid || null,

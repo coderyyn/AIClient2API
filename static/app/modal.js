@@ -47,6 +47,7 @@ function usesManagedModelList(providerType = '') {
 
 function getProviderBaseFields(providerType) {
     const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
+    if (providerType === 'openai-codex-oauth') baseFields.push('rpmLimit');
     // API Key 型供应商：记录关联邮箱与每月额度重置日，号池按重置日优先使用最近重置的 key
     if (API_KEY_QUOTA_PROVIDERS.has(providerType)) {
         baseFields.push('accountEmail', 'quotaResetDay');
@@ -419,6 +420,8 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
         let value = input.value;
         if (key === 'concurrencyLimit' || key === 'queueLimit') {
             value = parseInt(value || '0', 10);
+        } else if (key === 'rpmLimit') {
+            value = value === '' ? 0 : Number(value);
         } else if (key === 'providerWeight') {
             value = Number(value || '1');
         } else if (key === 'quotaResetDay') {
@@ -1568,7 +1571,7 @@ function renderProviderConfig(provider) {
     const baseFields = getProviderBaseFields(currentProviderType);
     
     baseFields.forEach(fieldKey => {
-        const displayLabel = getFieldLabel(fieldKey);
+        const displayLabel = fieldKey === 'rpmLimit' ? '每分钟上游请求上限' : getFieldLabel(fieldKey);
         const value = provider[fieldKey];
         const displayValue = (value !== undefined && value !== null)
             ? (fieldKey === 'accountEmail' ? escapeHtml(String(value)) : value)
@@ -1576,8 +1579,8 @@ function renderProviderConfig(provider) {
         
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
-        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : (fieldKey === 'accountEmail' ? 'name@example.com' : (fieldKey === 'quotaResetDay' ? '1-31，如 14 表示每月14号重置' : '')))))));
-        const inputType = fieldDef.type || ((fieldKey === 'providerWeight' || fieldKey === 'quotaResetDay') ? 'number' : 'text');
+        const placeholder = (fieldKey === 'rpmLimit' ? '包含重试；0 表示不限制；按滚动 60 秒统计' : '') || fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : (fieldKey === 'providerWeight' ? '默认1，越大分配越多' : (fieldKey === 'accountEmail' ? 'name@example.com' : (fieldKey === 'quotaResetDay' ? '1-31，如 14 表示每月14号重置' : '')))))));
+        const inputType = fieldDef.type || ((fieldKey === 'rpmLimit' || fieldKey === 'providerWeight' || fieldKey === 'quotaResetDay') ? 'number' : 'text');
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
@@ -1618,7 +1621,9 @@ function renderProviderConfig(provider) {
                            readonly
                            data-config-key="${fieldKey}"
                            data-config-value="${(value !== undefined && value !== null) ? value : ''}"
+                           ${fieldKey === 'rpmLimit' ? 'min="0" step="1"' : ''}
                            placeholder="${placeholder}">
+                    ${fieldKey === 'rpmLimit' ? '<small>包含重试；0 表示不限制；按滚动 60 秒统计</small>' : ''}
                 </div>
             `;
         }
@@ -1883,6 +1888,7 @@ function getFieldOrder(provider) {
 
     const orderedFields = getProviderBaseFields(providerType);
     const hiddenProviderConfigFields = [
+        'rpm',
         'codexMax5hTokens',
         'codexMaxWeeklyTokens',
         'codexMax5hPercent',
@@ -2255,6 +2261,11 @@ function showAddProviderForm(providerType) {
                 <label><span data-i18n="modal.provider.queueLimit">队列限制</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
                 <input type="number" id="newQueueLimit" value="${providerType === 'gemini-antigravity' ? '15' : '0'}" placeholder="0表示不排队">
             </div>
+            ${providerType === 'openai-codex-oauth' ? `<div class="config-item">
+                <label>每分钟上游请求上限</label>
+                <input type="number" min="0" step="1" id="newRpmLimit" value="0">
+                <small>包含重试；0 表示不限制；按滚动 60 秒统计</small>
+            </div>` : ''}
             <div class="form-group">
                 <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
                 <input type="number" id="newProviderWeight" min="0.01" step="0.01" placeholder="默认1，越大分配越多">
@@ -2500,11 +2511,13 @@ async function addProvider(providerType) {
     const checkHealth = document.getElementById('newCheckHealth')?.value === 'true';
     const concurrencyLimit = parseInt(document.getElementById('newConcurrencyLimit')?.value || '0');
     const queueLimit = parseInt(document.getElementById('newQueueLimit')?.value || '0');
+    const rpmLimit = Number(document.getElementById('newRpmLimit')?.value || '0');
     const providerConfig = {
         customName: customName || '', // 允许为空
         checkModelName: checkModelName || '', // 允许为空
         checkHealth,
         concurrencyLimit,
+        ...(providerType === 'openai-codex-oauth' ? { rpmLimit } : {}),
         queueLimit
     };
     providerConfig.providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1');

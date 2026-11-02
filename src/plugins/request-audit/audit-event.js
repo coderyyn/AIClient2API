@@ -441,6 +441,10 @@ export function buildRequestAuditEvent(context = {}) {
             priceMultiplier: Number.isFinite(Number(estimatedCost.priceMultiplier)) ? Number(estimatedCost.priceMultiplier) : 1
         },
         attempts,
+        ...(context.providerRpmRejections?.length ? { providerRpmRejections: context.providerRpmRejections.map(item => ({
+            providerType: item.providerType, providerUuidHash: hashSecret(item.providerUuid),
+            code: item.code, phase: item.phase || 'send', limit: item.limit, used: item.used, retryAfterMs: item.retryAfterMs
+        })) } : {}),
         status: {
             ...derivedStatus,
             retryCount: toNumber(context.retryCount),

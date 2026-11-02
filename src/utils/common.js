@@ -42,6 +42,8 @@ import {
     classifyProviderInitializationError
 } from './gemini-diagnostics.js';
 import { getCachedModelList } from '../services/model-list-cache.js';
+import { RPM_ERROR } from '../runtime/provider-rpm.js';
+import { releaseProviderLease } from '../runtime/provider-lease-scope.js';
 import { hasCodexRetryBudget } from '../providers/openai/codex-retry-policy.js';
 import { UpstreamErrorLogSampler } from './upstream-error-sampler.js';
 import { isTransientProviderJitterError } from './provider-error-classification.js';
@@ -641,6 +643,8 @@ function getRetryAuditKind(error) {
 }
 
 function getClientFacingErrorMessage(error, fallbackMessage) {
+    if (error?.code === RPM_ERROR) return '本地账号请求频率达到上限，请按 Retry-After 重试';
+    if (error?.origin === 'local_provider_rpm') return '账号请求频率协调暂不可用，请稍后重试';
     if (error?.code === 'MODEL_NOT_SUPPORTED') {
         return fallbackMessage;
     }
@@ -1261,6 +1265,50 @@ function requestAttemptFailureFields(error) {
     };
 }
 
+async function handleLocalProviderRpmFailure(error, args) {
+    const { res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
+        PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
+        accountIdentity, accountEmail, stream } = args;
+    if (providerPoolManager?.coordination) await releaseProviderLease(toProvider, pooluuid);
+    const excluded = [...new Set([...(retryContext?.rpmExcludedUuids || []), pooluuid].filter(Boolean))];
+    requestContext.set('providerRpmExcludedUuids', excluded);
+    const audit = requestContext.get('requestAudit');
+    if (audit) {
+        audit.providerRpmRejections ||= [];
+        audit.providerRpmRejections.push({ providerType: toProvider, providerUuid: pooluuid,
+            code: error.code, limit: error.details?.rpmLimit, used: error.details?.used,
+            retryAfterMs: error.retryAfterMs });
+    }
+    if (error.code === RPM_ERROR && retryContext?.CONFIG && providerPoolManager) {
+        try {
+            const { getApiServiceWithFallback } = await import('../services/service-manager.js');
+            const result = await getApiServiceWithFallback(retryContext.CONFIG, model, {
+                acquireSlot: true, disableProviderFallback: true,
+                abortSignal: retryContext.abortSignal,
+                excludeProviderUuids: [...new Set([...(retryContext.failedCredentialUuids || []), ...excluded])],
+                allowExcludedProviderFallback: false
+            });
+            if (result?.service && !excluded.includes(result.uuid)) {
+                const handler = stream ? handleStreamRequest : handleUnaryRequest;
+                return await handler(res, result.service, result.actualModel || model, requestBody,
+                    fromProvider, result.actualProviderType, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME,
+                    providerPoolManager, result.uuid, result.serviceConfig?.customName || null,
+                    { ...retryContext, rpmExcludedUuids: excluded },
+                    result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || null,
+                    result.serviceConfig?.codexEmail || null);
+            }
+        } catch (selectionError) {
+            // Preserve local RPM semantics when the remaining route has no capacity.
+            if (selectionError.code === 'COORDINATION_UNAVAILABLE') error = selectionError;
+            else if (selectionError.code === RPM_ERROR && selectionError.retryAfterMs < error.retryAfterMs) error = selectionError;
+        }
+    }
+    recordTerminalRequestFailure(error);
+    const status = getNumericHttpStatus(error) ?? 503;
+    await handleUnifiedResponse(res, JSON.stringify(createErrorResponse(error, fromProvider)),
+        false, status, getErrorResponseHeaders(error, status));
+}
+
 function recordTerminalRequestFailure(error) {
     const audit = requestContext.get('requestAudit');
     if (!audit || typeof audit !== 'object') return null;
@@ -1268,9 +1316,9 @@ function recordTerminalRequestFailure(error) {
         || buildSafeUpstreamDiagnostic(error, { payload: error?.response?.data });
     const upstream = Boolean(error?.response || String(error?.origin || '').startsWith('upstream_'));
     const status = Number(diagnostic?.status || getErrorStatusCode(error) || 0) || null;
-    const errorClass = diagnostic?.type || diagnostic?.code || (status ? `${upstream ? 'upstream' : 'stream'}_http_${status}` : 'stream_error');
+    const errorClass = (error?.origin === 'local_provider_rpm' ? error.code : null) || diagnostic?.type || diagnostic?.code || (status ? `${upstream ? 'upstream' : 'stream'}_http_${status}` : 'stream_error');
     audit.terminal = {
-        outcome: upstream ? 'upstream_error' : 'stream_error',
+        outcome: error?.origin === 'local_provider_rpm' ? 'local_rate_limit' : (upstream ? 'upstream_error' : 'stream_error'),
         errorClass,
         failure: {
             source: upstream ? 'upstream' : 'internal',
@@ -1358,6 +1406,7 @@ export function applyProviderRateLimitCooldown({
     requestedModel,
     loggerPrefix = '[Provider Pool]'
 }) {
+    if (error?.origin === 'local_provider_rpm') return false;
     // Antigravity may report model-wide capacity exhaustion as HTTP 503. Normalize
     // this one explicit upstream condition before the generic 429 handling below;
     // unrelated 503 errors must retain their normal server-error semantics.
@@ -2482,6 +2531,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             return;
         }
         
+        if (error.origin === 'local_provider_rpm') {
+            return await handleLocalProviderRpmFailure(error, {
+                res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
+                PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
+                accountIdentity, accountEmail, stream: true
+            });
+        }
+
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = getErrorStatusCode(error);
         
@@ -3020,6 +3077,14 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
         }
         
+        if (error.origin === 'local_provider_rpm') {
+            return await handleLocalProviderRpmFailure(error, {
+                res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
+                PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
+                accountIdentity, accountEmail, stream: false
+            });
+        }
+
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = getErrorStatusCode(error);
         
@@ -4091,7 +4156,7 @@ export function handleError(res, error, provider = null, fromProvider = null, re
     const errorPayload = {
         error: {
             message: errorMessage,
-            code: error.code === 'PROVIDER_CONCURRENCY_EXHAUSTED' ? error.code : statusCode,
+            code: ['PROVIDER_CONCURRENCY_EXHAUSTED', RPM_ERROR, 'COORDINATION_UNAVAILABLE'].includes(error.code) ? error.code : statusCode,
             suggestions: suggestions,
             details: error.response?.data
         }
@@ -4438,7 +4503,7 @@ export function createErrorResponse(error, fromProvider) {
                     message: errorMessage,
                     type: getErrorType(statusCode),
                     // Preserve normalized upstream failure codes.
-                    code: error.code === 'PROVIDER_CONCURRENCY_EXHAUSTED'
+                    code: ['PROVIDER_CONCURRENCY_EXHAUSTED', RPM_ERROR, 'COORDINATION_UNAVAILABLE'].includes(error.code)
                         ? error.code
                         : error.responseFailureCode || getErrorType(statusCode),
                     ...quotaMetadata
@@ -4451,7 +4516,7 @@ export function createErrorResponse(error, fromProvider) {
                 error: {
                     type: getErrorType(statusCode),
                     message: errorMessage,
-                    code: error.code === 'PROVIDER_CONCURRENCY_EXHAUSTED'
+                    code: ['PROVIDER_CONCURRENCY_EXHAUSTED', RPM_ERROR, 'COORDINATION_UNAVAILABLE'].includes(error.code)
                         ? error.code
                         : error.responseFailureCode || getErrorType(statusCode),
                     ...quotaMetadata
@@ -4486,7 +4551,7 @@ export function createErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: getErrorType(statusCode),
+                    code: error.origin === 'local_provider_rpm' ? error.code : getErrorType(statusCode),
                     ...quotaMetadata
                 }
             };

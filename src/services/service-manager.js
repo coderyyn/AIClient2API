@@ -42,7 +42,7 @@ const potluckKeyConcurrencyLimiter = new PotluckKeyConcurrencyLimiter({
 });
 
 function isCodexModelFallbackEligibleError(error) {
-    if (!error) return false;
+    if (!error || error.origin === 'local_provider_rpm') return false;
     if (error.code === 'POTLUCK_KEY_CONCURRENCY_LIMIT') return false;
     if (error.status === 401 || error.status === 403 || error.status >= 500 && error.status !== 503) return false;
     return error.status === 429
@@ -480,6 +480,7 @@ async function selectCodexKeyRoutedProvider(config, providerType, requestedModel
             });
             return { handled: true, selectedResult, availabilityError: null };
         } catch (error) {
+            if (error?.origin === 'local_provider_rpm') throw error;
             if (error?.code === 'FIXED_CREDENTIAL_UNAVAILABLE') throw error;
             if (error?.code === 'MODEL_RATE_LIMITED' || error?.code === 'PROVIDER_TEMPORARILY_UNAVAILABLE') {
                 throw createProviderCooldownError(error.nextRecoveryTime || error.retryAfter || null, route);
@@ -1518,6 +1519,11 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
 }
 
 async function getApiServiceWithFallbackInternal(config, requestedModel = null, options = {}) {
+    const rpmExcluded = requestContext.get('providerRpmExcludedUuids') || [];
+    if (rpmExcluded.length) options = { ...options,
+        excludeProviderUuids: [...new Set([...(options.excludeProviderUuids || []), ...rpmExcluded])],
+        allowExcludedProviderFallback: false };
+
     // 1. 鍓嶇疆璺敱瑙ｆ瀽
     const { effectiveProvider, actualModelName, entryModelReason, requestedEntryModel } = await _resolveEffectiveRouting(config, requestedModel, options);
     config.MODEL_PROVIDER = effectiveProvider;

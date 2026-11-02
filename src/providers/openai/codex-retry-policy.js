@@ -13,7 +13,8 @@ function parseRetryAfterMs(error, now = Date.now()) {
 }
 
 export function shouldRetryCodex429(error, { attempts = 0, maxAttempts = 1 } = {}) {
-    return Number(error?.response?.status || error?.status || 0) === 429
+    return error?.origin !== 'local_provider_rpm'
+        && Number(error?.response?.status || error?.status || 0) === 429
         && Number(attempts) < Math.max(0, Number(maxAttempts) || 0);
 }
 

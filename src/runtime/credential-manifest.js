@@ -24,6 +24,7 @@ export function createCredentialManifest(providerPools = {}) {
                 notSupportedModels: normalizedList(provider?.notSupportedModels),
                 concurrencyLimit: normalizedInteger(provider?.concurrencyLimit),
                 queueLimit: normalizedInteger(provider?.queueLimit),
+                ...(providerType === 'openai-codex-oauth' ? { rpmLimit: provider?.rpmLimit ?? 0 } : {}),
                 weight: Number.isFinite(Number(provider?.providerWeight)) && Number(provider.providerWeight) > 0
                     ? Number(provider.providerWeight)
                     : 1

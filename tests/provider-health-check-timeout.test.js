@@ -106,3 +106,25 @@ describe('provider health check timeout and de-duplication', () => {
         expect(serviceAdapterFactory).toHaveBeenCalledTimes(1);
     });
 });
+
+
+test('local Codex RPM refusal skips checks without unhealthy state or format retries', async () => {
+    const type = 'openai-codex-oauth';
+    const generateContent = jest.fn(async () => { throw Object.assign(new Error('local RPM'), {
+        origin: 'local_provider_rpm', code: 'PROVIDER_RPM_LIMIT_EXCEEDED', status: 429, retryAfterMs: 1000
+    }); });
+    const config = { uuid: 'rpm-health', isHealthy: true, checkHealth: true, checkModelName: 'gpt-6-sol' };
+    const manager = new ProviderPoolManager({ [type]: [config] }, {
+        persistenceEnabled: false, logLevel: 'error', serviceAdapterFactory: () => ({ generateContent }),
+        globalConfig: { SCHEDULED_HEALTH_CHECK: { enabled: true, providerTypes: [type] } }
+    });
+    managers.push(manager);
+    jest.spyOn(manager, '_buildHealthCheckRequests').mockReturnValue([{ input: 'health' }]);
+    const mark = jest.spyOn(manager, 'markProviderHealthCheckFailed');
+    expect(await manager._checkProviderHealth(type, config)).toEqual(expect.objectContaining({ skipped: true, success: false }));
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    await manager.performInitialHealthChecks();
+    await manager.performHealthChecks();
+    expect(mark).not.toHaveBeenCalled();
+    expect(manager.providerStatus[type][0].config.isHealthy).toBe(true);
+});

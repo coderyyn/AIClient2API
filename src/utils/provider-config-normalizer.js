@@ -1,3 +1,5 @@
+import { normalizeRpmLimit } from '../runtime/provider-rpm.js';
+
 const PROVIDER_STRING_ARRAY_CONFIG_FIELDS = [
     'DEFAULT_MODEL_PROVIDERS',
     'PROXY_ENABLED_PROVIDERS',
@@ -171,5 +173,6 @@ export function normalizeProviderConfigFields(data) {
         }
     }
 
+    if (Object.hasOwn(result, 'rpmLimit')) result.rpmLimit = normalizeRpmLimit(result.rpmLimit);
     return result;
 }

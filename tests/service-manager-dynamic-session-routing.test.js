@@ -239,3 +239,32 @@ describe('Codex key routing without credential groups', () => {
         });
     });
 });
+
+
+describe('provider RPM routing boundaries', () => {
+    test.each([
+        { routingMode: 'fixed', fixedCredential: { providerType, uuid: 'codex-a' } },
+        { routingMode: 'restricted', restrictedCredentialUuids: ['codex-a', 'codex-b'] }
+    ])('preserves local RPM error for $routingMode without expanding authorized candidates', async keyData => {
+        const { createProviderRpmError } = await import('../src/runtime/provider-rpm.js');
+        const config = createConfig({ keyData });
+        const pool = await initialize(config);
+        const failure = createProviderRpmError({ limit: 180, used: 180, retryAfterMs: 1000 });
+        const acquire = jest.spyOn(pool, 'acquireSlotWithFallback').mockRejectedValue(failure);
+        await expect(getApiServiceWithFallback(config, MODEL, { acquireSlot: true }))
+            .rejects.toMatchObject({ code: 'PROVIDER_RPM_LIMIT_EXCEEDED', status: 429 });
+        expect(acquire).toHaveBeenCalledTimes(1);
+        expect(acquire.mock.calls[0][2]).toMatchObject({ allowedProviderUuids: keyData.restrictedCredentialUuids || ['codex-a'], disableProviderFallback: true });
+    });
+    test('an RPM-rejected account stays excluded even when later upstream retries allow reuse', async () => {
+        const { default: context } = await import('../src/utils/context.js');
+        const config = createConfig();
+        const pool = await initialize(config);
+        const select = jest.spyOn(pool, 'selectProviderWithFallback');
+        await context.run({ providerRpmExcludedUuids: ['codex-a'] }, async () => {
+            const result = await getApiServiceWithFallback(config, MODEL, { allowExcludedProviderFallback: true });
+            expect(result.uuid).not.toBe('codex-a');
+        });
+        expect(select.mock.calls[0][2].excludeProviderUuids).toContain('codex-a');
+    });
+});
