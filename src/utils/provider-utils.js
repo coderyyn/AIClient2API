@@ -364,6 +364,8 @@ export function createProviderConfig(options) {
         lastErrorMessage: null
     };
     
+    if (credPathKey === 'CODEX_OAUTH_CREDS_FILE_PATH') newProvider.codexAllowNonLuna = false;
+
     // 如果需要 PROJECT_ID，添加空字符串占位
     if (needsProjectId) {
         newProvider.PROJECT_ID = '';

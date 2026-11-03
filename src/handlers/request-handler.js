@@ -248,6 +248,7 @@ export function createRequestHandler(config, providerPoolManager) {
                         runtime: runtimeCompletion || finalizeRuntime(response.httpStatus ?? 499),
                         requestAttempts: requestContext.get('requestAudit')?.attempts || [],
                         providerRpmRejections: auditContext.providerRpmRejections || [],
+                        providerPolicyRejections: auditContext.providerPolicyRejections || [],
                         ...(terminal.outcome ? { outcome: terminal.outcome } : {}),
                         ...(terminal.failure ? { failure: terminal.failure } : {}),
                         errorClass: terminal.errorClass || errorClass

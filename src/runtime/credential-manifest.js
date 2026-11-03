@@ -20,11 +20,15 @@ export function createCredentialManifest(providerPools = {}) {
                 providerType,
                 uuid: String(provider?.uuid || ''),
                 enabled: provider?.isDisabled !== true,
+                ...(providerType === 'openaiResponses-custom' ? {
+                    quotaResetDay: provider?.quotaResetDay ?? null,
+                    quotaResetTimezone: provider?.quotaResetTimezone || 'Asia/Shanghai'
+                } : {}),
                 supportedModels: normalizedList(provider?.supportedModels),
                 notSupportedModels: normalizedList(provider?.notSupportedModels),
                 concurrencyLimit: normalizedInteger(provider?.concurrencyLimit),
                 queueLimit: normalizedInteger(provider?.queueLimit),
-                ...(providerType === 'openai-codex-oauth' ? { rpmLimit: provider?.rpmLimit ?? 0 } : {}),
+                ...(providerType === 'openai-codex-oauth' ? { rpmLimit: provider?.rpmLimit ?? 0, codexAllowNonLuna: provider?.codexAllowNonLuna !== false } : {}),
                 weight: Number.isFinite(Number(provider?.providerWeight)) && Number(provider.providerWeight) > 0
                     ? Number(provider.providerWeight)
                     : 1

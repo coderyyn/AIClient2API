@@ -173,6 +173,9 @@ export function normalizeProviderConfigFields(data) {
         }
     }
 
+    if (Object.hasOwn(result, 'codexAllowNonLuna')) {
+        if (typeof result.codexAllowNonLuna !== 'boolean') throw Object.assign(new Error('codexAllowNonLuna must be boolean'), { status: 400, code: 'INVALID_CODEX_MIXED_ROUTING' });
+    }
     if (Object.hasOwn(result, 'rpmLimit')) result.rpmLimit = normalizeRpmLimit(result.rpmLimit);
     return result;
 }

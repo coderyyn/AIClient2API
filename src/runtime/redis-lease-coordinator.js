@@ -30,6 +30,12 @@ local boot_id = redis.call('GET', KEYS[1] .. ':recovery:boot')
 if not boot_id or boot_id ~= ARGV[7] then
   return cjson.encode({ coordinationRestarted = true, bootId = boot_id })
 end
+local mixed_scope = ARGV[14] or ''
+local mixed_key = KEYS[1] .. ':mixed-rr:' .. mixed_scope
+local mixed_time = redis.call('TIME')
+local mixed_now = tonumber(mixed_time[1]) * 1000 + math.floor(tonumber(mixed_time[2]) / 1000)
+local best_rank = nil
+local best_turn = nil
 local best = nil
 local best_active = nil
 local best_priority = nil
@@ -64,7 +70,17 @@ for _, candidate in ipairs(candidates) do
   if not cooling and not probe_busy and (limit <= 0 or active < limit) then
     local priority = tonumber(candidate.priority or 0)
     local preferred = candidate.preferred == true
-    if best == nil
+    if mixed_scope ~= '' then
+      local reset_at = tonumber(candidate.mixedResetAt or 0)
+      local rank = 9007199254740991
+      if reset_at > mixed_now and reset_at - mixed_now < 259200000 then rank = reset_at end
+      local turn = tonumber(redis.call('HGET', mixed_key, candidate.key) or '0')
+      if best == nil or rank < best_rank or (rank == best_rank and turn < best_turn) then
+        best = candidate
+        best_rank = rank
+        best_turn = turn
+      end
+    elseif best == nil
       or (preferred and not best_preferred)
       or (preferred == best_preferred and (active < best_active or (active == best_active and priority < best_priority))) then
       best = candidate
@@ -109,6 +125,11 @@ if best == nil then
   if probe_blocked then return cjson.encode({ probeRejected = true }) end
   return cjson.encode({ capacityExhausted = true })
 end
+if mixed_scope ~= '' then
+  local seq = redis.call('HINCRBY', mixed_key, '_sequence', 1)
+  redis.call('HSET', mixed_key, best.key, seq)
+  redis.call('EXPIRE', mixed_key, 86400)
+end
 if best.probeHash and best.probeHash ~= '' then
   local probe_key = KEYS[1] .. ':model-probe:' .. best.probeHash
   local acquired_probe = redis.call('SET', probe_key, probe_owner, 'PX', probe_ttl_ms, 'NX')
@@ -132,7 +153,7 @@ if affinity_key then
     redis.call('PEXPIRE', affinity_key, tonumber(ARGV[9]))
   end
 end
-return cjson.encode({ leaseId = lease_id, providerType = best.providerType, uuid = best.uuid, probe = best.probeHash and best.probeHash ~= '' })
+return cjson.encode({ leaseId = lease_id, providerType = best.providerType, uuid = best.uuid, mixedReason = mixed_scope ~= '' and (best_rank < 9007199254740991 and 'EXPIRING_KEY' or 'EQUAL_SHARE') or nil, probe = best.probeHash and best.probeHash ~= '' })
 `;
 
 const RELEASE_SCRIPT = `
@@ -655,7 +676,8 @@ function normalizeCandidate(candidate, priority) {
         concurrencyLimit: Number.isFinite(concurrencyLimit) && concurrencyLimit > 0 ? concurrencyLimit : 0,
         preferred: candidate.preferred === true,
         probeRequired: candidate.probeRequired === true,
-        priority
+        priority,
+        mixedResetAt: Number(candidate.mixedResetAt) || 0
     };
 }
 
@@ -764,7 +786,7 @@ export class RedisLeaseCoordinator {
         return this.redisMemory;
     }
 
-    async acquire(candidates, { affinityKey = '', routedProviderKey = '', requestedModel = '' } = {}) {
+    async acquire(candidates, { affinityKey = '', routedProviderKey = '', requestedModel = '', mixedScope = '' } = {}) {
         await this._checkRedisMemoryPressure();
         if (!this.bootId || !this.ready || this.recovering) await this.synchronize();
         if (!this.ready || this.recovering) throw new CoordinationUnavailableError('Runtime coordination is recovering');
@@ -810,7 +832,8 @@ export class RedisLeaseCoordinator {
             String(routedProviderKey || ''),
             probeOwner,
             '30000',
-            JSON.stringify(owner)
+            JSON.stringify(owner),
+            mixedScope ? hashAffinityKey(mixedScope) : ''
         ]);
         if (!result) return null;
         const lease = typeof result === 'string' ? JSON.parse(result) : result;
@@ -860,6 +883,17 @@ export class RedisLeaseCoordinator {
             } : {})
         });
         return lease;
+    }
+
+    async getMixedResponseBinding(keyRef, responseId) {
+        const key = `aiclient2api:gpt-response:${hashAffinityKey(`${keyRef}:${responseId}`)}`;
+        const value = await this.redis.command(['GET', key]);
+        return value ? JSON.parse(value) : null;
+    }
+
+    async setMixedResponseBinding(keyRef, responseId, binding) {
+        const key = `aiclient2api:gpt-response:${hashAffinityKey(`${keyRef}:${responseId}`)}`;
+        await this.redis.command(['SET', key, JSON.stringify(binding), 'EX', '2592000', 'NX']);
     }
 
     async listProviderLeases({ providerType = '', providerUuid = '' } = {}) {

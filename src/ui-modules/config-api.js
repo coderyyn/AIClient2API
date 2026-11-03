@@ -184,6 +184,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: currentConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED !== false,
         IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD ?? 0.10,
         IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS ?? 8388608,
+        GPT_MIXED_ROUTING_ENABLED: currentConfig.GPT_MIXED_ROUTING_ENABLED === true,
         CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED !== false,
         CODEX_CLOAKING_ENABLED_SOURCE: process.env.CODEX_CLOAKING_ENABLED !== undefined ? 'env' : 'config',
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
@@ -337,6 +338,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
             const v = Number(newConfig.IMAGE_SIZE_MAX_PIXELS);
             if (Number.isInteger(v) && v > 0) currentConfig.IMAGE_SIZE_MAX_PIXELS = v;
         }
+        if (newConfig.GPT_MIXED_ROUTING_ENABLED !== undefined) currentConfig.GPT_MIXED_ROUTING_ENABLED = parseBooleanConfig(newConfig.GPT_MIXED_ROUTING_ENABLED);
         if (newConfig.CODEX_CLOAKING_ENABLED !== undefined) currentConfig.CODEX_CLOAKING_ENABLED = parseBooleanConfig(newConfig.CODEX_CLOAKING_ENABLED);
         if (newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED !== undefined) currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = parseBooleanConfig(newConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED);
         if (newConfig.CODEX_PREWARM_ENABLED !== undefined) currentConfig.CODEX_PREWARM_ENABLED = parseBooleanConfig(newConfig.CODEX_PREWARM_ENABLED);
@@ -561,6 +563,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                     IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: currentConfig.IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED,
                     IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD,
                     IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS,
+                    GPT_MIXED_ROUTING_ENABLED: currentConfig.GPT_MIXED_ROUTING_ENABLED,
                     CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED,
                     CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
                 CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,

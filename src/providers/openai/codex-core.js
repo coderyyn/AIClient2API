@@ -1,3 +1,4 @@
+import { validateMixedSend } from '../../services/gpt-mixed-routing.js';
 import { assertVerifiedCodexProxy, CODEX_PROXY_SNAPSHOT } from '../../utils/proxy-pool-store.js';
 import { rewriteProxyTimeContext } from './codex-proxy-time-context.js';
 import { atomicWriteFile } from '../../utils/file-lock.js';
@@ -392,6 +393,7 @@ export class CodexApiService {
     }
 
     async consumeProviderRpm() {
+        await validateMixedSend(this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API, this.config.uuid);
         const manager = getProviderPoolManager();
         const type = this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API;
         // Read live config even for an in-flight retry using an older adapter.

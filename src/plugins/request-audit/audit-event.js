@@ -355,6 +355,15 @@ export function buildRequestAuditEvent(context = {}) {
             modelFallbackFrom: modelRouting.modelFallbackFrom || null,
             modelFallbackTo: modelRouting.modelFallbackTo || null,
             modelFallbackReason: modelRouting.modelFallbackReason || null,
+            ...(modelRouting.gptMixed ? { mixedRouting: {
+                reason: modelRouting.gptMixed.reason,
+                selectedProviderType: modelRouting.gptMixed.selectedProviderType,
+                selectedProviderUuidHash: hashSecret(modelRouting.gptMixed.selectedProviderUuid),
+                excluded: Object.entries(modelRouting.gptMixed.excluded || {}).map(([key, reason]) => {
+                    const [providerType, uuid] = key.split(':');
+                    return { providerType, providerUuidHash: hashSecret(uuid), reason };
+                })
+            } } : {}),
             ...(context._modelRouting ? {
                 queueWaitMs: toNumber(modelRouting.queueWaitMs),
                 fallbackAttemptCount: toNumber(modelRouting.fallbackAttemptCount),
@@ -444,6 +453,10 @@ export function buildRequestAuditEvent(context = {}) {
         ...(context.providerRpmRejections?.length ? { providerRpmRejections: context.providerRpmRejections.map(item => ({
             providerType: item.providerType, providerUuidHash: hashSecret(item.providerUuid),
             code: item.code, phase: item.phase || 'send', limit: item.limit, used: item.used, retryAfterMs: item.retryAfterMs
+        })) } : {}),
+        ...(context.providerPolicyRejections?.length ? { providerPolicyRejections: context.providerPolicyRejections.map(item => ({
+            providerType: item.providerType, providerUuidHash: hashSecret(item.providerUuid),
+            code: item.code, reason: item.reason
         })) } : {}),
         status: {
             ...derivedStatus,

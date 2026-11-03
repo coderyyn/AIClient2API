@@ -1,3 +1,4 @@
+import { selectMixedRoute, wrapMixedService } from './gpt-mixed-routing.js';
 import { assertCodexProxyBinding, assertVerifiedCodexProxy } from '../utils/proxy-pool-store.js';
 ﻿import { getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
@@ -1518,11 +1519,41 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     }
 }
 
+async function getMixedApiService(config, requestedModel, options) {
+    const selection = await selectMixedRoute(providerPoolManager, config, requestedModel, options);
+    if (!selection) return null;
+    const { provider, selection: picked, model } = selection;
+    const diagnostics = initializeSelectionDiagnostics({});
+    await acquirePotluckKeyConcurrencyLeaseIfNeeded(config, MODEL_PROVIDER.CODEX_API,
+        { ...options, acquireSlot: true }, diagnostics);
+    const serviceConfig = deepmerge(config, provider);
+    serviceConfig.MODEL_PROVIDER = picked.providerType;
+    if (picked.providerType === 'openaiResponses-custom') {
+        delete serviceConfig.codexAccountKey;
+        delete serviceConfig.codexAccountId;
+        delete serviceConfig.codexEmail;
+    }
+    delete serviceConfig.providerPools;
+    config.uuid = provider.uuid;
+    config.customName = provider.customName;
+    config.MODEL_PROVIDER = picked.providerType;
+    await ensureCodexIdentityForServiceConfig(serviceConfig, picked.providerType, picked.uuid);
+    if (picked.providerType === MODEL_PROVIDER.CODEX_API && serviceConfig.PROXY_ID) assertVerifiedCodexProxy(serviceConfig);
+    const service = wrapMixedService(getServiceAdapter(serviceConfig));
+    finalizeCodexRouteResult(config, { selectedProviderUuid: picked.uuid,
+        actualProviderType: picked.providerType, serviceConfig, actualModel: model });
+    return { service, serviceConfig, actualProviderType: picked.providerType,
+        isFallback: false, uuid: picked.uuid, actualModel: model };
+}
+
 async function getApiServiceWithFallbackInternal(config, requestedModel = null, options = {}) {
     const rpmExcluded = requestContext.get('providerRpmExcludedUuids') || [];
     if (rpmExcluded.length) options = { ...options,
         excludeProviderUuids: [...new Set([...(options.excludeProviderUuids || []), ...rpmExcluded])],
         allowExcludedProviderFallback: false };
+
+    const mixed = await getMixedApiService(config, requestedModel, options);
+    if (mixed) return mixed;
 
     // 1. 鍓嶇疆璺敱瑙ｆ瀽
     const { effectiveProvider, actualModelName, entryModelReason, requestedEntryModel } = await _resolveEffectiveRouting(config, requestedModel, options);
@@ -1861,13 +1892,14 @@ function finalizeCodexRouteResult(config, {
     const routingMode = diagnostics.routingMode || previous.routingMode || null;
     const finalProviderUuid = selectedProviderUuid || diagnostics.selectedProviderUuid || previous.selectedProviderUuid || null;
     const previousProviderUuid = previous.selectedProviderUuid || null;
-    const preservePreviousIdentity = !previousProviderUuid || previousProviderUuid === finalProviderUuid;
+    const sameProviderType = !previous.actualProviderType || !actualProviderType || previous.actualProviderType === actualProviderType;
+    const preservePreviousIdentity = !previousProviderUuid || (previousProviderUuid === finalProviderUuid && sameProviderType);
     const selectedGroupId = routingMode === 'pool' || routingMode === 'restricted'
         ? null
         : diagnostics.selectedGroupId || previous.selectedGroupId || null;
     const actualProviderGroupId = routingMode === 'pool' || routingMode === 'restricted' ? null : selectedGroupId;
     const providerSwitchCount = Number(previous.providerSwitchCount || 0)
-        + (previousProviderUuid && finalProviderUuid && previousProviderUuid !== finalProviderUuid ? 1 : 0);
+        + (previousProviderUuid && finalProviderUuid && (previousProviderUuid !== finalProviderUuid || !sameProviderType) ? 1 : 0);
     const routeResult = {
         ...previous,
         ...diagnostics,

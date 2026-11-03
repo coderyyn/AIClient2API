@@ -79,6 +79,8 @@ function normalizeCodexBooleanSwitch(config, key) {
 
 function normalizeCodexCloakingEnabled(config) {
     normalizeCodexBooleanSwitch(config, 'CODEX_CLOAKING_ENABLED');
+    config.GPT_MIXED_ROUTING_ENABLED ??= false;
+    normalizeCodexBooleanSwitch(config, 'GPT_MIXED_ROUTING_ENABLED');
 }
 
 function normalizeAntigravityElasticRouting(config) {
@@ -192,6 +194,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         USAGE_SQLITE_WAL_CHECKPOINT_BYTES: 64 * 1024 * 1024,
         RUNTIME_HOOK_SPOOL_MAX_BYTES: 256 * 1024 * 1024,
         MODEL_USAGE_STATS_MAX_DIRTY_AGE_MS: 60_000,
+        GPT_MIXED_ROUTING_ENABLED: false,
         MODEL_FALLBACK_ENABLED: true, // 模型不存在时是否自动 fallback 到默认/映射模型
         REQUEST_BODY_MAX_BYTES: DEFAULT_REQUEST_BODY_MAX_BYTES,
         CREDENTIAL_SWITCH_MAX_RETRIES: 5, // 坏凭证切换最大重试次数（用于认证错误后切换凭证）

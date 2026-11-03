@@ -10,11 +10,11 @@ describe('Codex runtime config sync', () => {
     beforeEach(() => resetCodexRuntimeConfigSyncForTests());
 
     test('builds events with strictly increasing revisions and only sync-able keys', () => {
-        const first = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: true, CODEX_FINGERPRINT_ENABLED: true, PROXY_URL: 'http://secret' });
+        const first = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: true, GPT_MIXED_ROUTING_ENABLED: false, CODEX_FINGERPRINT_ENABLED: true, PROXY_URL: 'http://secret' });
         const second = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: false });
 
         expect(first.type).toBe(CODEX_RUNTIME_CONFIG_SYNC_TYPE);
-        expect(first.config).toEqual({ CODEX_CLOAKING_ENABLED: true });
+        expect(first.config).toEqual({ CODEX_CLOAKING_ENABLED: true, GPT_MIXED_ROUTING_ENABLED: false });
         expect(second.revision).toBeGreaterThan(first.revision);
     });
 
@@ -27,13 +27,14 @@ describe('Codex runtime config sync', () => {
         };
 
         const result = applyCodexRuntimeConfigEvent(
-            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 10, config: { CODEX_CLOAKING_ENABLED: true } },
+            { type: CODEX_RUNTIME_CONFIG_SYNC_TYPE, revision: 10, config: { CODEX_CLOAKING_ENABLED: true, GPT_MIXED_ROUTING_ENABLED: true } },
             config,
             instances
         );
 
         expect(result).toEqual({ applied: true, revision: 10, invalidated: 2 });
         expect(config.CODEX_CLOAKING_ENABLED).toBe(true);
+        expect(config.GPT_MIXED_ROUTING_ENABLED).toBe(true);
         expect(Object.keys(instances)).toEqual(['openai-custom']);
     });
 

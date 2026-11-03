@@ -54,6 +54,12 @@ function compactModelRouting(routing) {
         queueWaitMs: Math.max(0, Number(routing.queueWaitMs) || 0),
         fallbackAttemptCount: Math.max(0, Number(routing.fallbackAttemptCount) || 0),
         queueOutcome: routing.queueOutcome || null,
+        ...(routing.gptMixed ? { gptMixed: {
+            reason: routing.gptMixed.reason,
+            selectedProviderType: routing.gptMixed.selectedProviderType,
+            selectedProviderUuid: routing.gptMixed.selectedProviderUuid,
+            excluded: routing.gptMixed.excluded
+        } } : {}),
         ...(sourceAvailability ? { sourceAvailability } : {})
     };
 }
@@ -144,6 +150,13 @@ function compactMetadata(context = {}) {
         _codexRouting: compactCodexRouting(context._codexRouting),
         _codexCacheAffinityHashes: compactAffinityHashes(context._codexCacheAffinityScope),
         _modelRouting: compactModelRouting(context._modelRouting),
+        providerRpmRejections: context.providerRpmRejections?.map(item => ({
+            providerType: item.providerType, providerUuid: item.providerUuid, code: item.code,
+            phase: item.phase, limit: item.limit, used: item.used, retryAfterMs: item.retryAfterMs
+        })),
+        providerPolicyRejections: context.providerPolicyRejections?.map(item => ({
+            providerType: item.providerType, providerUuid: item.providerUuid, code: item.code, reason: item.reason
+        })),
         _temporaryKeyModelRouteResult: compactTemporaryModelRoute(context._temporaryKeyModelRouteResult),
         originalRequestBody: context.originalRequestBody?.model
             ? {
