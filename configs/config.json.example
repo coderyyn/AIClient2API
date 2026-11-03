@@ -3,6 +3,7 @@
     "SERVER_PORT": 3000,
     "HOST": "0.0.0.0",
     "MODEL_PROVIDER": "gemini-cli-oauth",
+    "CODEX_IMAGE_HELPER_MODEL": "gpt-6-luna",
     "SYSTEM_PROMPT_FILE_PATH": "configs/input_system_prompt.txt",
     "SYSTEM_PROMPT_MODE": "overwrite",
     "SYSTEM_PROMPT_REPLACEMENTS": [

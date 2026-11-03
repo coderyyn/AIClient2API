@@ -284,6 +284,28 @@
                 <hr>
 
                 <div class="config-inline-heading">
+                    <span data-i18n="config.advanced.codexImageHelperModel">Codex 生图辅助主模型</span>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="codexImageHelperModel" data-i18n="config.advanced.codexImageHelperModel">Codex 生图辅助主模型</label>
+                        <select id="codexImageHelperModel" class="form-control">
+                            <option value="" data-i18n="config.advanced.codexImageHelperDefault">使用默认值 gpt-6-luna</option>
+                            <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+                            <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+                            <option value="gpt-5.6-luna">gpt-5.6-luna</option>
+                            <option value="gpt-6-astra">gpt-6-astra</option>
+                            <option value="gpt-6-sol">gpt-6-sol</option>
+                            <option value="gpt-6.1-sol">gpt-6.1-sol</option>
+                            <option value="gpt-6.1-terra">gpt-6.1-terra</option>
+                            <option value="gpt-6-luna">gpt-6-luna</option>
+                        </select>
+                        <small data-i18n="config.advanced.codexImageHelperHelp">用于执行 image_generation 工具，节点可覆盖此值。保存后对新请求生效。</small>
+                    </div>
+                </div>
+                <hr>
+
+                <div class="config-inline-heading">
                     <span data-i18n="config.advanced.imageSizeNormalizationTitle">Codex 生图尺寸归一化</span>
                     <small data-i18n="config.advanced.imageSizeNormalizationNote">为 Codex Images 请求追加最小比例约束，并将比例偏差在阈值内的结果缩放到精确请求尺寸；偏差过大时返回中文错误。</small>
                 </div>

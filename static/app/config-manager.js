@@ -415,6 +415,10 @@ async function loadConfiguration() {
         const data = await window.apiClient.get('/config');
         // 供 Provider 详情弹窗展示 Codex 指纹全局状态（只读脱敏配置）。
         window.currentSafeConfig = data;
+        const imageHelperModelEl = document.getElementById('codexImageHelperModel');
+        if (imageHelperModelEl) {
+            imageHelperModelEl.value = data.CODEX_IMAGE_HELPER_MODEL ?? '';
+        }
 
         // 初始化替换规则 UI
         initReplacementsUI();
@@ -754,6 +758,7 @@ async function saveConfiguration(options = {}) {
     config.IMAGE_ASPECT_MISMATCH_THRESHOLD = parseFloat(document.getElementById('imageAspectMismatchThreshold')?.value || 0.10);
     config.IMAGE_SIZE_MAX_PIXELS = parseInt(document.getElementById('imageSizeMaxPixels')?.value || 8388608);
     config.CODEX_CLOAKING_ENABLED = document.getElementById('codexCloakingEnabled')?.checked !== false;
+    config.CODEX_IMAGE_HELPER_MODEL = document.getElementById('codexImageHelperModel')?.value ?? '';
     config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED = document.getElementById('codexPotluckStickyProviderEnabled')?.checked || false;
     config.CRON_NEAR_MINUTES = parseInt(document.getElementById('cronNearMinutes')?.value || 1);
     config.CRON_REFRESH_TOKEN = document.getElementById('cronRefreshToken')?.checked || false;

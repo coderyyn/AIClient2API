@@ -1,8 +1,58 @@
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
+import { getProviderModels } from '../src/providers/provider-models.js';
+
+function loadImageHelperFormContext() {
+    const utils = fs.readFileSync('static/app/utils.js', 'utf8').replace(/\r\n/g, '\n');
+    const modal = fs.readFileSync('static/app/modal.js', 'utf8').replace(/\r\n/g, '\n');
+    const context = vm.createContext({
+        t: key => key,
+        escapeHtml: value => String(value ?? ''),
+        currentProviderType: 'openai-codex-oauth',
+        API_KEY_QUOTA_PROVIDERS: new Set(),
+        usesManagedModelList: () => false,
+        renderProxySelectField: () => '',
+        renderProxySelectOptions: () => ''
+    });
+    for (const [source, names] of [
+        [utils, ['getFieldLabel', 'getProviderTypeFields']],
+        [modal, ['getProviderBaseFields', 'getFieldOrder', 'isProviderConfigSelectOptionSelected', 'renderProviderConfig', 'addDynamicConfigFields']]
+    ]) {
+        for (const name of names) {
+            const start = source.indexOf(`function ${name}(`);
+            const end = source.indexOf('\n}', start) + 2;
+            vm.runInContext(source.slice(start, end), context);
+        }
+    }
+    return context;
+}
 
 describe('provider modal source regressions', () => {
+    test('image helper candidates match the backend catalog and global form', () => {
+        const context = loadImageHelperFormContext();
+        const field = context.getProviderTypeFields('openai-codex-oauth').find(item => item.id === 'CODEX_IMAGE_HELPER_MODEL');
+        const expected = getProviderModels('openai-codex-oauth').filter(model => !model.startsWith('gpt-image-')).sort();
+        expect(Array.from(field.options.slice(1), option => option.value).sort()).toEqual(expected);
+        const html = fs.readFileSync('static/components/section-config.html', 'utf8');
+        const select = html.match(/<select id="codexImageHelperModel"[^>]*>([\s\S]*?)<\/select>/)[1];
+        expect([...select.matchAll(/<option value="([^"]*)"/g)].map(match => match[1]).sort()).toEqual(['', ...expected]);
+    });
+
+    test.each([undefined, '', null, 'gpt-6.1-terra'])('existing node helper %p renders its explicit or inherit option', value => {
+        const context = loadImageHelperFormContext();
+        const html = context.renderProviderConfig({ uuid: 'ui-fixture', CODEX_IMAGE_HELPER_MODEL: value });
+        const select = html.match(/<select[^>]*data-config-key="CODEX_IMAGE_HELPER_MODEL"[^>]*>([\s\S]*?)<\/select>/)[1];
+        expect(select).toContain(`<option value="${value ?? ''}" selected>`);
+    });
+
+    test('new node form selects inheritance by default', () => {
+        const context = loadImageHelperFormContext();
+        const fields = { innerHTML: '' };
+        context.addDynamicConfigFields({ querySelector: () => fields }, 'openai-codex-oauth');
+        const select = fields.innerHTML.match(/<select id="newCODEX_IMAGE_HELPER_MODEL"[^>]*>([\s\S]*?)<\/select>/)[1];
+        expect(select).toContain('<option value="" selected>');
+    });
     test('provider select rendering matches boolean config values to string options', () => {
         const source = fs.readFileSync(path.join(process.cwd(), 'static/app/modal.js'), 'utf8').replace(/\r\n/g, '\n');
         const helperStart = source.indexOf('function isProviderConfigSelectOptionSelected(');

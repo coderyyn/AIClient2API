@@ -9,6 +9,23 @@ import {
 describe('Codex runtime config sync', () => {
     beforeEach(() => resetCodexRuntimeConfigSyncForTests());
 
+    test('synchronizes and clears the image helper, invalidating cached Codex adapters', () => {
+        const config = { CODEX_IMAGE_HELPER_MODEL: 'gpt-6-luna' };
+        const oldAdapter = { config: { ...config } };
+        const instances = { 'openai-codex-oautha': oldAdapter, 'openai-custom': {} };
+        const event = buildCodexRuntimeConfigEvent({ CODEX_IMAGE_HELPER_MODEL: 'gpt-6.1-sol' });
+        expect(event.config).toEqual({ CODEX_IMAGE_HELPER_MODEL: 'gpt-6.1-sol' });
+        expect(applyCodexRuntimeConfigEvent(event, config, instances).invalidated).toBe(1);
+        expect(config.CODEX_IMAGE_HELPER_MODEL).toBe('gpt-6.1-sol');
+        expect(oldAdapter.config.CODEX_IMAGE_HELPER_MODEL).toBe('gpt-6-luna');
+        const clearEvent = buildCodexRuntimeConfigEvent({ CODEX_IMAGE_HELPER_MODEL: '' });
+        expect(applyCodexRuntimeConfigEvent(clearEvent, config, instances).applied).toBe(true);
+        expect(config.CODEX_IMAGE_HELPER_MODEL).toBe('');
+        expect(applyCodexRuntimeConfigEvent(event, config, instances).applied).toBe(false);
+        expect(config.CODEX_IMAGE_HELPER_MODEL).toBe('');
+        expect(Object.keys(instances)).toEqual(['openai-custom']);
+    });
+
     test('builds events with strictly increasing revisions and only sync-able keys', () => {
         const first = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: true, CODEX_FINGERPRINT_ENABLED: true, PROXY_URL: 'http://secret' });
         const second = buildCodexRuntimeConfigEvent({ CODEX_CLOAKING_ENABLED: false });

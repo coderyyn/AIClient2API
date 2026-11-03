@@ -96,6 +96,8 @@ function filterMaskedData(data) {
     delete result.archivedAt;
     
     for (const key in result) {
+        // This model name is public configuration and must reach validation intact.
+        if (key === 'CODEX_IMAGE_HELPER_MODEL') continue;
         const val = result[key];
         if (typeof val === 'string') {
             // 匹配 ******** 或 XXXX****XXXX 格式

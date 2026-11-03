@@ -1,4 +1,5 @@
 import { normalizeRpmLimit } from '../runtime/provider-rpm.js';
+import { normalizeCodexImageHelperModel } from '../providers/openai/codex-image-helper.js';
 
 const PROVIDER_STRING_ARRAY_CONFIG_FIELDS = [
     'DEFAULT_MODEL_PROVIDERS',
@@ -134,6 +135,9 @@ export function normalizeProviderConfigFields(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
 
     const result = { ...data };
+    if (Object.hasOwn(result, 'CODEX_IMAGE_HELPER_MODEL')) {
+        result.CODEX_IMAGE_HELPER_MODEL = normalizeCodexImageHelperModel(result.CODEX_IMAGE_HELPER_MODEL);
+    }
     for (const key of LEGACY_PROVIDER_PROXY_FIELDS) {
         delete result[key];
     }

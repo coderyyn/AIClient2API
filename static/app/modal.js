@@ -2334,7 +2334,7 @@ function addDynamicConfigFields(form, providerType) {
                     </div>
                 `;
             } else if (field1.type === 'select') {
-                const selected = field1.value || 'session';
+                const selected = field1.value ?? 'session';
                 fields += `
                     <div class="form-group">
                         <label>${field1.label}</label>
@@ -2409,7 +2409,7 @@ function addDynamicConfigFields(form, providerType) {
                         </div>
                     `;
                 } else if (field2.type === 'select') {
-                    const selected = field2.value || 'session';
+                    const selected = field2.value ?? 'session';
                     fields += `
                         <div class="form-group">
                             <label>${field2.label}</label>

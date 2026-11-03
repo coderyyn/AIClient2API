@@ -438,6 +438,14 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 - Token 获取/刷新/池轮换机制保持不变。
 
 #### Codex OAuth 配置
+
+Codex 生图辅助主模型可通过 `CODEX_IMAGE_HELPER_MODEL` 设置。全局配置位于 `configs/config.json`，单个 Codex 节点可在 `configs/provider_pools.json` 中设置同名字段，也可通过管理界面的全局高级配置或节点表单选择。
+
+- 节点非空设置优先，其次全局非空设置，默认使用 `gpt-6-luna`。空字符串、纯空白、`null` 和缺失字段均表示继承，清空节点设置即可恢复全局设置。
+- 仅接受本地 Codex 模型目录中的文本基础模型。图片模型、`-fast` / `-ultrafast` 后缀、未知名称和非字符串非空值会被拒绝。模型列入目录仅表示配置可接受，实际生图能力取决于上游和账号。
+- 辅助主模型独立于账号的 `codexModelRemap` 与 GPT-6 覆盖规则，作为顶层 `model` 执行 `image_generation`。图片工具中的 `model` 仍由请求的图片模型决定。
+- 管理界面保存后，新请求使用新配置，多 worker 通过现有配置同步机制生效。在途请求使用已捕获的配置。手工编辑配置文件后通过管理界面重载。
+
 1. **生成授权**：在 Web UI 的"提供商池"或"配置管理"页面，点击 Codex 的"生成授权"按钮
 2. **浏览器登录**：系统将打开 OpenAI Codex 授权页面，完成 OAuth 登录
 3. **自动保存**：授权成功后，系统会自动保存 Codex 的 OAuth 凭据文件

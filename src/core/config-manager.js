@@ -204,6 +204,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         IMAGE_PROMPT_ASPECT_CONSTRAINT_ENABLED: true, // Codex 生图提示词是否追加最小画幅比例约束
         IMAGE_ASPECT_MISMATCH_THRESHOLD: 0.10, // 原图与目标长宽比偏差超过此值时拒绝拉伸
         CODEX_CLOAKING_ENABLED: true, // Codex 出站客户端身份统一（UA/originator/version），默认开启；关闭后可识别的 Codex 客户端身份整组透传
+        CODEX_IMAGE_HELPER_MODEL: 'gpt-6-luna', // Codex 生图辅助主模型，可由节点覆盖
         IMAGE_SIZE_MAX_PIXELS: 8388608, // 后处理允许的最大目标总像素（约 4K UHD）
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: false, // API Potluck 分发 Key 是否固定到同一个 Codex 账号
         CODEX_STICKY_HOT_SHARD_ENABLED: true, // Codex sticky 热 key 是否自动拆分到多个账号

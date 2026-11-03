@@ -13,6 +13,7 @@ import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { validateCredentials } from './auth.js';
 import { ANTIGRAVITY_ELASTIC_MODEL_ORDER } from '../providers/antigravity-model-order.js';
 import { buildCodexRuntimeConfigEvent, CODEX_RUNTIME_CONFIG_KEYS } from '../runtime/codex-runtime-config-sync.js';
+import { normalizeCodexImageHelperModel } from '../providers/openai/codex-image-helper.js';
 
 function snapshotCodexRuntimeConfig(config) {
     return JSON.stringify(CODEX_RUNTIME_CONFIG_KEYS.map(key => config?.[key] ?? null));
@@ -185,6 +186,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD ?? 0.10,
         IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS ?? 8388608,
         CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED !== false,
+        CODEX_IMAGE_HELPER_MODEL: currentConfig.CODEX_IMAGE_HELPER_MODEL ?? '',
         CODEX_CLOAKING_ENABLED_SOURCE: process.env.CODEX_CLOAKING_ENABLED !== undefined ? 'env' : 'config',
         CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
         CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
@@ -256,6 +258,10 @@ export async function handleUpdateConfig(req, res, currentConfig) {
 async function _handleUpdateConfig(req, res, currentConfig, body) {
     try {
         const newConfig = body;
+        // Validate the new field before any shared configuration is mutated.
+        const nextImageHelperModel = Object.hasOwn(newConfig, 'CODEX_IMAGE_HELPER_MODEL')
+            ? normalizeCodexImageHelperModel(newConfig.CODEX_IMAGE_HELPER_MODEL)
+            : currentConfig.CODEX_IMAGE_HELPER_MODEL;
         const previousProxyRuntimeConfig = snapshotProxyRuntimeConfig(currentConfig);
         const previousCodexRuntimeConfig = snapshotCodexRuntimeConfig(currentConfig);
 
@@ -562,6 +568,7 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
                     IMAGE_ASPECT_MISMATCH_THRESHOLD: currentConfig.IMAGE_ASPECT_MISMATCH_THRESHOLD,
                     IMAGE_SIZE_MAX_PIXELS: currentConfig.IMAGE_SIZE_MAX_PIXELS,
                     CODEX_CLOAKING_ENABLED: currentConfig.CODEX_CLOAKING_ENABLED,
+                    CODEX_IMAGE_HELPER_MODEL: nextImageHelperModel,
                     CODEX_POTLUCK_STICKY_PROVIDER_ENABLED: currentConfig.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED,
                 CODEX_PREWARM_ENABLED: currentConfig.CODEX_PREWARM_ENABLED,
                 CODEX_PREWARM_TIMES: currentConfig.CODEX_PREWARM_TIMES,
@@ -629,14 +636,19 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
         }
 
         // Update the global CONFIG object to reflect changes immediately
+        currentConfig.CODEX_IMAGE_HELPER_MODEL = nextImageHelperModel;
         Object.assign(CONFIG, currentConfig);
         if (hasProxyRuntimeConfigChanged(previousProxyRuntimeConfig, currentConfig)) {
             invalidateServiceInstancesForProxyChange();
         }
         // 多 worker：保存只改 control worker 内存，Codex 运行时开关需下发给 execution worker 才能热生效。
-        if (snapshotCodexRuntimeConfig(currentConfig) !== previousCodexRuntimeConfig
-            && process.env.RUNTIME_WORKER_ROLE === 'control' && typeof process.send === 'function') {
-            process.send(buildCodexRuntimeConfigEvent(CONFIG));
+        if (snapshotCodexRuntimeConfig(currentConfig) !== previousCodexRuntimeConfig) {
+            for (const key of Object.keys(serviceInstances)) {
+                if (key.startsWith('openai-codex-oauth')) delete serviceInstances[key];
+            }
+            if (process.env.RUNTIME_WORKER_ROLE === 'control' && typeof process.send === 'function') {
+                process.send(buildCodexRuntimeConfigEvent(CONFIG));
+            }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -647,8 +659,8 @@ async function _handleUpdateConfig(req, res, currentConfig, body) {
         }));
         return true;
     } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
+        res.writeHead(error.status || 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: error.code, message: error.message } }));
         return true;
     }
 }

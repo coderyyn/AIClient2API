@@ -94,6 +94,17 @@
       "lastErrorTime": null
     }
   ],
+  "openai-codex-oauth": [
+    {
+      "customName": "Codex OAuth node",
+      "CODEX_OAUTH_CREDS_FILE_PATH": "./configs/codex/example-oauth-creds.json",
+      "CODEX_IMAGE_HELPER_MODEL": "",
+      "uuid": "d284628d-302f-456d-91f3-609538678967",
+      "checkHealth": false,
+      "isHealthy": true,
+      "isDisabled": false
+    }
+  ],
   "claude-custom": [
     {
       "customName": "Claude节点1",

@@ -6,6 +6,7 @@ import {
     getCodexModelFallbackTarget
 } from '../providers/provider-pool-manager.js';
 import deepmerge from '../vendor/deepmerge/index.js';
+import { resolveCodexImageHelperModel } from '../providers/openai/codex-image-helper.js';
 import crypto from 'crypto';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
@@ -1331,6 +1332,9 @@ export async function initApiService(config, isReady = false, runtimeOptions = {
                         ...providerConfig,
                         MODEL_PROVIDER: providerType
                     });
+                    if (providerType.startsWith('openai-codex-oauth')) {
+                        nodeConfig.CODEX_IMAGE_HELPER_MODEL = resolveCodexImageHelperModel(config, providerConfig);
+                    }
                     delete nodeConfig.providerPools; // 绉婚櫎 providerPools 閬垮厤閫掑綊
                     
                     // 鍒濆鍖栨湇鍔￠€傞厤鍣?
@@ -1462,6 +1466,9 @@ async function getApiServiceInternal(config, requestedModel = null, options = {}
         if (selectedProviderConfig) {
             // 鍚堝苟閫変腑鐨勬彁渚涜€呴厤缃埌褰撳墠璇锋眰鐨?config 涓?
             serviceConfig = deepmerge(config, selectedProviderConfig);
+            if (config.MODEL_PROVIDER?.startsWith('openai-codex-oauth')) {
+                serviceConfig.CODEX_IMAGE_HELPER_MODEL = resolveCodexImageHelperModel(config, selectedProviderConfig);
+            }
             delete serviceConfig.providerPools; // 绉婚櫎 providerPools 灞炴€?
             config.uuid = serviceConfig.uuid;
             config.customName = serviceConfig.customName;
@@ -1736,6 +1743,9 @@ async function getApiServiceWithFallbackInternal(config, requestedModel = null, 
             // 鍚堝苟閫変腑鐨勬彁渚涜€呴厤缃埌褰撳墠璇锋眰鐨?config 涓?
             serviceConfig = deepmerge(config, selectedProviderConfig);
             delete serviceConfig.providerPools;
+            if (selectedType?.startsWith('openai-codex-oauth')) {
+                serviceConfig.CODEX_IMAGE_HELPER_MODEL = resolveCodexImageHelperModel(config, selectedProviderConfig);
+            }
             
             actualProviderType = selectedType;
             isFallback = fallbackUsed;

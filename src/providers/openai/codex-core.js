@@ -38,6 +38,9 @@ import {
 } from './codex-fingerprint.js';
 import { recordCodexFingerprintAudit } from './codex-fingerprint-audit.js';
 import { createUnsupportedCodexModelError } from './codex-model-routing.js';
+import { normalizeCodexImageHelperModel, resolveCodexImageHelperModel } from './codex-image-helper.js';
+// Live global config: adapters built by usage refresh/prewarm merge an empty node value over the global one.
+import { CONFIG } from '../../core/config-manager.js';
 import { codexPromptCacheObservability } from './codex-prompt-cache-observability.js';
 import requestContext from '../../utils/context.js';
 import { performance } from 'node:perf_hooks';
@@ -1122,10 +1125,10 @@ export class CodexApiService {
         const defaultServiceTier = isUltraFastModel ? 'ultrafast' : isFastModel ? 'priority' : 'default';
         const defaultReasoningEffort = isSpeedModel ? 'xhigh' : 'medium';
 
-        // 图像生成模型：gpt-image-2 / Image 2.5 通过 image_generation 工具 + gpt-6-luna 实现
+        // 图片模型通过独立配置的辅助主模型调用 image_generation 工具。
         const isImageModel = isSupportedGptImageModel(upstreamModel) && upstreamModel !== 'gpt-image-2.5';
         const effectiveUpstreamModel = isImageModel
-            ? 'gpt-6-luna'
+            ? normalizeCodexImageHelperModel(resolveCodexImageHelperModel(CONFIG, this.config))
             : resolveCodexOutboundModel(upstreamModel, this.config);
 
         // 凭据级改写到 5.6 系列时，5.6 无 max 档位，降为 xhigh

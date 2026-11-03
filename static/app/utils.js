@@ -256,6 +256,7 @@ function getFieldLabel(key) {
         'ANTIGRAVITY_BASE_URL_AUTOPUSH': t('modal.provider.field.autopushBaseUrl'),
         'IFLOW_BASE_URL': t('modal.provider.field.iflowBaseUrl'),
         'CODEX_BASE_URL': t('modal.provider.field.codexBaseUrl'),
+        'CODEX_IMAGE_HELPER_MODEL': t('config.advanced.codexImageHelperModel'),
         'GROK_BASE_URL': t('modal.provider.field.grokBaseUrl'),
         'FORWARD_API_KEY': 'Forward API Key',
         'FORWARD_BASE_URL': 'Forward Base URL',
@@ -545,6 +546,18 @@ function getProviderTypeFields(providerType) {
                 label: `${t('modal.provider.field.codexBaseUrl')} <span class="optional-tag">${t('config.optional')}</span>`,
                 type: 'text',
                 placeholder: 'https://api.openai.com/v1/codex'
+            },
+            {
+                id: 'CODEX_IMAGE_HELPER_MODEL',
+                label: t('config.advanced.codexImageHelperModel'),
+                type: 'select',
+                value: '',
+                options: [
+                    { value: '', label: t('modal.provider.codexImageHelperInherit') },
+                    ...['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']
+                        .map(model => ({ value: model, label: model }))
+                ],
+                help: t('modal.provider.codexImageHelperHelp')
             },
             {
                 id: 'codexGeneralMax5hPercent',
