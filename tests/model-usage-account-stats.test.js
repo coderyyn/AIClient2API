@@ -80,7 +80,7 @@ describe('model usage account statistics', () => {
         });
     });
 
-    test('aggregates same Codex email across oauth and responses providers into one account', async () => {
+    test('keeps OAuth and API Key providers separate for the same email', async () => {
         const statsManager = await loadStatsManager();
 
         for (const provider of ['openai-codex-oauth', 'openaiResponses-custom']) {
@@ -117,7 +117,7 @@ describe('model usage account statistics', () => {
         const stats = await statsManager.getStats();
         const accountKey = 'openai-codex-oauth:user@example.com';
 
-        expect(Object.keys(stats.accounts)).toEqual([accountKey]);
+        expect(Object.keys(stats.accounts).sort()).toEqual([accountKey, 'openaiResponses-custom:same-provider-uuid'].sort());
         expect(stats.accounts[accountKey]).toMatchObject({
             provider: 'openai-codex-oauth',
             providerUuid: 'user@example.com',
@@ -125,10 +125,8 @@ describe('model usage account statistics', () => {
             accountEmail: 'user@example.com',
             providerUuids: ['same-provider-uuid']
         });
-        expect(stats.accounts[accountKey].summary).toMatchObject({
-            requestCount: 2,
-            totalTokens: 2200
-        });
+        expect(stats.accounts[accountKey].summary).toMatchObject({ requestCount: 1, totalTokens: 1100 });
+        expect(stats.accounts['openaiResponses-custom:same-provider-uuid'].summary).toMatchObject({ requestCount: 1, totalTokens: 1100 });
     });
 
     test('records account, model, date, and cache hit ratio for a Codex provider instance', async () => {

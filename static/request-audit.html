@@ -1532,7 +1532,7 @@
     async function fetchJson(url, options = {}) {
       const { auth = true, ...fetchOptions } = options;
       if (auth && !localStorage.getItem('authToken')) {
-        window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.hash)}`;
+        window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
         throw new Error('需要管理员登录');
       }
       const response = await fetch(url, {
@@ -1545,7 +1545,7 @@
       const data = await response.json().catch(() => ({}));
       if (response.status === 401) {
         localStorage.removeItem('authToken');
-        window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.hash)}`;
+        window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
         throw new Error('登录已失效，正在跳转');
       }
       if (!response.ok || data.success === false) {
@@ -1778,8 +1778,20 @@
     applyTheme(localStorage.getItem('theme') || 'light');
 
     setDefaultTimeRange(20);
+    const initialFilters = new URLSearchParams(location.search);
+    for (const id of ['credential', 'provider']) {
+      const value = initialFilters.get(id);
+      const input = document.getElementById(id === 'provider' ? 'providerFilter' : id);
+      if (value && input) input.value = value;
+    }
+    for (const id of ['since', 'until']) {
+      const value = initialFilters.get(id);
+      if (value && Number.isFinite(Date.parse(value))) {
+        document.getElementById(id).value = toDatetimeLocalValue(new Date(value));
+      }
+    }
     if (!localStorage.getItem('authToken')) {
-      window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.hash)}`;
+      window.location.href = `/login.html?returnUrl=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
     } else {
       Promise.allSettled([loadKeyOptions(), loadRawCaptureStatus()]).then(() => loadAudit());
     }

@@ -1170,3 +1170,24 @@ describe('api potluck key usage summary', () => {
         expect(stats.cost.actualUsd).toBeCloseTo(36 * 1.2, 6);
     });
 });
+
+
+test('API Key accounts remain separated by UUID across keys and Codex with the same email', async () => {
+    jest.setSystemTime(new Date('2026-11-03T04:00:00Z'));
+    const { createKey, incrementUsage, getAccountUsageSummary } = await loadKeyManager();
+    const key = await createKey('Client', 1000);
+    for (const [provider, uuid] of [['openaiResponses-custom', 'key-one'], ['openaiResponses-custom', 'key-two'], ['openai-codex-oauth', 'codex-one']]) {
+        await incrementUsage(key.id, provider, 'gpt-6.1-sol', { requestCount: 1,
+            promptTokens: 100, completionTokens: 20, cachedTokens: 50, reasoningTokens: 10, totalTokens: 120 },
+            `request-${uuid}`, { providerUuid: uuid, accountIdentity: 'same@example.com',
+                accountEmail: 'same@example.com', providerName: 'same@example.com', timestamp: '2026-11-03T03:00:00Z' });
+    }
+    const summary = await getAccountUsageSummary();
+    const accounts = summary.accounts.filter(a => a.provider === 'openaiResponses-custom');
+    expect(accounts).toHaveLength(2);
+    for (const account of accounts) {
+        expect(account.today.totalTokens).toBe(120);
+        expect(account.week.totalTokens).toBe(120);
+        expect(account.month.totalTokens).toBe(120);
+    }
+});

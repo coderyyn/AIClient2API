@@ -517,3 +517,17 @@ test('archived credential never queries usage even when its adapter already exis
         delete serviceInstances['openai-codex-oautharchived-test'];
     }
 });
+
+
+test('OpenAI Key usage is available without constructing an upstream adapter', async () => {
+    const data = await getAllProvidersUsage({}, { providerPools: {
+        'openaiResponses-custom': [{ uuid: 'project-key', accountEmail: 'test@example.com',
+            customName: 'test@example.com（200刀）', quotaResetDay: 8, OPENAI_API_KEY: 'private-fixture' }]
+    } });
+    const provider = data.providers['openaiResponses-custom'];
+    expect(provider.instances[0]).toMatchObject({ success: true,
+        usage: { source: 'local', summary: { localUsage: true, balanceStatus: 'unsupported', quotaResetDay: 8 } } });
+    expect(JSON.stringify(provider)).not.toContain('private-fixture');
+    expect(getServiceAdapter).not.toHaveBeenCalled();
+    expect(usageService.getFormattedUsage).not.toHaveBeenCalled();
+});

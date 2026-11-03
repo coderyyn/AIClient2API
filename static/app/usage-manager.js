@@ -9,6 +9,7 @@ let currentProviderConfigs = null;
 let usagePageDataPromise = null;
 let accountUsageSummaryByKey = new Map();
 let accountUsageSummaryMeta = null;
+let accountUsageSummaryStale = false;
 let antigravityRecoveryRefreshTimer = null;
 const USAGE_REFRESH_POLL_INTERVAL_MS = 1500;
 const USAGE_REFRESH_WAIT_TIMEOUT_MS = 150000;
@@ -436,10 +437,13 @@ async function loadAccountUsageSummary() {
             method: 'GET',
             headers: getAuthHeaders()
         });
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = await response.json();
-        return result?.success ? result.data : null;
+        if (!result?.success) throw new Error("Account summary unavailable");
+        accountUsageSummaryStale = false;
+        return result.data;
     } catch (error) {
+        accountUsageSummaryStale = true;
         console.debug('Potluck account usage summary unavailable:', error?.message || error);
         return null;
     }
@@ -488,6 +492,7 @@ function updateAccountUsageSummaryCache(summary) {
 
 function getAccountUsageSummary(providerType, instance = {}) {
     const candidates = [
+        instance.usage?.summary?.credentialHash,
         instance.codexAccountKey,
         instance.codexAccountId,
         instance.uuid
@@ -1166,7 +1171,7 @@ function createInstanceUsageCard(instance, providerType) {
                 ${renderCodexSubscriptionUntil(instance)}
                 ${renderCollapsedStatusIcons(instance, providerType)}
             </div>
-            ${hasVisibleUsage ? `
+            ${hasVisibleUsage && !summary.localUsage ? `
             <div class="collapsed-summary-row collapsed-summary-usage-row">
                 <div class="collapsed-progress-bar ${summary.status}"><div class="progress-fill" style="width: ${summary.usedPercent}%"></div></div>
                 <span class="collapsed-percent">
@@ -1217,7 +1222,29 @@ function createInstanceUsageCard(instance, providerType) {
     if (unavailableModels) {
         contentArea.appendChild(unavailableModels);
     }
-    if (instance.usage) {
+    if (summary.localUsage) {
+        const local = document.createElement('div');
+        local.className = 'usage-section';
+        const unavailable = accountUsageSummaryStale && !accountUsageSummary;
+
+        local.innerHTML = `<div>官方余额：暂不可查询</div>
+            <div>每月重置日：${escapeHtml(String(summary.quotaResetDay || '--'))} 号 · 下次重置 ${escapeHtml(formatDate(summary.resetAt))}</div>
+            <div class="extra-usage-info">本服务记录 · 更新 ${escapeHtml(formatDate(accountUsageSummaryMeta?.updatedAt))}${accountUsageSummaryStale ? ' · 数据已过期，刷新失败' : ''}</div>
+            <div class="extra-usage-info">今日、近7天、近30天 · 北京时间 · 仅统计本服务已记录的用量，未返回 usage 的请求 token 未知</div>
+            ${unavailable ? '<div>统计暂不可用</div>' : ''}
+            ${!unavailable && !accountUsageSummary && !accountUsageSummaryStale ? '<div>暂无请求</div>' : ''}`;
+        contentArea.appendChild(local);
+        if (!unavailable) contentArea.appendChild(renderAccountUsageSummary(accountUsageSummary || {}, instance));
+        if (summary.credentialHash) {
+            const link = document.createElement('a');
+            const until = new Date();
+            const params = new URLSearchParams({ provider: providerType, credential: summary.credentialHash,
+                since: new Date(until.getTime() - 86400000).toISOString(), until: until.toISOString() });
+            link.href = `/request-audit.html?${params}`;
+            link.textContent = '请求明细';
+            contentArea.appendChild(link);
+        }
+    } else if (instance.usage) {
         contentArea.appendChild(renderUsageDetails(instance.usage, accountUsageSummary, instance));
     } else if (instance.error) {
         contentArea.innerHTML = `<div class="usage-error-message"><i class="fas fa-exclamation-triangle"></i> <span>${escapeHtml(instance.error)}</span></div>`;
@@ -1461,6 +1488,7 @@ function renderAccountUsageSummary(accountSummary, instance = {}) {
 }
 
 function renderEstimatedWeeklyQuota(accountSummary, instance = {}) {
+    if (instance.usage?.summary?.localUsage) return '';
     const estimate = instance.weeklyQuotaEstimate;
     if (estimate && estimate.status === 'exhausted' && estimate.method === 'exhausted-period-total') {
         const weeklyAmount = Number(estimate.estimatedWeeklyUsd);
@@ -1498,6 +1526,7 @@ function renderAccountUsagePeriod(label, usage = {}) {
 function renderAccountUsageCost(usage = {}) {
     const cost = usage.cost;
     if (!cost) return '';
+    if (Number(cost.missingPriceTokens) > 0) return '<div class="account-usage-period-cost">费用不可完整估算</div>';
     const amount = Number(cost.usd ?? (Number(cost.actualUsd || 0) + Number(cost.estimatedUsd || 0)));
     return `
         <div class="account-usage-period-cost">

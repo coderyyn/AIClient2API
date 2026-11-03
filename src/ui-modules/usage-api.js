@@ -1,3 +1,4 @@
+import { getOpenAIKeyUsage } from '../services/openai-key-usage.js';
 import { CONFIG } from '../core/config-manager.js';
 import logger from '../utils/logger.js';
 import { serviceInstances, getServiceAdapter } from '../providers/adapter.js';
@@ -29,6 +30,7 @@ function sendJson(res, statusCode, payload) {
 }
 
 const supportedProviders = [
+    'openaiResponses-custom',
     MODEL_PROVIDER.KIRO_API, 
     MODEL_PROVIDER.GEMINI_CLI, 
     MODEL_PROVIDER.ANTIGRAVITY, 
@@ -731,6 +733,12 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
 
     // 受控并发获取同一 provider 类型下的实例，避免单账号串行阻塞全部刷新。
     result.instances = await mapWithConcurrency(providers, concurrency, async (provider) => {
+        if (providerType === 'openaiResponses-custom') {
+            return { uuid: provider.uuid, name: provider.customName || provider.accountEmail || provider.uuid,
+                isHealthy: provider.isHealthy !== false, isArchived: provider.isArchived === true,
+                isDisabled: provider.isDisabled === true || provider.isArchived === true,
+                success: true, usage: getOpenAIKeyUsage(provider), error: null };
+        }
         const providerKey = providerType + (provider.uuid || '');
         let adapter = serviceInstances[providerKey];
         
@@ -909,6 +917,15 @@ function enrichUsageResultsWithProviderConfig(results, currentConfig, providerPo
     if (!results?.providers) return results;
 
     results.providers = { ...results.providers };
+    const localProviders = loadProviderList('openaiResponses-custom', currentConfig, providerPoolManager);
+    results.providers['openaiResponses-custom'] = recalculateProviderUsageCounts({
+        providerType: 'openaiResponses-custom',
+        totalCount: localProviders.filter(p => !p.isArchived).length,
+        instances: localProviders.map(provider => ({ uuid: provider.uuid,
+            name: provider.customName || provider.accountEmail || provider.uuid,
+            isHealthy: provider.isHealthy !== false, isDisabled: provider.isDisabled === true,
+            isArchived: provider.isArchived === true, success: true, usage: getOpenAIKeyUsage(provider) }))
+    });
     for (const [providerType, providerData] of Object.entries(results.providers)) {
         results.providers[providerType] = enrichProviderDataWithProviderConfig(
             providerType, { ...providerData }, currentConfig, providerPoolManager
@@ -955,6 +972,12 @@ async function resolveProviderInstance(currentConfig, providerPoolManager, provi
         throw new Error(`未找到指定的提供商实例: ${uuid}`);
     }
 
+    if (providerType === 'openaiResponses-custom') {
+        return { provider, adapter: {}, instanceResult: { uuid: provider.uuid,
+            name: provider.customName || provider.accountEmail || provider.uuid,
+            isHealthy: provider.isHealthy !== false, isDisabled: provider.isDisabled === true,
+            isArchived: provider.isArchived === true, success: true, usage: getOpenAIKeyUsage(provider) } };
+    }
     const providerKey = providerType + (provider.uuid || '');
     let adapter = serviceInstances[providerKey];
 

@@ -99,7 +99,7 @@ function normalizeEmail(value) {
 }
 
 function isCodexEmailAccountProvider(provider) {
-    return provider === 'openai-codex-oauth' || provider === 'openaiResponses-custom';
+    return provider === 'openai-codex-oauth';
 }
 
 function getCanonicalAccountIdentity(provider, providerUuid, accountIdentity = null, accountEmail = null, providerName = null) {
@@ -114,7 +114,7 @@ function getCanonicalAccountIdentity(provider, providerUuid, accountIdentity = n
         };
     }
 
-    const identity = accountIdentity || providerUuid;
+    const identity = provider === 'openaiResponses-custom' ? providerUuid || accountIdentity : accountIdentity || providerUuid;
     if (!provider || !identity) return null;
     return {
         provider,

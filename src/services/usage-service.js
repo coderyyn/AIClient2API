@@ -1,3 +1,4 @@
+import { getOpenAIKeyUsage } from './openai-key-usage.js';
 /**
  * 用量查询服务
  * 用于处理各个提供商的授权文件用量查询
@@ -19,6 +20,7 @@ import {
 export class UsageService {
     constructor() {
         this.providerHandlers = {
+            'openaiResponses-custom': uuid => getOpenAIKeyUsage(getProviderPoolManager()?.providerPools?.['openaiResponses-custom']?.find(p => p.uuid === uuid)),
             [MODEL_PROVIDER.KIRO_API]: this.getKiroUsage.bind(this),
             [MODEL_PROVIDER.GEMINI_CLI]: this.getGeminiUsage.bind(this),
             [MODEL_PROVIDER.ANTIGRAVITY]: this.getAntigravityUsage.bind(this),

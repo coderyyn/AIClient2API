@@ -692,7 +692,7 @@ function latestTimestamp(current, candidate) {
 }
 
 function isCodexEmailAccountProvider(provider) {
-    return provider === 'openai-codex-oauth' || provider === 'openaiResponses-custom';
+    return provider === 'openai-codex-oauth';
 }
 
 function getCanonicalAccountUsageIdentity(provider, providerUuid, accountIdentity = null, accountEmail = null, providerName = null) {
@@ -706,7 +706,7 @@ function getCanonicalAccountUsageIdentity(provider, providerUuid, accountIdentit
         };
     }
 
-    const identity = accountIdentity || providerUuid;
+    const identity = provider === 'openaiResponses-custom' ? providerUuid || accountIdentity : accountIdentity || providerUuid;
     if (!provider || !identity) return null;
     return {
         provider,
@@ -1022,7 +1022,7 @@ function getAccountSummaryAliases(accountKey, account = {}, options = {}) {
     }
 
     const emailAlias = normalizeEmailAlias(account.accountEmail) || normalizeEmailAlias(account.providerName);
-    if (emailAlias) {
+    if (emailAlias && provider !== 'openaiResponses-custom') {
         aliases.add(`email:${provider}:${emailAlias}`);
     }
 
