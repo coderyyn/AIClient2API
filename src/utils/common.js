@@ -3647,7 +3647,8 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         throw new Error("Could not determine the model from the request.");
     }
     const clientRequestedModel = model;
-    prepareMixedRequest(CONFIG, model, originalRequestBody, requestPath);
+    prepareMixedRequest(CONFIG, model, originalRequestBody, requestPath,
+        isImageGenerationRequest({ requestPath, model, body: originalRequestBody }));
     const auditContext = requestContext.get('requestAudit');
     if (auditContext && typeof auditContext === 'object') {
         auditContext.requestedModel = clientRequestedModel;

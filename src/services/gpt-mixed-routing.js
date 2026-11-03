@@ -52,8 +52,8 @@ function coordinationFailure() {
 
 // Called only from the model-request entrypoint. No prompt or credential is
 // retained in the routing state or response binding.
-export function prepareMixedRequest(config, model, body, path) {
-    if (!/\/v1\/(?:responses|chat\/completions)$/.test(path || '')) {
+export function prepareMixedRequest(config, model, body, path, isImageRequest = false) {
+    if (isImageRequest || !/\/v1\/(?:responses|chat\/completions)$/.test(path || '')) {
         requestContext.set('gptRequestPolicy', null);
         return;
     }
@@ -68,7 +68,7 @@ export async function selectMixedRoute(manager, config, requestedModel, options 
     const policy = requestContext.get('gptRequestPolicy');
     if (!policy || config.GPT_MIXED_ROUTING_ENABLED !== true || !manager) return null;
     const previousState = requestContext.get('gptMixedState');
-    if (config._temporaryKeyModelRoute) return null;
+    if (config._temporaryKeyModelRoute || options.routingStrategy === 'image-round-robin') return null;
     const model = normalizeMixedModel(requestedModel);
     if (!isMixedTextModel(model) || isLunaModel(model)) return null;
     const explicitPrefix = String(requestedModel || '').split(':');

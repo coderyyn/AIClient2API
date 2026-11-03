@@ -1,5 +1,6 @@
 import { jest, test, expect, beforeEach } from '@jest/globals';
 import requestContext from '../src/utils/context.js';
+import { isImageGenerationRequest } from '../src/utils/common.js';
 import { mixedCandidateRejection, normalizeMixedModel, isLunaModel, isMixedTextModel,
     selectMixedRoute, prepareMixedRequest, validateMixedSend, bindMixedResponse, MIXED_KEY, MIXED_CODEX } from '../src/services/gpt-mixed-routing.js';
 import { normalizeProviderConfigFields } from '../src/utils/provider-config-normalizer.js';
@@ -88,5 +89,17 @@ test('image endpoints and explicitly scoped model routes keep their existing rou
     prepareMixedRequest(cfg, model, {}, '/v1/responses');
     expect(await selectMixedRoute(m, { ...cfg, _temporaryKeyModelRoute: { id: 'explicit-route' } }, model)).toBeNull();
     expect(await selectMixedRoute(m, { ...cfg, MODEL_PROVIDER: MIXED_KEY }, model)).toBeNull();
+    expect(m.coordination.acquire).not.toHaveBeenCalled();
+}));
+
+test('Responses image-generation tools and internal image routing never enter mixed text routing', async () => requestContext.run({}, async () => {
+    const cfg = config();
+    const m = manager([provider('a')], [provider('b')]);
+    const body = { model, tools: [{ type: 'image_generation' }] };
+    const path = '/v1/responses';
+    prepareMixedRequest(cfg, model, body, path, isImageGenerationRequest({ requestPath: path, model, body }));
+    expect(await selectMixedRoute(m, cfg, model)).toBeNull();
+    prepareMixedRequest(cfg, model, {}, path);
+    expect(await selectMixedRoute(m, cfg, model, { routingStrategy: 'image-round-robin' })).toBeNull();
     expect(m.coordination.acquire).not.toHaveBeenCalled();
 }));
