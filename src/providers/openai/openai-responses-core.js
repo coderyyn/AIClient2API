@@ -10,14 +10,16 @@ import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvide
 import { MODEL_PROVIDER, getRetryAfterMs, captureSafeUpstreamErrorDiagnostic } from '../../utils/common.js';
 
 // OpenAI Responses API specification service for interacting with third-party models
-function streamFailure(detail = {}) {
+function streamFailure(detail = {}, headers = {}) {
     const code = String(detail.code || detail.type || 'INCOMPLETE_UPSTREAM_STREAM');
     const status = /quota|usage_limit|credit_balance|rate_limit/.test(code) ? 429 : 502;
     return Object.assign(new Error('Upstream Responses stream failed'), {
         code, status, statusCode: status, shouldSwitchCredential: true,
         isResponsesStreamFailure: true,
-        response: { status, data: { error: {
+        response: { status, headers, data: { error: {
             code, type: detail.type || null,
+            ...(Number.isFinite(Number(detail.resets_in_seconds)) && Number(detail.resets_in_seconds) > 0 ? { resets_in_seconds: Number(detail.resets_in_seconds) } : {}),
+            ...(Number.isFinite(Number(detail.resets_at)) && Number(detail.resets_at) > 0 ? { resets_at: Number(detail.resets_at) } : {}),
             message: String(detail.message || 'Upstream response did not complete').slice(0, 1024)
         } } }
     });
@@ -60,7 +62,7 @@ export class OpenAIResponsesApiService {
     }
 
     async callApi(endpoint, body, isRetry = false, retryCount = 0) {
-        const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
+        const maxRetries = this.config.REQUEST_MAX_RETRIES ?? 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;  // 1 second base delay
 
         const attempt = await this._beginMixedAttempt(body, false);
@@ -116,7 +118,7 @@ export class OpenAIResponsesApiService {
     }
 
     async *streamApi(endpoint, body, isRetry = false, retryCount = 0) {
-        const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
+        const maxRetries = this.config.REQUEST_MAX_RETRIES ?? 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;  // 1 second base delay
 
         // OpenAI 的流式请求需要将 stream 设置为 true
@@ -148,7 +150,7 @@ export class OpenAIResponsesApiService {
                 if (event.type === 'error' || event.type === 'response.failed' || event.type === 'response.incomplete' || event.error) {
                     throw streamFailure(event.error || event.response?.error || (event.type === 'error' ? event : null) || {
                         code: event.response?.incomplete_details?.reason || 'INCOMPLETE_UPSTREAM_STREAM'
-                    });
+                    }, { 'retry-after': response.headers?.['retry-after'] });
                 }
                 if (event.type === 'response.completed') completed = true;
                 return event;

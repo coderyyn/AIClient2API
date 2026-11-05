@@ -80,12 +80,12 @@ describe('provider pool quota reset ordering', () => {
     });
 });
 
-describe('insufficient_quota cooldown until the key quota resets', () => {
+describe('insufficient_quota requires explicit recovery evidence', () => {
     const quotaError = (status = 429) => Object.assign(new Error('You exceeded your current quota'), {
         response: { status, data: { error: { type: 'insufficient_quota', code: 'insufficient_quota', message: 'You exceeded your current quota' } } }
     });
 
-    test('marks the key unhealthy until its next monthly reset and skips it afterwards', async () => {
+    test('marks the key unhealthy without guessing a monthly reset and skips it afterwards', async () => {
         const manager = createManager([
             { uuid: 'reset-3', customName: 'B', quotaResetDay: 3 },
             { uuid: 'reset-14', customName: 'A', quotaResetDay: 14 }
@@ -103,11 +103,11 @@ describe('insufficient_quota cooldown until the key quota resets', () => {
         const exhausted = manager.providerStatus['openaiResponses-custom'].find(p => p.uuid === 'reset-3');
         expect(handled).toBe(true);
         expect(exhausted.config.isHealthy).toBe(false);
-        expect(exhausted.config.scheduledRecoveryTime).toBe('2026-11-02T16:00:00.000Z'); // 上海 11-03 00:00
+        expect(exhausted.config.scheduledRecoveryTime).toBeNull();
         expect((await manager.selectProvider('openaiResponses-custom', 'gpt-6-sol')).uuid).toBe('reset-14');
     });
 
-    test('leaves keys without quotaResetDay on the existing 429 policy', () => {
+    test('also excludes exhausted keys without quotaResetDay', () => {
         const manager = createManager([{ uuid: 'plain', customName: 'P' }]);
         const handled = applyProviderRateLimitCooldown({
             error: quotaError(),
@@ -117,7 +117,7 @@ describe('insufficient_quota cooldown until the key quota resets', () => {
             providerUuid: 'plain',
             requestedModel: 'gpt-6-sol'
         });
-        expect(handled).toBe(false);
-        expect(manager.providerStatus['openaiResponses-custom'][0].config.isHealthy).not.toBe(false);
+        expect(handled).toBe(true);
+        expect(manager.providerStatus['openaiResponses-custom'][0].config.isHealthy).toBe(false);
     });
 });

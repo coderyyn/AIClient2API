@@ -1427,6 +1427,21 @@ export function applyProviderRateLimitCooldown({
     loggerPrefix = '[Provider Pool]'
 }) {
     if (error?.origin === 'local_provider_rpm') return false;
+    // API-key quota signals must not inherit a guessed monthly reset date.
+    if (providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES && providerPoolManager && providerUuid
+        && Number(getErrorStatusCode(error)) === 429) {
+        const diagnostic = getSafeUpstreamErrorDiagnostic(error);
+        const code = String(diagnostic?.code || diagnostic?.type || '').toLowerCase();
+        const exhausted = ['insufficient_quota', 'credit_balance_exhausted', 'usage_limit_reached'].includes(code);
+        const delay = getRetryAfterMs(error);
+        if (delay !== null || exhausted) {
+            providerPoolManager.markProviderUnhealthyWithRecoveryTime(providerType, { uuid: providerUuid },
+                exhausted ? 'Upstream quota exhausted; recovery requires explicit reset or verification' : 'Upstream rate limit',
+                delay !== null ? new Date(Date.now() + delay) : null);
+            return true;
+        }
+    }
+
     // Antigravity may report model-wide capacity exhaustion as HTTP 503. Normalize
     // this one explicit upstream condition before the generic 429 handling below;
     // unrelated 503 errors must retain their normal server-error semantics.
@@ -2524,6 +2539,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
         }
         
+        if (toProvider === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES && applyProviderRateLimitCooldown({
+            error, config: CONFIG, providerPoolManager, providerType: toProvider,
+            providerUuid: pooluuid, requestedModel: model
+        })) error.credentialMarkedUnhealthy = true;
+
         // 如果客户端已断开，不需要发送错误响应
         if (clientDisconnected.value) {
             logger.info('[Stream] Skipping error response due to client disconnect');
@@ -2588,7 +2608,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        if (applyProviderRateLimitCooldown({
+        if (!error.credentialMarkedUnhealthy && applyProviderRateLimitCooldown({
             error,
             config: CONFIG,
             providerPoolManager,
@@ -3134,7 +3154,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        if (applyProviderRateLimitCooldown({
+        if (!error.credentialMarkedUnhealthy && applyProviderRateLimitCooldown({
             error,
             config: CONFIG,
             providerPoolManager,

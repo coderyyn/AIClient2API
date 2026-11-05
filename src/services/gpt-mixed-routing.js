@@ -1,3 +1,4 @@
+import { resolveCodexAffinityKey } from './codex-affinity.js';
 import requestContext from '../utils/context.js';
 import { getNextQuotaResetTime } from '../utils/quota-reset-time.js';
 import { getProviderModels } from '../providers/provider-models.js';
@@ -60,6 +61,7 @@ export function prepareMixedRequest(config, model, body, path, isImageRequest = 
     requestContext.set('gptRequestPolicy', {
         entryProvider: config.MODEL_PROVIDER,
         model: normalizeMixedModel(model),
+        codexAffinityOnly: Boolean(resolveCodexAffinityKey(config, config.MODEL_PROVIDER, model)),
         previousResponseId: typeof body?.previous_response_id === 'string' ? body.previous_response_id : null
     });
 }
@@ -67,7 +69,8 @@ export function prepareMixedRequest(config, model, body, path, isImageRequest = 
 export async function selectMixedRoute(manager, config, requestedModel, options = {}) {
     const policy = requestContext.get('gptRequestPolicy');
     if (!policy || !manager) return null;
-    if (config.GPT_MIXED_ROUTING_ENABLED !== true) {
+    if (options.stickyProviderKey && policy.entryProvider === MIXED_CODEX) policy.codexAffinityOnly = true;
+    if (config.GPT_MIXED_ROUTING_ENABLED !== true || policy.codexAffinityOnly) {
         if (policy.entryProvider === MIXED_CODEX && policy.previousResponseId && isMixedTextModel(requestedModel)) {
             if (!manager.coordination?.getMixedResponseBinding) throw coordinationFailure();
             let binding;
@@ -175,7 +178,16 @@ export async function selectMixedRoute(manager, config, requestedModel, options 
     return { provider, selection, model, metadata };
 }
 
+export function assertAffinityProvider(type) {
+    if (requestContext.get('gptRequestPolicy')?.codexAffinityOnly && type !== MIXED_CODEX && !type?.startsWith(`${MIXED_CODEX}-`)) {
+        throw Object.assign(unavailable('CODEX_AFFINITY_PROVIDER_MISMATCH'), {
+            origin: 'local_provider_policy', shouldSwitchCredential: false
+        });
+    }
+}
+
 export async function validateMixedSend(type, uuid) {
+    assertAffinityProvider(type);
     const state = requestContext.get('gptMixedState');
     const policy = requestContext.get('gptRequestPolicy');
     if (!state && !policy) return;

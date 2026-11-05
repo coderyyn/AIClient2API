@@ -8,6 +8,7 @@ export const CODEX_RUNTIME_CONFIG_SYNC_TYPE = 'codex_runtime_config_sync';
 export const CODEX_RUNTIME_CONFIG_KEYS = Object.freeze([
     'CODEX_CLOAKING_ENABLED',
     'GPT_MIXED_ROUTING_ENABLED',
+    'CODEX_POTLUCK_STICKY_PROVIDER_ENABLED',
 ]);
 
 const CODEX_ADAPTER_KEY_PREFIX = 'openai-codex-oauth';

@@ -127,3 +127,12 @@ test('split UTF8 and final line without newline preserve a complete response', a
         expect(getRequestAttempts(body)[0].status).toBe('success');
     });
 });
+
+test('stream quota error preserves explicit reset without leaking envelope', async()=>{
+ const {request,state,service}=setup();
+ request.mockResolvedValue({status:200,headers:{'retry-after':'12'},data:Readable.from(['data: {"type":"error","code":"usage_limit_reached","message":"fixture","resets_in_seconds":90,"input":"must-not-retain"}\n\n'])});
+ await requestContext.run({gptMixedState:state,gptRequestPolicy:{model}},async()=>{
+  try {for await(const e of service.streamApi('/responses',{model})){};throw new Error('expected failure');}
+  catch(e){expect(e.response.headers['retry-after']).toBe('12');expect(e.response.data.error.resets_in_seconds).toBe(90);expect(JSON.stringify(e.response)).not.toContain('must-not-retain');}
+ });
+});

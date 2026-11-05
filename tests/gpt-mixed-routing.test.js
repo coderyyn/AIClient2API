@@ -115,3 +115,22 @@ test('disabled mixing rejects custom-bound continuation but preserves direct cus
     expect(await selectMixedRoute(m,cfg,model)).toBeNull();
     expect(m.coordination.acquire).not.toHaveBeenCalled();
 }));
+
+for (const field of ['promptCacheKey','threadId','sessionId','installationId',null]) {
+    test(`effective affinity ${field} excludes custom before mixed selection and at send`, async () => requestContext.run({}, async () => {
+        const cfg={...config(),potluckApiKey:'fixture',CODEX_POTLUCK_STICKY_PROVIDER_ENABLED:true,_codexCacheAffinityScope:field?{[field]:'scope'}:{}};
+        const m=manager([provider('a')],[provider('b')]);
+        prepareMixedRequest(cfg,model,{},'/v1/responses');
+        expect(await selectMixedRoute(m,cfg,model)).toBeNull();
+        expect(m.coordination.acquire).not.toHaveBeenCalled();
+        await expect(validateMixedSend(MIXED_KEY,'b')).rejects.toMatchObject({code:'CODEX_AFFINITY_PROVIDER_MISMATCH',shouldSwitchCredential:false});
+        m.coordination.getMixedResponseBinding.mockResolvedValue({providerType:MIXED_KEY,uuid:'b'});
+        prepareMixedRequest(cfg,model,{previous_response_id:'old'},'/v1/responses');
+        await expect(selectMixedRoute(m,cfg,model)).rejects.toMatchObject({code:'GPT_CONTINUATION_UNAVAILABLE'});
+    }));
+}
+test('session headers alone do not enable affinity', async () => requestContext.run({},async()=>{
+    const cfg={...config(),potluckApiKey:'fixture',CODEX_POTLUCK_STICKY_PROVIDER_ENABLED:false,_codexCacheAffinityScope:{threadId:'thread'}};
+    const m=manager([],[provider('b')]);prepareMixedRequest(cfg,model,{},'/v1/responses');
+    expect((await selectMixedRoute(m,cfg,model)).selection.providerType).toBe(MIXED_KEY);
+}));

@@ -5326,6 +5326,7 @@ export class ProviderPoolManager {
                 provider.config.scheduledRecoveryTime = recoveryDate.toISOString();
                 this._log('warn', `Marked provider as unhealthy with recovery time: ${this._getDisplayName(providerConfig)} for type ${providerType}. Recovery at: ${recoveryDate.toISOString()}. Reason: ${errorMessage || 'Quota exhausted'}`);
             } else {
+                provider.config.scheduledRecoveryTime = null;
                 this._log('warn', `Marked provider as unhealthy: ${this._getDisplayName(providerConfig)} for type ${providerType}. Reason: ${errorMessage || 'Quota exhausted'}`);
             }
 

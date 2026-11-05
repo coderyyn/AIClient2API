@@ -90,3 +90,15 @@ test('an exhausted Codex pool still permits an eligible Key credential', async (
         jest.restoreAllMocks();
     });
 });
+
+test('affinity is evaluated before mixed selection and blocks custom when OAuth is exhausted',async()=>{
+ config.potluckApiKey='fixture';config.CODEX_POTLUCK_STICKY_PROVIDER_ENABLED=true;config._codexCacheAffinityScope={threadId:'fixture-thread'};
+ await requestContext.run({},async()=>{
+  prepareMixedRequest(config,model,{},'/v1/responses');
+  const first=await getApiServiceWithFallback(config,model,{acquireSlot:true});expect(first.actualProviderType).toBe(MIXED_CODEX);
+  await closeProviderLeaseScope(requestContext.getStore());
+  manager.providerStatus[MIXED_CODEX][0].config.isDisabled=true;
+  await expect(getApiServiceWithFallback(config,model,{acquireSlot:true})).rejects.toBeDefined();
+  expect(getServiceAdapter.mock.calls.every(([c])=>c.MODEL_PROVIDER===MIXED_CODEX)).toBe(true);
+ });
+});
