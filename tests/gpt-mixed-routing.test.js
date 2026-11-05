@@ -103,3 +103,15 @@ test('Responses image-generation tools and internal image routing never enter mi
     expect(await selectMixedRoute(m, cfg, model, { routingStrategy: 'image-round-robin' })).toBeNull();
     expect(m.coordination.acquire).not.toHaveBeenCalled();
 }));
+
+test('disabled mixing rejects custom-bound continuation but preserves direct custom calls', async () => requestContext.run({}, async () => {
+    const cfg={...config(),GPT_MIXED_ROUTING_ENABLED:false};const m=manager([provider('a')],[provider('b')]);
+    m.coordination.getMixedResponseBinding.mockResolvedValue({providerType:MIXED_KEY,uuid:'b'});
+    prepareMixedRequest(cfg,model,{previous_response_id:'old'},'/v1/responses');
+    await expect(selectMixedRoute(m,cfg,model)).rejects.toMatchObject({code:'GPT_CONTINUATION_UNAVAILABLE'});
+    prepareMixedRequest({...cfg,MODEL_PROVIDER:MIXED_KEY},model,{previous_response_id:'old'},'/v1/responses');
+    expect(await selectMixedRoute(m,{...cfg,MODEL_PROVIDER:MIXED_KEY},model)).toBeNull();
+    prepareMixedRequest(cfg,model,{},'/v1/responses');
+    expect(await selectMixedRoute(m,cfg,model)).toBeNull();
+    expect(m.coordination.acquire).not.toHaveBeenCalled();
+}));

@@ -2,6 +2,7 @@ import { validateMixedSend, hasMixedNativeAttempts, MIXED_KEY } from '../../serv
 import requestContext from '../../utils/context.js';
 import { beginRequestAttempt, finishRequestAttempt } from '../../utils/request-attempts.js';
 import axios from 'axios';
+import { StringDecoder } from 'node:string_decoder';
 import logger from '../../utils/logger.js';
 import * as http from 'http';
 import * as https from 'https';
@@ -9,6 +10,19 @@ import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvide
 import { MODEL_PROVIDER, getRetryAfterMs, captureSafeUpstreamErrorDiagnostic } from '../../utils/common.js';
 
 // OpenAI Responses API specification service for interacting with third-party models
+function streamFailure(detail = {}) {
+    const code = String(detail.code || detail.type || 'INCOMPLETE_UPSTREAM_STREAM');
+    const status = /quota|usage_limit|credit_balance|rate_limit/.test(code) ? 429 : 502;
+    return Object.assign(new Error('Upstream Responses stream failed'), {
+        code, status, statusCode: status, shouldSwitchCredential: true,
+        isResponsesStreamFailure: true,
+        response: { status, data: { error: {
+            code, type: detail.type || null,
+            message: String(detail.message || 'Upstream response did not complete').slice(0, 1024)
+        } } }
+    });
+}
+
 export class OpenAIResponsesApiService {
     constructor(config) {
         if (!config.OPENAI_API_KEY) {
@@ -122,42 +136,49 @@ export class OpenAIResponsesApiService {
             const response = await this.axiosInstance.request(axiosConfig);
 
             const stream = response.data;
+            const decoder = new StringDecoder('utf8');
             let buffer = '';
+            const parseLine = line => {
+                if (!line.startsWith('data:')) return null;
+                const data = line.slice(5).trim();
+                if (!data || data === '[DONE]') return null;
+                let event;
+                try { event = JSON.parse(data); }
+                catch { throw streamFailure({ code: 'INVALID_UPSTREAM_STREAM' }); }
+                if (event.type === 'error' || event.type === 'response.failed' || event.type === 'response.incomplete' || event.error) {
+                    throw streamFailure(event.error || event.response?.error || (event.type === 'error' ? event : null) || {
+                        code: event.response?.incomplete_details?.reason || 'INCOMPLETE_UPSTREAM_STREAM'
+                    });
+                }
+                if (event.type === 'response.completed') completed = true;
+                return event;
+            };
 
             for await (const chunk of stream) {
-                buffer += chunk.toString();
+                buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
                 let newlineIndex;
                 while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
                     const line = buffer.substring(0, newlineIndex).trim();
                     buffer = buffer.substring(newlineIndex + 1);
 
-                    if (line.startsWith('data: ')) {
-                        const jsonData = line.substring(6).trim();
-                        if (jsonData === '[DONE]') {
-                            finishRequestAttempt(attempt, { status: completed ? 'success' : 'error', httpStatus: 200,
-                                ...(!completed ? { errorCode: 'INCOMPLETE_UPSTREAM_STREAM' } : {}) });
-                            return; // Stream finished
-                        }
-                        try {
-                            const parsedChunk = JSON.parse(jsonData);
-                            outputStarted = true;
-                            if (parsedChunk.type === 'response.completed') completed = true;
-                            yield parsedChunk;
-                        } catch (e) {
-                            logger.warn("[OpenAIResponsesApiService] Failed to parse stream chunk JSON:", e.message, "Data:", jsonData);
-                        }
-                    } else if (line === '') {
-                        // Empty line, end of an event
-                    }
+                    const event = parseLine(line);
+                    if (event) { outputStarted = true; yield event; }
                 }
             }
-            finishRequestAttempt(attempt, { status: completed ? 'success' : 'error', httpStatus: 200,
-                ...(!completed ? { errorCode: 'INCOMPLETE_UPSTREAM_STREAM' } : {}) });
+            buffer += decoder.end();
+            if (buffer.trim()) {
+                const event = parseLine(buffer.trim());
+                if (event) { outputStarted = true; yield event; }
+            }
+            if (!completed) throw streamFailure();
+            finishRequestAttempt(attempt, { status: 'success', httpStatus: 200 });
         } catch (error) {
-            const diagnostic = attempt ? await captureSafeUpstreamErrorDiagnostic(error) : null;
+            const diagnostic = await captureSafeUpstreamErrorDiagnostic(error);
             finishRequestAttempt(attempt, { status: 'error', httpStatus: error.response?.status || null,
-                errorCode: diagnostic?.code || error.response?.data?.error?.code || error.code || null });
-            if (attempt && outputStarted) throw error;
+                errorCode: diagnostic?.code || error.response?.data?.error?.code || error.code || null,
+                errorType: diagnostic?.type || null, errorMessage: diagnostic?.message || null });
+            if (outputStarted || body.previous_response_id) error.shouldSwitchCredential = false;
+            if (outputStarted || body.previous_response_id || error.isResponsesStreamFailure) throw error;
             const status = error.response?.status;
             const data = error.response?.data;
             if (['insufficient_quota', 'credit_balance_exhausted'].includes(diagnostic?.code || data?.error?.code)) throw error;

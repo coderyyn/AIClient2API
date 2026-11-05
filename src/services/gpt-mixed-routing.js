@@ -66,7 +66,23 @@ export function prepareMixedRequest(config, model, body, path, isImageRequest = 
 
 export async function selectMixedRoute(manager, config, requestedModel, options = {}) {
     const policy = requestContext.get('gptRequestPolicy');
-    if (!policy || config.GPT_MIXED_ROUTING_ENABLED !== true || !manager) return null;
+    if (!policy || !manager) return null;
+    if (config.GPT_MIXED_ROUTING_ENABLED !== true) {
+        if (policy.entryProvider === MIXED_CODEX && policy.previousResponseId && isMixedTextModel(requestedModel)) {
+            if (!manager.coordination?.getMixedResponseBinding) throw coordinationFailure();
+            let binding;
+            try {
+                binding = await manager.coordination.getMixedResponseBinding(
+                    getProviderLeaseScope().keyRef || 'anonymous', policy.previousResponseId);
+            } catch { throw coordinationFailure(); }
+            if (binding?.providerType === MIXED_KEY) {
+                const error = unavailable('GPT_CONTINUATION_UNAVAILABLE');
+                error.message = 'This response belongs to a temporarily unavailable provider. Start a new conversation.';
+                throw error;
+            }
+        }
+        return null;
+    }
     const previousState = requestContext.get('gptMixedState');
     if (config._temporaryKeyModelRoute || options.routingStrategy === 'image-round-robin') return null;
     const model = normalizeMixedModel(requestedModel);

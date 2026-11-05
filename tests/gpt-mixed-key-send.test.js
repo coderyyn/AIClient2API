@@ -78,3 +78,52 @@ test('closing an unfinished stream finalizes the actual attempt as interrupted',
         expect(getRequestAttempts(body)[0]).toMatchObject({ status: 'error', errorCode: 'UPSTREAM_STREAM_INTERRUPTED' });
     });
 });
+
+for (const type of ['error', 'response.failed', 'response.incomplete']) {
+    test(`HTTP 200 ${type} is a terminal audited failure`, async () => {
+        const { request, state, service } = setup();
+        const detail = { code: 'usage_limit_reached', type: 'usage_limit_reached', message: 'Usage allowance exhausted' };
+        const event = type === 'error' ? { type, error: detail } : { type, response: { error: detail } };
+        request.mockResolvedValue({ status: 200, data: Readable.from(['data: '+JSON.stringify(event)+'\n\n']) });
+        const body = { model };
+        await requestContext.run({ gptMixedState: state, gptRequestPolicy: { model } }, async () => {
+            await expect(async () => { for await (const e of service.streamApi('/responses', body)) {} }).rejects.toMatchObject({ code: 'usage_limit_reached', status: 429 });
+            expect(getRequestAttempts(body)[0]).toMatchObject({ status: 'error', errorCode: 'usage_limit_reached', errorType: 'usage_limit_reached' });
+        });
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+}
+
+test('failure after metadata does not resend or permit credential switching', async () => {
+    const { request, state, service } = setup();
+    request.mockResolvedValue({ status: 200, data: Readable.from(['data: {"type":"response.created"}\n\ndata: {"type":"error","error":{"code":"usage_limit_reached"}}\n\n']) });
+    await requestContext.run({ gptMixedState: state, gptRequestPolicy: { model } }, async () => {
+        const events=[];
+        await expect(async () => { for await (const e of service.streamApi('/responses', { model })) events.push(e); }).rejects.toMatchObject({ shouldSwitchCredential: false });
+        expect(events).toHaveLength(1);
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+});
+
+test('premature EOF and DONE without completion reject instead of succeeding', async () => {
+    for (const data of ['', 'data: [DONE]\n\n']) {
+        const { request, state, service } = setup();
+        request.mockResolvedValue({ status: 200, data: Readable.from([data]) });
+        await requestContext.run({ gptMixedState: state, gptRequestPolicy: { model } }, async () => {
+            await expect(async () => { for await (const e of service.streamApi('/responses', { model })) {} }).rejects.toMatchObject({ code: 'INCOMPLETE_UPSTREAM_STREAM' });
+        });
+        expect(request).toHaveBeenCalledTimes(1);
+    }
+});
+
+test('split UTF8 and final line without newline preserve a complete response', async () => {
+    const { request, state, service } = setup();
+    const data = Buffer.from('data: '+JSON.stringify({type:'response.completed',response:{output_text:'测试'}}));
+    request.mockResolvedValue({status:200,data:Readable.from([...data].map(b=>Buffer.from([b])))});
+    await requestContext.run({ gptMixedState: state, gptRequestPolicy: { model } }, async () => {
+        const events=[];const body={model};
+        for await (const e of service.streamApi('/responses',body)) events.push(e);
+        expect(events[0].response.output_text).toBe('测试');
+        expect(getRequestAttempts(body)[0].status).toBe('success');
+    });
+});
