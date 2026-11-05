@@ -49,14 +49,16 @@ export async function readPasswordFile() {
  * 验证登录凭据
  */
 export async function validateCredentials(password) {
+    if (typeof password !== 'string' || !password.trim()) return false;
     const storedPassword = await readPasswordFile();
-    if (!storedPassword || !password) return false;
+    if (!storedPassword) return false;
 
     // 新格式：pbkdf2:salt:hash
     if (storedPassword.startsWith('pbkdf2:')) {
         const parts = storedPassword.split(':');
         if (parts.length !== 3) return false;
         const [, salt, storedHash] = parts;
+        if (!/^[a-f0-9]{32}$/.test(salt) || !/^[a-f0-9]{128}$/.test(storedHash)) return false;
         const inputHash = await new Promise((resolve, reject) =>
             crypto.pbkdf2(password.trim(), salt, PASSWORD.PBKDF2_ITERATIONS, PASSWORD.PBKDF2_KEYLEN, PASSWORD.PBKDF2_DIGEST, (err, key) =>
                 err ? reject(err) : resolve(key.toString('hex'))
@@ -136,7 +138,11 @@ async function readTokenStore() {
     try {
         if (existsSync(TOKEN_STORE_FILE)) {
             const content = await fs.readFile(TOKEN_STORE_FILE, 'utf8');
-            return JSON.parse(content);
+            const parsed = JSON.parse(content);
+            if (!parsed || typeof parsed.tokens !== 'object' || !parsed.tokens || Array.isArray(parsed.tokens)) {
+                return { tokens: Object.create(null) };
+            }
+            return { tokens: Object.assign(Object.create(null), parsed.tokens) };
         } else {
             // 如果文件不存在，创建一个默认的token store
             await writeTokenStore({ tokens: {} });
@@ -163,19 +169,25 @@ async function writeTokenStore(tokenStore) {
  * 验证简单token
  */
 export async function verifyToken(token) {
+    // Only accept tokens issued by generateToken(), never prototype property names.
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
     const tokenStore = await readTokenStore();
+    if (!Object.hasOwn(tokenStore.tokens, token)) return null;
     const tokenInfo = tokenStore.tokens[token];
-    if (!tokenInfo) {
-        return null;
-    }
-    
-    // 检查是否过期
-    if (Date.now() > tokenInfo.expiryTime) {
+    if (!isValidTokenInfo(tokenInfo)) return null;
+
+    if (Date.now() >= tokenInfo.expiryTime) {
         await deleteToken(token);
         return null;
     }
-    
+
     return tokenInfo;
+}
+
+function isValidTokenInfo(tokenInfo) {
+    return tokenInfo !== null && typeof tokenInfo === 'object' && !Array.isArray(tokenInfo) &&
+        Object.hasOwn(tokenInfo, 'expiryTime') &&
+        typeof tokenInfo.expiryTime === 'number' && Number.isFinite(tokenInfo.expiryTime);
 }
 
 /**
@@ -192,7 +204,7 @@ async function saveToken(token, tokenInfo) {
  */
 async function deleteToken(token) {
     const tokenStore = await readTokenStore();
-    if (tokenStore.tokens[token]) {
+    if (Object.hasOwn(tokenStore.tokens, token)) {
         delete tokenStore.tokens[token];
         await writeTokenStore(tokenStore);
     }
@@ -284,8 +296,8 @@ export async function cleanupExpiredTokens() {
     const now = Date.now();
     let hasChanges = false;
     
-    for (const token in tokenStore.tokens) {
-        if (now > tokenStore.tokens[token].expiryTime) {
+    for (const [token, info] of Object.entries(tokenStore.tokens)) {
+        if (!/^[a-f0-9]{64}$/.test(token) || !isValidTokenInfo(info) || now >= info.expiryTime) {
             delete tokenStore.tokens[token];
             hasChanges = true;
         }
@@ -305,7 +317,7 @@ export async function checkAuth(req) {
     
     // 1. 检查 Authorization header
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
     }
     
