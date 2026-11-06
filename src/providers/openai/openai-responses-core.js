@@ -1,11 +1,30 @@
+import { validateMixedSend, hasMixedNativeAttempts, MIXED_KEY } from '../../services/gpt-mixed-routing.js';
+import requestContext from '../../utils/context.js';
+import { beginRequestAttempt, finishRequestAttempt } from '../../utils/request-attempts.js';
 import axios from 'axios';
+import { StringDecoder } from 'node:string_decoder';
 import logger from '../../utils/logger.js';
 import * as http from 'http';
 import * as https from 'https';
 import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
-import { MODEL_PROVIDER, getRetryAfterMs } from '../../utils/common.js';
+import { MODEL_PROVIDER, getRetryAfterMs, captureSafeUpstreamErrorDiagnostic } from '../../utils/common.js';
 
 // OpenAI Responses API specification service for interacting with third-party models
+function streamFailure(detail = {}, headers = {}) {
+    const code = String(detail.code || detail.type || 'INCOMPLETE_UPSTREAM_STREAM');
+    const status = /quota|usage_limit|credit_balance|rate_limit/.test(code) ? 429 : 502;
+    return Object.assign(new Error('Upstream Responses stream failed'), {
+        code, status, statusCode: status, shouldSwitchCredential: true,
+        isResponsesStreamFailure: true,
+        response: { status, headers, data: { error: {
+            code, type: detail.type || null,
+            ...(Number.isFinite(Number(detail.resets_in_seconds)) && Number(detail.resets_in_seconds) > 0 ? { resets_in_seconds: Number(detail.resets_in_seconds) } : {}),
+            ...(Number.isFinite(Number(detail.resets_at)) && Number(detail.resets_at) > 0 ? { resets_at: Number(detail.resets_at) } : {}),
+            message: String(detail.message || 'Upstream response did not complete').slice(0, 1024)
+        } } }
+    });
+}
+
 export class OpenAIResponsesApiService {
     constructor(config) {
         if (!config.OPENAI_API_KEY) {
@@ -33,10 +52,20 @@ export class OpenAIResponsesApiService {
         return configureTLSSidecar(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES, this.baseUrl);
     }
 
+    async _beginMixedAttempt(body, stream) {
+        await validateMixedSend(MIXED_KEY, this.config.uuid);
+        if (!hasMixedNativeAttempts(MIXED_KEY)) return null;
+        const state = requestContext.get('gptMixedState');
+        body.model = state.selection.model;
+        return beginRequestAttempt(body, { providerType: MIXED_KEY, providerUuid: this.config.uuid,
+            plannedModel: state.selection.model, outboundModel: body.model, stream });
+    }
+
     async callApi(endpoint, body, isRetry = false, retryCount = 0) {
-        const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
+        const maxRetries = this.config.REQUEST_MAX_RETRIES ?? 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;  // 1 second base delay
 
+        const attempt = await this._beginMixedAttempt(body, false);
         try {
             const axiosConfig = {
                 method: 'post',
@@ -45,10 +74,16 @@ export class OpenAIResponsesApiService {
             };
             this._applySidecar(axiosConfig);
             const response = await this.axiosInstance.request(axiosConfig);
+            finishRequestAttempt(attempt, { status: 'success', httpStatus: response.status,
+                upstreamResponseModel: response.data?.model || null });
             return response.data;
         } catch (error) {
+            const diagnostic = attempt ? await captureSafeUpstreamErrorDiagnostic(error) : null;
+            finishRequestAttempt(attempt, { status: 'error', httpStatus: error.response?.status || null,
+                errorCode: diagnostic?.code || error.response?.data?.error?.code || error.code || null });
             const status = error.response?.status;
             const data = error.response?.data;
+            if (['insufficient_quota', 'credit_balance_exhausted'].includes(diagnostic?.code || data?.error?.code)) throw error;
             if (status === 401 || status === 403) {
                 logger.error(`[API] Received ${status}. API Key might be invalid or expired.`);
                 throw error;
@@ -83,11 +118,14 @@ export class OpenAIResponsesApiService {
     }
 
     async *streamApi(endpoint, body, isRetry = false, retryCount = 0) {
-        const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
+        const maxRetries = this.config.REQUEST_MAX_RETRIES ?? 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;  // 1 second base delay
 
         // OpenAI 的流式请求需要将 stream 设置为 true
+        const attempt = await this._beginMixedAttempt(body, true);
         const streamRequestBody = { ...body, stream: true };
+        let outputStarted = false;
+        let completed = false;
 
         try {
             const axiosConfig = {
@@ -100,34 +138,52 @@ export class OpenAIResponsesApiService {
             const response = await this.axiosInstance.request(axiosConfig);
 
             const stream = response.data;
+            const decoder = new StringDecoder('utf8');
             let buffer = '';
+            const parseLine = line => {
+                if (!line.startsWith('data:')) return null;
+                const data = line.slice(5).trim();
+                if (!data || data === '[DONE]') return null;
+                let event;
+                try { event = JSON.parse(data); }
+                catch { throw streamFailure({ code: 'INVALID_UPSTREAM_STREAM' }); }
+                if (event.type === 'error' || event.type === 'response.failed' || event.type === 'response.incomplete' || event.error) {
+                    throw streamFailure(event.error || event.response?.error || (event.type === 'error' ? event : null) || {
+                        code: event.response?.incomplete_details?.reason || 'INCOMPLETE_UPSTREAM_STREAM'
+                    }, { 'retry-after': response.headers?.['retry-after'] });
+                }
+                if (event.type === 'response.completed') completed = true;
+                return event;
+            };
 
             for await (const chunk of stream) {
-                buffer += chunk.toString();
+                buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
                 let newlineIndex;
                 while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
                     const line = buffer.substring(0, newlineIndex).trim();
                     buffer = buffer.substring(newlineIndex + 1);
 
-                    if (line.startsWith('data: ')) {
-                        const jsonData = line.substring(6).trim();
-                        if (jsonData === '[DONE]') {
-                            return; // Stream finished
-                        }
-                        try {
-                            const parsedChunk = JSON.parse(jsonData);
-                            yield parsedChunk;
-                        } catch (e) {
-                            logger.warn("[OpenAIResponsesApiService] Failed to parse stream chunk JSON:", e.message, "Data:", jsonData);
-                        }
-                    } else if (line === '') {
-                        // Empty line, end of an event
-                    }
+                    const event = parseLine(line);
+                    if (event) { outputStarted = true; yield event; }
                 }
             }
+            buffer += decoder.end();
+            if (buffer.trim()) {
+                const event = parseLine(buffer.trim());
+                if (event) { outputStarted = true; yield event; }
+            }
+            if (!completed) throw streamFailure();
+            finishRequestAttempt(attempt, { status: 'success', httpStatus: 200 });
         } catch (error) {
+            const diagnostic = await captureSafeUpstreamErrorDiagnostic(error);
+            finishRequestAttempt(attempt, { status: 'error', httpStatus: error.response?.status || null,
+                errorCode: diagnostic?.code || error.response?.data?.error?.code || error.code || null,
+                errorType: diagnostic?.type || null, errorMessage: diagnostic?.message || null });
+            if (outputStarted || body.previous_response_id) error.shouldSwitchCredential = false;
+            if (outputStarted || body.previous_response_id || error.isResponsesStreamFailure) throw error;
             const status = error.response?.status;
             const data = error.response?.data;
+            if (['insufficient_quota', 'credit_balance_exhausted'].includes(diagnostic?.code || data?.error?.code)) throw error;
             if (status === 401 || status === 403) {
                 logger.error(`[API] Received ${status} during stream. API Key might be invalid or expired.`);
                 throw error;
@@ -160,6 +216,12 @@ export class OpenAIResponsesApiService {
 
             logger.error(`Error calling OpenAI Responses streaming API (Status: ${status}):`, error.message);
             throw error;
+        } finally {
+            if (attempt?.status === 'started') {
+                finishRequestAttempt(attempt, { status: completed ? 'success' : 'error',
+                    httpStatus: outputStarted ? 200 : null,
+                    ...(!completed ? { errorCode: 'UPSTREAM_STREAM_INTERRUPTED' } : {}) });
+            }
         }
     }
 

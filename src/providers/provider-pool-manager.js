@@ -1,3 +1,4 @@
+import { isLunaModel, isMixedTextModel } from '../services/gpt-mixed-routing.js';
 import * as fs from 'fs';
 import path from 'path';
 import { getServiceAdapter, getRegisteredProviders, invalidateServiceAdapter } from './adapter.js';
@@ -1776,6 +1777,10 @@ export class ProviderPoolManager {
             }
         }
 
+        if (this.globalConfig.GPT_MIXED_ROUTING_ENABLED === true && isCodexProviderType(providerType)
+            && isMixedTextModel(requestedModel) && !isLunaModel(requestedModel)) {
+            candidates = candidates.filter(p => p.config.codexAllowNonLuna !== false);
+        }
         if (requestedModel) {
             candidates = candidates.filter(p => {
                 const supportedModels = getConfiguredSupportedModels(providerType, p.config);
@@ -5321,6 +5326,7 @@ export class ProviderPoolManager {
                 provider.config.scheduledRecoveryTime = recoveryDate.toISOString();
                 this._log('warn', `Marked provider as unhealthy with recovery time: ${this._getDisplayName(providerConfig)} for type ${providerType}. Recovery at: ${recoveryDate.toISOString()}. Reason: ${errorMessage || 'Quota exhausted'}`);
             } else {
+                provider.config.scheduledRecoveryTime = null;
                 this._log('warn', `Marked provider as unhealthy: ${this._getDisplayName(providerConfig)} for type ${providerType}. Reason: ${errorMessage || 'Quota exhausted'}`);
             }
 

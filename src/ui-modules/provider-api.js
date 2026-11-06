@@ -528,6 +528,8 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
             providerConfig.uuid = generateUUID();
         }
 
+        if (providerType === 'openai-codex-oauth' && providerConfig.codexAllowNonLuna === undefined) providerConfig.codexAllowNonLuna = false;
+
         // Set default values
         providerConfig.isHealthy = providerConfig.isHealthy !== undefined ? providerConfig.isHealthy : true;
         providerConfig.lastUsed = providerConfig.lastUsed || null;

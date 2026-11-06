@@ -47,7 +47,7 @@ function usesManagedModelList(providerType = '') {
 
 function getProviderBaseFields(providerType) {
     const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit', 'providerWeight'];
-    if (providerType === 'openai-codex-oauth') baseFields.push('rpmLimit');
+    if (providerType === 'openai-codex-oauth') baseFields.push('rpmLimit', 'codexAllowNonLuna');
     // API Key 型供应商：记录关联邮箱与每月额度重置日，号池按重置日优先使用最近重置的 key
     if (API_KEY_QUOTA_PROVIDERS.has(providerType)) {
         baseFields.push('accountEmail', 'quotaResetDay');
@@ -1379,6 +1379,7 @@ function renderProviderDetailList(providers) {
         const lastHealthCheckTime = provider.lastHealthCheckTime ? new Date(provider.lastHealthCheckTime).toLocaleString() : t('modal.provider.neverChecked');
         const lastHealthCheckModel = provider.lastHealthCheckModel || '-';
         const healthClass = provider.isArchived ? 'archived' : isRefreshing ? 'refreshing' : (isHealthy ? 'healthy' : 'unhealthy');
+        const mixedModeLabel = currentProviderType === 'openai-codex-oauth' ? (provider.codexAllowNonLuna === false ? '仅 Luna' : '参与 GPT 分流') : '';
         const disabledClass = provider.isArchived ? 'archived' : (isDisabled ? 'disabled' : '');
         const healthIcon = provider.isArchived ? 'fas fa-archive' : isRefreshing
             ? 'fas fa-sync-alt fa-spin text-warning'
@@ -1412,6 +1413,7 @@ function renderProviderDetailList(providers) {
                             ${escapeHtml(provider.customName || provider.uuid)}
                         </div>
                         <div class="provider-meta-chips">
+                            ${mixedModeLabel ? `<span class="provider-meta-chip">${mixedModeLabel}</span>` : ''}
                             ${renderProviderQuotaChips(provider)}
                             <span class="provider-meta-chip health-status" title="${t('modal.provider.healthCheckLabel')}: ${healthText}">
                                 <i class="${healthIcon}"></i>
@@ -1461,6 +1463,7 @@ function renderProviderCardList(providers) {
         const isDisabled = provider.isArchived || provider.isDisabled || false;
         const isRefreshing = provider.needsRefresh === true && !isDisabled;
         const healthClass = provider.isArchived ? 'archived' : isRefreshing ? 'refreshing' : (isHealthy ? 'healthy' : 'unhealthy');
+        const mixedModeLabel = currentProviderType === 'openai-codex-oauth' ? (provider.codexAllowNonLuna === false ? '仅 Luna' : '参与 GPT 分流') : '';
         const disabledClass = provider.isArchived ? 'archived' : (isDisabled ? 'disabled' : '');
         const displayName = escapeHtml(provider.customName || provider.uuid);
 
@@ -1473,6 +1476,7 @@ function renderProviderCardList(providers) {
                     ${isRefreshing ? `<span class="card-refresh-label" data-i18n="providers.status.needsRefresh">${t('providers.status.needsRefresh')}</span>` : ''}
                 </div>
                 <div class="card-body">
+                    ${mixedModeLabel ? `<span class="provider-meta-chip">${mixedModeLabel}</span>` : ''}
                     ${renderProviderQuotaChips(provider) ? `<div class="provider-meta-chips">${renderProviderQuotaChips(provider)}</div>` : ''}
                     ${proxyBadgeHtml}
                     ${provider.isArchived ? renderProviderArchiveTime(provider) : ''}
@@ -1571,7 +1575,7 @@ function renderProviderConfig(provider) {
     const baseFields = getProviderBaseFields(currentProviderType);
     
     baseFields.forEach(fieldKey => {
-        const displayLabel = fieldKey === 'rpmLimit' ? '每分钟上游请求上限' : getFieldLabel(fieldKey);
+        const displayLabel = fieldKey === 'codexAllowNonLuna' ? '参与非 Luna GPT 分流' : fieldKey === 'rpmLimit' ? '每分钟上游请求上限' : getFieldLabel(fieldKey);
         const value = provider[fieldKey];
         const displayValue = (value !== undefined && value !== null)
             ? (fieldKey === 'accountEmail' ? escapeHtml(String(value)) : value)
@@ -1595,9 +1599,9 @@ function renderProviderConfig(provider) {
                            placeholder="${placeholder}">
                 </div>
             `;
-        } else if (fieldKey === 'checkHealth' || fieldDef.type === 'boolean') {
-            // 如果没有值，默认为 false
-            const actualValue = value !== undefined ? value : false;
+        } else if (fieldKey === 'codexAllowNonLuna' || fieldKey === 'checkHealth' || fieldDef.type === 'boolean') {
+            // Legacy Codex credentials participate until explicitly disabled.
+            const actualValue = value !== undefined ? value : fieldKey === 'codexAllowNonLuna';
             const isEnabled = actualValue === true || actualValue === 'true';
             html += `
                 <div class="config-item">
@@ -1609,6 +1613,8 @@ function renderProviderConfig(provider) {
                         <option value="true" ${isEnabled ? 'selected' : ''} data-i18n="modal.provider.enabled">启用</option>
                         <option value="false" ${!isEnabled ? 'selected' : ''} data-i18n="modal.provider.disabled">禁用</option>
                     </select>
+                    ${fieldKey === 'codexAllowNonLuna' ? '<small>与 Luna 共用账号 RPM 和并发额度；关闭后只处理 Luna</small>' : ''}
+                    ${fieldKey === 'codexAllowNonLuna' && (provider.codexGpt6OverrideEnabled === true || provider.codexGpt6OverrideEnabled === 'true' || Object.keys(provider.codexModelRemap || {}).length) ? '<small class="text-warning">此凭据配置了模型改写，出站目标与请求模型不一致时将排除出该次混合分流。</small>' : ''}
                 </div>
             `;
         } else {
@@ -2265,6 +2271,10 @@ function showAddProviderForm(providerType) {
                 <label>每分钟上游请求上限</label>
                 <input type="number" min="0" step="1" id="newRpmLimit" value="0">
                 <small>包含重试；0 表示不限制；按滚动 60 秒统计</small>
+            </div><div class="config-item">
+                <label>参与非 Luna GPT 分流</label>
+                <select id="newCodexAllowNonLuna"><option value="false">关闭，仅 Luna</option><option value="true">开启</option></select>
+                <small>与 Luna 共用账号 RPM 和并发额度</small>
             </div>` : ''}
             <div class="form-group">
                 <label><span data-i18n="modal.provider.providerWeight">节点权重</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
@@ -2517,7 +2527,7 @@ async function addProvider(providerType) {
         checkModelName: checkModelName || '', // 允许为空
         checkHealth,
         concurrencyLimit,
-        ...(providerType === 'openai-codex-oauth' ? { rpmLimit } : {}),
+        ...(providerType === 'openai-codex-oauth' ? { rpmLimit, codexAllowNonLuna: document.getElementById('newCodexAllowNonLuna')?.value === 'true' } : {}),
         queueLimit
     };
     providerConfig.providerWeight = Number(document.getElementById('newProviderWeight')?.value || '1');

@@ -47,3 +47,22 @@ test('provider detail exposes independent live RPM status', async () => {
     await handleGetProviderType({}, res, {}, manager, 'openai-codex-oauth');
     expect(JSON.parse(res.end.mock.calls[0][0]).providers[0].rpm).toMatchObject({ limit: 180, used: 180, nextAvailableAt: 10000 });
 });
+
+test('new Codex credentials default to Luna-only and edits publish the explicit flag', async () => {
+    const manager = { publishProviderConfig: jest.fn() };
+    await handleAddProvider(request({ providerType: 'openai-codex-oauth', providerConfig: { uuid: 'new' } }), response(), {}, manager);
+    expect(JSON.parse(atomicWriteFile.mock.calls[0][1])['openai-codex-oauth'].find(p => p.uuid === 'new').codexAllowNonLuna).toBe(false);
+    atomicWriteFile.mockClear();
+    await handleUpdateProvider(request({ providerConfig: { codexAllowNonLuna: true } }), response(), {}, manager, 'openai-codex-oauth', 'a');
+    expect(manager.publishProviderConfig.mock.calls.at(-1)[1][0].codexAllowNonLuna).toBe(true);
+});
+
+test.each(['false', null, 0])('create and edit reject non-boolean Codex participation %p', async codexAllowNonLuna => {
+    for (const action of [handleAddProvider, handleUpdateProvider]) {
+        const res = response();
+        await action(request({ providerType: 'openai-codex-oauth', providerConfig: { uuid: 'a', codexAllowNonLuna } }), res, {}, null, 'openai-codex-oauth', 'a');
+        expect(res.writeHead.mock.calls[0][0]).toBe(400);
+        expect(res.end.mock.calls[0][0]).toContain('INVALID_CODEX_MIXED_ROUTING');
+    }
+    expect(atomicWriteFile).not.toHaveBeenCalled();
+});

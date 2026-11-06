@@ -886,6 +886,11 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
 
     const buildRuntimeStatus = () => {
         const metrics = aggregateWorkerMetrics(workerMetrics);
+        const mixedWorkers = Object.fromEntries([...workerMetrics].map(([id, snapshot]) => [id, snapshot.gptMixedRoutingEnabled === true]));
+        const mixedEnabled = latestCodexRuntimeConfigEvent?.config?.GPT_MIXED_ROUTING_ENABLED
+            ?? mixedWorkers['control-1'] ?? false;
+        const mixedReady = Object.keys(mixedWorkers).length === topology.executionWorkers + 1
+            && Object.values(mixedWorkers).every(value => value === mixedEnabled);
         const countryWorkers = Object.fromEntries([...workerMetrics].map(([id, snapshot]) => [id, snapshot.mainlandPolicy || { enabled:false }]));
         const enabledPolicies = Object.values(countryWorkers).filter(x => x.enabled);
         const requiredCountry = env.MAINLAND_CLIENT_KEYS_ONLY_REQUIRED === 'true' || enabledPolicies.length > 0;
@@ -901,6 +906,7 @@ export function startMultiWorkerRuntime({ env = process.env, args = process.argv
             readyWorkers: ready.size,
             coordination: 'redis',
             leaseRecovery: 'ready',
+            gptMixedRouting: { enabled: mixedEnabled, ready: mixedReady, workers: mixedWorkers },
             mainlandPolicy: { required:requiredCountry, ready:countryReady, alibabaAllowlistReady, workers:countryWorkers },
             persistenceBacklog: getPersistenceBacklog(metrics).total,
             persistenceBacklogByLayer: getPersistenceBacklog(metrics),

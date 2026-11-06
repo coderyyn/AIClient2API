@@ -2,6 +2,30 @@ import { RuntimeHookBridge } from '../src/runtime/runtime-hook-bridge.js';
 import { buildRequestAuditEvent } from '../src/plugins/request-audit/audit-event.js';
 
 describe('RuntimeHookBridge', () => {
+    test('mixed routing reasons and local policy rejections survive worker transport with hashed audit identities', async () => {
+        const published = [];
+        const bridge = new RuntimeHookBridge({
+            send: jest.fn(), durableTransport: { publish: event => published.push(event), snapshot: () => ({}) }
+        });
+        await bridge.handle('onRequestCompleted', {
+            requestId: 'fixture-mixed-audit',
+            _modelRouting: { actualModel: 'gpt-6-sol', gptMixed: {
+                reason: 'EXPIRING_KEY', selectedProviderType: 'openaiResponses-custom', selectedProviderUuid: 'key-fixture',
+                excluded: { 'openai-codex-oauth:codex-fixture': 'LUNA_ONLY' }, rawPrompt: 'must-not-persist'
+            } },
+            providerPolicyRejections: [{ providerType: 'openai-codex-oauth', providerUuid: 'codex-fixture', code: 'PROVIDER_POLICY_CHANGED', reason: 'LUNA_ONLY' }],
+            providerRpmRejections: [{ providerType: 'openai-codex-oauth', providerUuid: 'codex-fixture', code: 'PROVIDER_RPM_LIMIT_EXCEEDED', limit: 195, used: 195, retryAfterMs: 2000 }]
+        });
+        const compacted = published[0].args[0];
+        const audit = buildRequestAuditEvent(compacted);
+        expect(audit.routing.mixedRouting).toMatchObject({ reason: 'EXPIRING_KEY', selectedProviderType: 'openaiResponses-custom' });
+        expect(audit.routing.mixedRouting.excluded[0]).toMatchObject({ reason: 'LUNA_ONLY', providerType: 'openai-codex-oauth' });
+        expect(audit.providerPolicyRejections).toHaveLength(1);
+        expect(audit.providerRpmRejections[0].limit).toBe(195);
+        expect(JSON.stringify(compacted)).not.toContain('must-not-persist');
+        expect(JSON.stringify(audit)).not.toContain('key-fixture');
+        expect(JSON.stringify(audit)).not.toContain('codex-fixture');
+    });
     test('preserves request network metadata for audit events', async () => {
         const published = [];
         const bridge = new RuntimeHookBridge({

@@ -324,6 +324,7 @@ function buildRuntimeMetricsSnapshot() {
     return {
         ...runtimeMetrics.snapshot(),
         workerId: process.env.RUNTIME_WORKER_ID || RUNTIME_WORKER_ROLE,
+        gptMixedRoutingEnabled: CONFIG.GPT_MIXED_ROUTING_ENABLED === true,
         imageCapacity: runtimeImageCapacity.snapshot(),
         pricingDiagnostics: getPricingDiagnostics(),
         temporaryRouting: getTemporaryRouteScheduleDiagnostics(),

@@ -1,0 +1,22 @@
+jest.mock('../src/utils/proxy-utils.js', () => ({ configureTLSSidecar: c => c }));
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { jest, test, expect } from '@jest/globals';
+import requestContext from '../src/utils/context.js';
+import { OpenAIResponsesApiService } from '../src/providers/openai/openai-responses-core.js';
+import { handleStreamRequest } from '../src/utils/common.js';
+import '../src/converters/register-converters.js';
+test('quota after metadata cools the key and records failure instead of HTTP 200 success', async()=>{
+ const service=Object.create(OpenAIResponsesApiService.prototype);service.config={};service._applySidecar=()=>{};service._beginMixedAttempt=async()=>null;
+ service.axiosInstance={request:jest.fn(async()=>({status:200,data:Readable.from(['data: {"type":"response.created","response":{"id":"fixture"}}\n\ndata: {"type":"error","code":"credit_balance_exhausted","message":"fixture"}\n\n'])}))};
+ const res=new EventEmitter();res.writableEnded=false;res.headersSent=false;let output='';
+ res.writeHead=()=>{res.headersSent=true;};res.setHeader=()=>{};res.write=s=>{output+=s;return true;};res.end=()=>{res.writableEnded=true;};
+ const pool={markProviderUnhealthyWithRecoveryTime:jest.fn(),markProviderHealthy:jest.fn(),releaseSlot:jest.fn()};
+ const store={requestAudit:{}};
+ await requestContext.run(store,()=>handleStreamRequest(res,service,'gpt-6.1-sol',{},'openaiResponses','openaiResponses-custom','none',null,pool,'fixture',null,{CONFIG:{},maxRetries:0}));
+ expect(output).toContain('response.failed');expect(output).toContain('credit_balance_exhausted');
+ expect(pool.markProviderUnhealthyWithRecoveryTime).toHaveBeenCalledTimes(1);
+ expect(pool.markProviderUnhealthyWithRecoveryTime.mock.calls[0][3]).toBeNull();
+ expect(pool.markProviderHealthy).not.toHaveBeenCalled();expect(service.axiosInstance.request).toHaveBeenCalledTimes(1);
+ expect(store.requestAudit.terminal.outcome).toBe('upstream_error');
+});

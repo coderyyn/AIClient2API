@@ -1,3 +1,4 @@
+import { prepareMixedRequest, hasMixedNativeAttempts, MIXED_POLICY_ERROR } from '../services/gpt-mixed-routing.js';
 import { resolveClientNetwork } from './client-network.js';
 export { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER } from './constants.js';
 import { promises as fs } from 'fs';
@@ -1265,6 +1266,24 @@ function requestAttemptFailureFields(error) {
     };
 }
 
+export async function mixedRetryBody(body, previousProvider, nextProvider, retryContext) {
+    if (!requestContext.get('gptMixedState') || getProtocolPrefix(previousProvider) === getProtocolPrefix(nextProvider)) return body;
+    const source = retryContext?.mixedRequestSource;
+    if (!source) throw Object.assign(new Error('Original GPT request is unavailable for provider switching'), {
+        status: 503, code: 'MIXED_REQUEST_SOURCE_UNAVAILABLE', origin: 'local_provider_policy', skipErrorCount: true
+    });
+    let converted = structuredClone(source.body);
+    converted.model = requestContext.get('gptMixedState').selection.model;
+    if (isCodexProvider(nextProvider)) converted[CODEX_FINGERPRINT_CONTEXT_KEY] = source.fingerprint;
+    if (getProtocolPrefix(source.provider) !== getProtocolPrefix(nextProvider)) {
+        converted = convertData(converted, 'request', source.provider, nextProvider);
+    }
+    converted = await _applySystemPromptFromFile(retryContext.CONFIG, converted, nextProvider);
+    await _manageSystemPrompt(converted, nextProvider);
+    if (retryContext.CONFIG.customConfig) _applyCustomModelParameters(converted, retryContext.CONFIG.customConfig, nextProvider);
+    return converted;
+}
+
 async function handleLocalProviderRpmFailure(error, args) {
     const { res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
         PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
@@ -1274,12 +1293,13 @@ async function handleLocalProviderRpmFailure(error, args) {
     requestContext.set('providerRpmExcludedUuids', excluded);
     const audit = requestContext.get('requestAudit');
     if (audit) {
-        audit.providerRpmRejections ||= [];
-        audit.providerRpmRejections.push({ providerType: toProvider, providerUuid: pooluuid,
+        const field = error.origin === 'local_provider_policy' ? 'providerPolicyRejections' : 'providerRpmRejections';
+        audit[field] ||= [];
+        audit[field].push({ providerType: toProvider, providerUuid: pooluuid,
             code: error.code, limit: error.details?.rpmLimit, used: error.details?.used,
-            retryAfterMs: error.retryAfterMs });
+            reason: error.details?.reason, retryAfterMs: error.retryAfterMs });
     }
-    if (error.code === RPM_ERROR && retryContext?.CONFIG && providerPoolManager) {
+    if ((error.code === RPM_ERROR || error.code === MIXED_POLICY_ERROR) && retryContext?.CONFIG && providerPoolManager) {
         try {
             const { getApiServiceWithFallback } = await import('../services/service-manager.js');
             const result = await getApiServiceWithFallback(retryContext.CONFIG, model, {
@@ -1288,9 +1308,9 @@ async function handleLocalProviderRpmFailure(error, args) {
                 excludeProviderUuids: [...new Set([...(retryContext.failedCredentialUuids || []), ...excluded])],
                 allowExcludedProviderFallback: false
             });
-            if (result?.service && !excluded.includes(result.uuid)) {
+            if (result?.service && (result.actualProviderType !== toProvider || !excluded.includes(result.uuid))) {
                 const handler = stream ? handleStreamRequest : handleUnaryRequest;
-                return await handler(res, result.service, result.actualModel || model, requestBody,
+                return await handler(res, result.service, result.actualModel || model, await mixedRetryBody(requestBody, toProvider, result.actualProviderType, retryContext),
                     fromProvider, result.actualProviderType, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME,
                     providerPoolManager, result.uuid, result.serviceConfig?.customName || null,
                     { ...retryContext, rpmExcludedUuids: excluded },
@@ -1387,7 +1407,7 @@ function isCodexUsageLimitReached(error) {
 
 function isInsufficientQuotaError(error) {
     const errorBody = error?.response?.data?.error;
-    return String(errorBody?.code || '').toLowerCase() === 'insufficient_quota'
+    return ['insufficient_quota', 'credit_balance_exhausted'].includes(String(errorBody?.code || getSafeUpstreamErrorDiagnostic(error)?.code || '').toLowerCase())
         || String(errorBody?.type || '').toLowerCase() === 'insufficient_quota';
 }
 
@@ -1407,6 +1427,21 @@ export function applyProviderRateLimitCooldown({
     loggerPrefix = '[Provider Pool]'
 }) {
     if (error?.origin === 'local_provider_rpm') return false;
+    // API-key quota signals must not inherit a guessed monthly reset date.
+    if (providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES && providerPoolManager && providerUuid
+        && Number(getErrorStatusCode(error)) === 429) {
+        const diagnostic = getSafeUpstreamErrorDiagnostic(error);
+        const code = String(diagnostic?.code || diagnostic?.type || '').toLowerCase();
+        const exhausted = ['insufficient_quota', 'credit_balance_exhausted', 'usage_limit_reached'].includes(code);
+        const delay = getRetryAfterMs(error);
+        if (delay !== null || exhausted) {
+            providerPoolManager.markProviderUnhealthyWithRecoveryTime(providerType, { uuid: providerUuid },
+                exhausted ? 'Upstream quota exhausted; recovery requires explicit reset or verification' : 'Upstream rate limit',
+                delay !== null ? new Date(Date.now() + delay) : null);
+            return true;
+        }
+    }
+
     // Antigravity may report model-wide capacity exhaustion as HTTP 503. Normalize
     // this one explicit upstream condition before the generic 429 handling below;
     // unrelated 503 errors must retain their normal server-error semantics.
@@ -2287,7 +2322,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             delete requestBody[CODEX_FINGERPRINT_CONTEXT_KEY].downstreamCodexTurnState;
             delete requestBody[CODEX_FINGERPRINT_CONTEXT_KEY].upstreamResponseModel;
         }
-        genericAttempt = !isCodexProvider(toProvider) ? beginRequestAttempt(requestBody, {
+        genericAttempt = !isCodexProvider(toProvider) && !hasMixedNativeAttempts(toProvider) ? beginRequestAttempt(requestBody, {
             providerType: toProvider,
             providerUuid: pooluuid || null,
             plannedModel: retryContext?.clientRequestedModel || model,
@@ -2504,6 +2539,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
         }
         
+        if (toProvider === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES && applyProviderRateLimitCooldown({
+            error, config: CONFIG, providerPoolManager, providerType: toProvider,
+            providerUuid: pooluuid, requestedModel: model
+        })) error.credentialMarkedUnhealthy = true;
+
         // 如果客户端已断开，不需要发送错误响应
         if (clientDisconnected.value) {
             logger.info('[Stream] Skipping error response due to client disconnect');
@@ -2531,7 +2571,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             return;
         }
         
-        if (error.origin === 'local_provider_rpm') {
+        if (error.origin === 'local_provider_rpm' || error.origin === 'local_provider_policy') {
             return await handleLocalProviderRpmFailure(error, {
                 res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
                 PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
@@ -2568,7 +2608,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        if (applyProviderRateLimitCooldown({
+        if (!error.credentialMarkedUnhealthy && applyProviderRateLimitCooldown({
             error,
             config: CONFIG,
             providerPoolManager,
@@ -2740,7 +2780,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         res,
                         result.service,
                         result.actualModel || model,
-                        requestBody,
+                        await mixedRetryBody(requestBody, toProvider, result.actualProviderType || toProvider, retryContext),
                         fromProvider,
                         result.actualProviderType || toProvider,
                         PROMPT_LOG_MODE,
@@ -2749,8 +2789,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         result.uuid,
                         result.serviceConfig?.customName || customName,
                         newRetryContext,
-                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || accountIdentity,
-                        result.serviceConfig?.codexEmail || accountEmail
+                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || (hasMixedNativeAttempts(result.actualProviderType) ? null : accountIdentity),
+                        result.serviceConfig?.codexEmail || (hasMixedNativeAttempts(result.actualProviderType) ? null : accountEmail)
                     );
                 } else {
                     logGeminiRetryDiagnostic({ mode: 'stream', model, providerType: toProvider, providerUuid: pooluuid, attempt: currentRetry + 1, maxRetries, error, backoffMs: randomDelay, switchedProvider: false, nextEligibleCount: selectionDiagnostics.eligibleCandidateCount, fallbackCount: retryContext?.geminiFallbackCount || 0, outcome: 'exhausted' });
@@ -2967,7 +3007,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             delete requestBody[CODEX_FINGERPRINT_CONTEXT_KEY].downstreamCodexTurnState;
             delete requestBody[CODEX_FINGERPRINT_CONTEXT_KEY].upstreamResponseModel;
         }
-        genericAttempt = !isCodexProvider(toProvider) ? beginRequestAttempt(requestBody, {
+        genericAttempt = !isCodexProvider(toProvider) && !hasMixedNativeAttempts(toProvider) ? beginRequestAttempt(requestBody, {
             providerType: toProvider,
             providerUuid: pooluuid || null,
             plannedModel: retryContext?.clientRequestedModel || model,
@@ -3077,7 +3117,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             logger.info(`[Codex Overload] Recorded soft exclusion for next request: ${pooluuid}`);
         }
         
-        if (error.origin === 'local_provider_rpm') {
+        if (error.origin === 'local_provider_rpm' || error.origin === 'local_provider_policy') {
             return await handleLocalProviderRpmFailure(error, {
                 res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE,
                 PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext,
@@ -3114,7 +3154,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 检查凭证是否已在底层被标记为不健康（避免重复标记）
         let credentialMarkedUnhealthy = error.credentialMarkedUnhealthy === true;
 
-        if (applyProviderRateLimitCooldown({
+        if (!error.credentialMarkedUnhealthy && applyProviderRateLimitCooldown({
             error,
             config: CONFIG,
             providerPoolManager,
@@ -3284,7 +3324,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         res,
                         result.service,
                         result.actualModel || model,
-                        requestBody,
+                        await mixedRetryBody(requestBody, toProvider, result.actualProviderType || toProvider, retryContext),
                         fromProvider,
                         result.actualProviderType || toProvider,
                         PROMPT_LOG_MODE,
@@ -3293,8 +3333,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         result.uuid,
                         result.serviceConfig?.customName || customName,
                         newRetryContext,
-                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || accountIdentity,
-                        result.serviceConfig?.codexEmail || accountEmail
+                        result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || (hasMixedNativeAttempts(result.actualProviderType) ? null : accountIdentity),
+                        result.serviceConfig?.codexEmail || (hasMixedNativeAttempts(result.actualProviderType) ? null : accountEmail)
                     );
                 } else {
                     logGeminiRetryDiagnostic({ mode: 'unary', model, providerType: toProvider, providerUuid: pooluuid, attempt: currentRetry + 1, maxRetries, error, backoffMs: randomDelay, switchedProvider: false, nextEligibleCount: selectionDiagnostics.eligibleCandidateCount, fallbackCount: retryContext?.geminiFallbackCount || 0, outcome: 'exhausted' });
@@ -3627,6 +3667,8 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         throw new Error("Could not determine the model from the request.");
     }
     const clientRequestedModel = model;
+    prepareMixedRequest(CONFIG, model, originalRequestBody, requestPath,
+        isImageGenerationRequest({ requestPath, model, body: originalRequestBody }));
     const auditContext = requestContext.get('requestAudit');
     if (auditContext && typeof auditContext === 'object') {
         auditContext.requestedModel = clientRequestedModel;
@@ -3797,8 +3839,10 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         toProvider = result.actualProviderType;
         actualUuid = result.uuid || pooluuid;
         actualCustomName = result.serviceConfig?.customName || CONFIG.customName;
-        actualAccountIdentity = result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || actualAccountIdentity;
-        actualAccountEmail = result.serviceConfig?.codexEmail || result.serviceConfig?.accountEmail || actualAccountEmail;
+        actualAccountIdentity = hasMixedNativeAttempts(toProvider) ? null
+            : result.serviceConfig?.codexAccountKey || result.serviceConfig?.codexAccountId || actualAccountIdentity;
+        actualAccountEmail = hasMixedNativeAttempts(toProvider) ? null
+            : result.serviceConfig?.codexEmail || result.serviceConfig?.accountEmail || actualAccountEmail;
 
         const responseModelRouting = {
             requestedModel: clientRequestedModel,
@@ -3894,6 +3938,9 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     const credentialSwitchMaxRetries = getCredentialSwitchMaxRetries(CONFIG, clientRequestedModel || model);
     const retryContext = {
         CONFIG,
+        ...(requestContext.get('gptMixedState') ? { mixedRequestSource: {
+            body: originalRequestBody, provider: fromProvider, fingerprint: inboundCodexFingerprintContext
+        } } : {}),
         _startedAt: performance.now(),
         retryStartedAt: Date.now(),
         currentRetry: 0,
